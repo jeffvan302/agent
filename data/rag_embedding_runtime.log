@@ -676,3 +676,193 @@ time=2026-04-12T01:00:37.739-04:00 level=INFO source=routes.go:1860 msg="vram-ba
 [2026-04-12T05:00:39Z] Ollama is responding at http://localhost:11434.
 [GIN] 2026/04/12 - 01:00:52 | 200 |       509.7µs |       127.0.0.1 | GET      "/api/tags"
 [2026-04-12T05:01:09Z] Stopping app-managed Ollama process.
+[2026-04-12T06:05:55Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T02:05:55.345-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T02:05:55.346-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T02:05:55.348-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T02:05:55.348-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T02:05:55.349-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T02:05:55.350-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T02:05:55.362-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52619"
+time=2026-04-12T02:05:55.520-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52627"
+time=2026-04-12T02:05:55.970-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T02:05:55.971-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52636"
+time=2026-04-12T02:05:56.181-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52644"
+time=2026-04-12T02:05:56.181-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52645"
+time=2026-04-12T02:05:56.465-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.6 GiB"
+time=2026-04-12T02:05:56.465-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 02:05:57 | 200 |      1.6246ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T06:05:57Z] Ollama is responding at http://localhost:11434.
+[GIN] 2026/04/12 - 02:09:00 | 200 |      1.0404ms |       127.0.0.1 | GET      "/api/tags"
+time=2026-04-12T02:09:00.294-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59527"
+time=2026-04-12T02:09:00.488-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-12T02:09:00.488-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+time=2026-04-12T02:09:00.498-04:00 level=WARN source=server.go:169 msg="requested context size too large for model" num_ctx=8192 n_ctx_train=2048
+time=2026-04-12T02:09:00.499-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --model C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-970aa74c0a90ef7482477cf803618e776e173c007bf957f635f1015bfcfef0e6 --port 59534"
+time=2026-04-12T02:09:00.503-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="36.1 GiB" free_swap="25.2 GiB"
+time=2026-04-12T02:09:00.503-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="1.1 GiB" free="1.6 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-12T02:09:00.503-04:00 level=INFO source=server.go:771 msg="loading model" "model layers"=13 requested=-1
+time=2026-04-12T02:09:00.568-04:00 level=INFO source=runner.go:1417 msg="starting ollama engine"
+time=2026-04-12T02:09:00.569-04:00 level=INFO source=runner.go:1452 msg="Server listening on 127.0.0.1:59534"
+time=2026-04-12T02:09:00.577-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:09:00.580-04:00 level=INFO source=ggml.go:136 msg="" architecture=nomic-bert file_type=F16 name=nomic-embed-text-v1.5 description="" num_tensors=112 num_key_values=25
+load_backend: loaded CPU backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\ggml-cpu-haswell.dll
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: Quadro P620, compute capability 6.1, VMM: yes, ID: GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2
+load_backend: loaded CUDA backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll
+time=2026-04-12T02:09:00.685-04:00 level=INFO source=ggml.go:104 msg=system CPU.0.SSE3=1 CPU.0.SSSE3=1 CPU.0.AVX=1 CPU.0.AVX2=1 CPU.0.F16C=1 CPU.0.FMA=1 CPU.0.BMI2=1 CPU.0.LLAMAFILE=1 CPU.1.LLAMAFILE=1 CUDA.0.ARCHS=500,520,600,610,700,750,800,860,890,900,1200 CUDA.0.USE_GRAPHS=1 CUDA.0.PEER_MAX_BATCH_SIZE=128 compiler=cgo(clang)
+time=2026-04-12T02:09:00.686-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-12T02:09:00.784-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:09:00.791-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=ggml.go:482 msg="offloading 12 repeating layers to GPU"
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=ggml.go:489 msg="offloading output layer to GPU"
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=ggml.go:494 msg="offloaded 13/13 layers to GPU"
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=device.go:240 msg="model weights" device=CUDA0 size="260.9 MiB"
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="44.7 MiB"
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=device.go:262 msg="compute graph" device=CUDA0 size="250.0 MiB"
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="6.0 MiB"
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=device.go:272 msg="total memory" size="561.6 MiB"
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=sched.go:561 msg="loaded runners" count=1
+time=2026-04-12T02:09:00.795-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-12T02:09:00.797-04:00 level=INFO source=server.go:1398 msg="waiting for server to become available" status="llm server loading model"
+time=2026-04-12T02:09:01.298-04:00 level=INFO source=server.go:1402 msg="llama runner started in 0.79 seconds"
+[GIN] 2026/04/12 - 02:09:01 | 200 |    1.1005783s |       127.0.0.1 | POST     "/api/embed"
+ggml_backend_cuda_device_get_memory device GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 utilizing NVML memory reporting free: 1115918336 total: 2147483648
+time=2026-04-12T02:14:01.666-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 63382"
+[GIN] 2026/04/12 - 02:15:08 | 200 |      1.0401ms |       127.0.0.1 | GET      "/api/tags"
+time=2026-04-12T02:15:08.933-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 60586"
+time=2026-04-12T02:15:09.116-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-12T02:15:09.116-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+time=2026-04-12T02:15:09.126-04:00 level=WARN source=server.go:169 msg="requested context size too large for model" num_ctx=8192 n_ctx_train=2048
+time=2026-04-12T02:15:09.127-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --model C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-970aa74c0a90ef7482477cf803618e776e173c007bf957f635f1015bfcfef0e6 --port 60593"
+time=2026-04-12T02:15:09.130-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="36.2 GiB" free_swap="25.4 GiB"
+time=2026-04-12T02:15:09.130-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="1.1 GiB" free="1.6 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-12T02:15:09.130-04:00 level=INFO source=server.go:771 msg="loading model" "model layers"=13 requested=-1
+time=2026-04-12T02:15:09.188-04:00 level=INFO source=runner.go:1417 msg="starting ollama engine"
+time=2026-04-12T02:15:09.189-04:00 level=INFO source=runner.go:1452 msg="Server listening on 127.0.0.1:60593"
+time=2026-04-12T02:15:09.193-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:15:09.197-04:00 level=INFO source=ggml.go:136 msg="" architecture=nomic-bert file_type=F16 name=nomic-embed-text-v1.5 description="" num_tensors=112 num_key_values=25
+load_backend: loaded CPU backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\ggml-cpu-haswell.dll
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: Quadro P620, compute capability 6.1, VMM: yes, ID: GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2
+load_backend: loaded CUDA backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll
+time=2026-04-12T02:15:09.296-04:00 level=INFO source=ggml.go:104 msg=system CPU.0.SSE3=1 CPU.0.SSSE3=1 CPU.0.AVX=1 CPU.0.AVX2=1 CPU.0.F16C=1 CPU.0.FMA=1 CPU.0.BMI2=1 CPU.0.LLAMAFILE=1 CPU.1.LLAMAFILE=1 CUDA.0.ARCHS=500,520,600,610,700,750,800,860,890,900,1200 CUDA.0.USE_GRAPHS=1 CUDA.0.PEER_MAX_BATCH_SIZE=128 compiler=cgo(clang)
+time=2026-04-12T02:15:09.298-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-12T02:15:09.384-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:15:09.390-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-12T02:15:09.394-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:15:09.394-04:00 level=INFO source=ggml.go:482 msg="offloading 12 repeating layers to GPU"
+time=2026-04-12T02:15:09.395-04:00 level=INFO source=ggml.go:489 msg="offloading output layer to GPU"
+time=2026-04-12T02:15:09.395-04:00 level=INFO source=ggml.go:494 msg="offloaded 13/13 layers to GPU"
+time=2026-04-12T02:15:09.395-04:00 level=INFO source=device.go:240 msg="model weights" device=CUDA0 size="260.9 MiB"
+time=2026-04-12T02:15:09.395-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="44.7 MiB"
+time=2026-04-12T02:15:09.395-04:00 level=INFO source=device.go:262 msg="compute graph" device=CUDA0 size="250.0 MiB"
+time=2026-04-12T02:15:09.395-04:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="6.0 MiB"
+time=2026-04-12T02:15:09.395-04:00 level=INFO source=device.go:272 msg="total memory" size="561.6 MiB"
+time=2026-04-12T02:15:09.395-04:00 level=INFO source=sched.go:561 msg="loaded runners" count=1
+time=2026-04-12T02:15:09.395-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-12T02:15:09.396-04:00 level=INFO source=server.go:1398 msg="waiting for server to become available" status="llm server loading model"
+time=2026-04-12T02:15:09.897-04:00 level=INFO source=server.go:1402 msg="llama runner started in 0.77 seconds"
+[GIN] 2026/04/12 - 02:15:10 | 200 |    1.1672024s |       127.0.0.1 | POST     "/api/embed"
+[GIN] 2026/04/12 - 02:18:31 | 200 |      1.0445ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 02:18:31 | 200 |    179.4858ms |       127.0.0.1 | POST     "/api/embed"
+ggml_backend_cuda_device_get_memory device GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 utilizing NVML memory reporting free: 1115918336 total: 2147483648
+time=2026-04-12T02:23:31.763-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 56368"
+[GIN] 2026/04/12 - 02:23:42 | 200 |       504.5µs |       127.0.0.1 | GET      "/api/tags"
+time=2026-04-12T02:23:42.270-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 61984"
+time=2026-04-12T02:23:42.463-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-12T02:23:42.463-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+time=2026-04-12T02:23:42.474-04:00 level=WARN source=server.go:169 msg="requested context size too large for model" num_ctx=8192 n_ctx_train=2048
+time=2026-04-12T02:23:42.474-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --model C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-970aa74c0a90ef7482477cf803618e776e173c007bf957f635f1015bfcfef0e6 --port 61992"
+time=2026-04-12T02:23:42.478-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="36.2 GiB" free_swap="25.2 GiB"
+time=2026-04-12T02:23:42.478-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="1.1 GiB" free="1.6 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-12T02:23:42.478-04:00 level=INFO source=server.go:771 msg="loading model" "model layers"=13 requested=-1
+time=2026-04-12T02:23:42.539-04:00 level=INFO source=runner.go:1417 msg="starting ollama engine"
+time=2026-04-12T02:23:42.540-04:00 level=INFO source=runner.go:1452 msg="Server listening on 127.0.0.1:61992"
+time=2026-04-12T02:23:42.551-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:23:42.555-04:00 level=INFO source=ggml.go:136 msg="" architecture=nomic-bert file_type=F16 name=nomic-embed-text-v1.5 description="" num_tensors=112 num_key_values=25
+load_backend: loaded CPU backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\ggml-cpu-haswell.dll
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: Quadro P620, compute capability 6.1, VMM: yes, ID: GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2
+load_backend: loaded CUDA backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll
+time=2026-04-12T02:23:42.657-04:00 level=INFO source=ggml.go:104 msg=system CPU.0.SSE3=1 CPU.0.SSSE3=1 CPU.0.AVX=1 CPU.0.AVX2=1 CPU.0.F16C=1 CPU.0.FMA=1 CPU.0.BMI2=1 CPU.0.LLAMAFILE=1 CPU.1.LLAMAFILE=1 CUDA.0.ARCHS=500,520,600,610,700,750,800,860,890,900,1200 CUDA.0.USE_GRAPHS=1 CUDA.0.PEER_MAX_BATCH_SIZE=128 compiler=cgo(clang)
+time=2026-04-12T02:23:42.658-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-12T02:23:42.744-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:23:42.751-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=ggml.go:482 msg="offloading 12 repeating layers to GPU"
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=ggml.go:489 msg="offloading output layer to GPU"
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=ggml.go:494 msg="offloaded 13/13 layers to GPU"
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=device.go:240 msg="model weights" device=CUDA0 size="260.9 MiB"
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="44.7 MiB"
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=device.go:262 msg="compute graph" device=CUDA0 size="250.0 MiB"
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="6.0 MiB"
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=device.go:272 msg="total memory" size="561.6 MiB"
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=sched.go:561 msg="loaded runners" count=1
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-12T02:23:42.755-04:00 level=INFO source=server.go:1398 msg="waiting for server to become available" status="llm server loading model"
+time=2026-04-12T02:23:43.256-04:00 level=INFO source=server.go:1402 msg="llama runner started in 0.78 seconds"
+[GIN] 2026/04/12 - 02:23:43 | 200 |    1.1582665s |       127.0.0.1 | POST     "/api/embed"
+[2026-04-12T06:25:38Z] Stopping app-managed Ollama process.
+[2026-04-12T06:30:35Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T02:30:35.484-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T02:30:35.484-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T02:30:35.486-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T02:30:35.487-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T02:30:35.487-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T02:30:35.488-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T02:30:35.502-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 65379"
+time=2026-04-12T02:30:35.719-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 65390"
+time=2026-04-12T02:30:35.879-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 65399"
+time=2026-04-12T02:30:36.323-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T02:30:36.325-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 65409"
+time=2026-04-12T02:30:36.325-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 65408"
+time=2026-04-12T02:30:36.601-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.6 GiB"
+time=2026-04-12T02:30:36.601-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 02:30:37 | 200 |      1.0394ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T06:30:37Z] Ollama is responding at http://localhost:11434.
+[GIN] 2026/04/12 - 02:31:16 | 200 |       504.6µs |       127.0.0.1 | GET      "/api/tags"
+time=2026-04-12T02:31:16.294-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53378"
+time=2026-04-12T02:31:16.507-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-12T02:31:16.507-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+time=2026-04-12T02:31:16.517-04:00 level=WARN source=server.go:169 msg="requested context size too large for model" num_ctx=8192 n_ctx_train=2048
+time=2026-04-12T02:31:16.518-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --model C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-970aa74c0a90ef7482477cf803618e776e173c007bf957f635f1015bfcfef0e6 --port 53386"
+time=2026-04-12T02:31:16.523-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="36.2 GiB" free_swap="25.1 GiB"
+time=2026-04-12T02:31:16.523-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="1.1 GiB" free="1.6 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-12T02:31:16.523-04:00 level=INFO source=server.go:771 msg="loading model" "model layers"=13 requested=-1
+time=2026-04-12T02:31:16.591-04:00 level=INFO source=runner.go:1417 msg="starting ollama engine"
+time=2026-04-12T02:31:16.592-04:00 level=INFO source=runner.go:1452 msg="Server listening on 127.0.0.1:53386"
+time=2026-04-12T02:31:16.597-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:31:16.602-04:00 level=INFO source=ggml.go:136 msg="" architecture=nomic-bert file_type=F16 name=nomic-embed-text-v1.5 description="" num_tensors=112 num_key_values=25
+load_backend: loaded CPU backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\ggml-cpu-haswell.dll
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: Quadro P620, compute capability 6.1, VMM: yes, ID: GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2
+load_backend: loaded CUDA backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll
+time=2026-04-12T02:31:16.708-04:00 level=INFO source=ggml.go:104 msg=system CPU.0.SSE3=1 CPU.0.SSSE3=1 CPU.0.AVX=1 CPU.0.AVX2=1 CPU.0.F16C=1 CPU.0.FMA=1 CPU.0.BMI2=1 CPU.0.LLAMAFILE=1 CPU.1.LLAMAFILE=1 CUDA.0.ARCHS=500,520,600,610,700,750,800,860,890,900,1200 CUDA.0.USE_GRAPHS=1 CUDA.0.PEER_MAX_BATCH_SIZE=128 compiler=cgo(clang)
+time=2026-04-12T02:31:16.710-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-12T02:31:16.817-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:31:16.823-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-12T02:31:16.826-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-12T02:31:16.827-04:00 level=INFO source=ggml.go:482 msg="offloading 12 repeating layers to GPU"
+time=2026-04-12T02:31:16.827-04:00 level=INFO source=ggml.go:489 msg="offloading output layer to GPU"
+time=2026-04-12T02:31:16.827-04:00 level=INFO source=ggml.go:494 msg="offloaded 13/13 layers to GPU"
+time=2026-04-12T02:31:16.827-04:00 level=INFO source=device.go:240 msg="model weights" device=CUDA0 size="260.9 MiB"
+time=2026-04-12T02:31:16.827-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="44.7 MiB"
+time=2026-04-12T02:31:16.827-04:00 level=INFO source=device.go:262 msg="compute graph" device=CUDA0 size="250.0 MiB"
+time=2026-04-12T02:31:16.827-04:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="6.0 MiB"
+time=2026-04-12T02:31:16.827-04:00 level=INFO source=device.go:272 msg="total memory" size="561.6 MiB"
+time=2026-04-12T02:31:16.827-04:00 level=INFO source=sched.go:561 msg="loaded runners" count=1
+time=2026-04-12T02:31:16.827-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-12T02:31:16.829-04:00 level=INFO source=server.go:1398 msg="waiting for server to become available" status="llm server loading model"
+time=2026-04-12T02:31:17.581-04:00 level=INFO source=server.go:1402 msg="llama runner started in 1.06 seconds"
+[GIN] 2026/04/12 - 02:31:17 | 200 |    1.5192484s |       127.0.0.1 | POST     "/api/embed"
+[2026-04-12T06:32:43Z] Stopping app-managed Ollama process.

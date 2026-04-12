@@ -1,0 +1,9 @@
+{
+  "id": "chat_1775974053255_8",
+  "max_tokens": 1024,
+  "model_id": "codex-MiniMax-M2.7",
+  "name": "Coding Test",
+  "provider_id": "provider_1775726633372_1",
+  "system_prompt": "",
+  "temperature": 0.2
+}

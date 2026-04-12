@@ -1204,7 +1204,39 @@ void MainWindow::SendCurrentMessage() {
                 working_messages.push_back(std::move(assistant_message));
 
                 for (const auto& tool_call : completion.tool_calls) {
-                    const auto result = mcp_manager->CallExposedTool(project_id, tool_call.name, tool_call.arguments_json);
+                    McpToolCallResult result;
+                    std::string trace_arguments = tool_call.arguments_json;
+                    if (!tool_call.arguments_valid) {
+                        trace_arguments = tool_call.original_arguments_json.empty()
+                            ? tool_call.arguments_json
+                            : tool_call.original_arguments_json;
+                        std::string shown_arguments = trace_arguments;
+                        if (shown_arguments.size() > 2000) {
+                            shown_arguments = shown_arguments.substr(0, 2000) + "...";
+                        }
+
+                        std::ostringstream error_stream;
+                        error_stream << "Tool call was not executed because the model returned invalid JSON arguments for \""
+                                     << tool_call.name
+                                     << "\". Tool arguments must be a valid JSON object.";
+                        if (!tool_call.arguments_error.empty()) {
+                            error_stream << "\nParser error: " << tool_call.arguments_error;
+                        }
+                        if (!shown_arguments.empty()) {
+                            error_stream << "\nOriginal arguments: " << shown_arguments;
+                        }
+                        error_stream << "\nRetry the tool call with valid JSON object arguments.";
+
+                        result.success = false;
+                        result.is_tool_error = true;
+                        result.content_text = error_stream.str();
+                        result.raw_result_json = nlohmann::json{
+                            {"error", result.content_text},
+                            {"invalid_arguments", shown_arguments},
+                        }.dump(2);
+                    } else {
+                        result = mcp_manager->CallExposedTool(project_id, tool_call.name, tool_call.arguments_json);
+                    }
 
                     auto* trace_payload = new ToolTracePayload;
                     trace_payload->project_id = project_id;
@@ -1215,7 +1247,7 @@ void MainWindow::SendCurrentMessage() {
                     } else {
                         trace_payload->entry.title = tool_call.name;
                     }
-                    trace_payload->entry.arguments_json = tool_call.arguments_json;
+                    trace_payload->entry.arguments_json = trace_arguments;
                     trace_payload->entry.result_text = result.content_text;
                     trace_payload->entry.success = result.success && !result.is_tool_error;
                     PostMessageW(hwnd, kToolTraceMessage, 0, reinterpret_cast<LPARAM>(trace_payload));

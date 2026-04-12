@@ -25,6 +25,9 @@ struct ChatToolCall {
     std::string id;
     std::string name;
     std::string arguments_json;
+    bool arguments_valid = true;
+    std::string original_arguments_json;
+    std::string arguments_error;
 };
 
 struct TestConnectionResult {

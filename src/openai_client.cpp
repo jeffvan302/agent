@@ -177,6 +177,97 @@ std::string ExtractContentString(const json& value) {
     return {};
 }
 
+struct ToolArgumentsNormalization {
+    bool valid = true;
+    std::string normalized_json = "{}";
+    std::string error;
+};
+
+ToolArgumentsNormalization NormalizeToolArgumentsJson(const std::string& arguments_json) {
+    ToolArgumentsNormalization result;
+    const std::string trimmed = Trim(arguments_json);
+    if (trimmed.empty()) {
+        return result;
+    }
+
+    try {
+        const auto parsed = json::parse(trimmed);
+        if (!parsed.is_object()) {
+            result.valid = false;
+            result.error = "Tool arguments must be a JSON object.";
+            return result;
+        }
+        result.normalized_json = parsed.dump();
+        return result;
+    } catch (const std::exception& ex) {
+        result.valid = false;
+        result.error = ex.what();
+        return result;
+    } catch (...) {
+        result.valid = false;
+        result.error = "Tool arguments are not valid JSON.";
+        return result;
+    }
+}
+
+void NormalizeToolCall(ChatToolCall& tool_call) {
+    tool_call.original_arguments_json = tool_call.arguments_json;
+    const auto normalization = NormalizeToolArgumentsJson(tool_call.arguments_json);
+    tool_call.arguments_json = normalization.normalized_json;
+    tool_call.arguments_valid = normalization.valid;
+    tool_call.arguments_error = normalization.error;
+}
+
+json NormalizeToolCallsForProvider(const json& tool_calls) {
+    if (!tool_calls.is_array()) {
+        return json::array();
+    }
+
+    json normalized = json::array();
+    for (const auto& item : tool_calls) {
+        if (!item.is_object()) {
+            continue;
+        }
+
+        json normalized_item = item;
+        if (!normalized_item.contains("type") || !normalized_item["type"].is_string()) {
+            normalized_item["type"] = "function";
+        }
+        if (!normalized_item.contains("function") || !normalized_item["function"].is_object()) {
+            continue;
+        }
+
+        auto& function = normalized_item["function"];
+        std::string raw_arguments;
+        if (function.contains("arguments")) {
+            if (function["arguments"].is_string()) {
+                raw_arguments = function["arguments"].get<std::string>();
+            } else {
+                raw_arguments = function["arguments"].dump();
+            }
+        }
+        function["arguments"] = NormalizeToolArgumentsJson(raw_arguments).normalized_json;
+        normalized.push_back(std::move(normalized_item));
+    }
+
+    return normalized;
+}
+
+json SerializeToolCallsForProvider(const std::vector<ChatToolCall>& tool_calls) {
+    json serialized = json::array();
+    for (const auto& tool_call : tool_calls) {
+        serialized.push_back({
+            {"id", tool_call.id},
+            {"type", "function"},
+            {"function", {
+                {"name", tool_call.name},
+                {"arguments", tool_call.arguments_json.empty() ? "{}" : tool_call.arguments_json},
+            }},
+        });
+    }
+    return serialized;
+}
+
 json BuildRequestBody(const ChatRequestOptions& request, bool stream, const std::vector<ChatToolDefinition>& tools = {}) {
     json body;
     body["model"] = request.model.id;
@@ -207,7 +298,7 @@ json BuildRequestBody(const ChatRequestOptions& request, bool stream, const std:
         }
         if (!message.tool_calls_json.empty()) {
             try {
-                payload["tool_calls"] = json::parse(message.tool_calls_json);
+                payload["tool_calls"] = NormalizeToolCallsForProvider(json::parse(message.tool_calls_json));
             } catch (...) {
             }
         }
@@ -267,6 +358,7 @@ std::vector<ChatToolCall> ExtractToolCalls(const json& message) {
             }
         }
         if (!tool_call.name.empty()) {
+            NormalizeToolCall(tool_call);
             tool_calls.push_back(std::move(tool_call));
         }
     }
@@ -626,9 +718,13 @@ ChatCompletionResult OpenAIClient::CreateToolAwareCompletion(const ChatRequestOp
                     const auto& choice = payload["choices"][0];
                     result.finish_reason = choice.value("finish_reason", "");
                     if (choice.contains("message")) {
-                        result.raw_message_json = choice["message"].dump(2);
-                        result.assistant_text = ExtractContentString(choice["message"].value("content", json{}));
-                        result.tool_calls = ExtractToolCalls(choice["message"]);
+                        json raw_message = choice["message"];
+                        result.assistant_text = ExtractContentString(raw_message.value("content", json{}));
+                        result.tool_calls = ExtractToolCalls(raw_message);
+                        if (!result.tool_calls.empty()) {
+                            raw_message["tool_calls"] = SerializeToolCallsForProvider(result.tool_calls);
+                        }
+                        result.raw_message_json = raw_message.dump(2);
                     }
                 }
                 return result;
@@ -768,9 +864,10 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
                     if (payload == "[DONE]") {
                         result.success = true;
                         result.tool_calls.clear();
-                        for (const auto& tool_call : streamed_tool_calls) {
+                        for (auto tool_call : streamed_tool_calls) {
                             if (!tool_call.name.empty()) {
-                                result.tool_calls.push_back(tool_call);
+                                NormalizeToolCall(tool_call);
+                                result.tool_calls.push_back(std::move(tool_call));
                             }
                         }
 
@@ -781,17 +878,7 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
                             raw_message["content"] = result.assistant_text;
                         }
                         if (!result.tool_calls.empty()) {
-                            raw_message["tool_calls"] = json::array();
-                            for (const auto& tool_call : result.tool_calls) {
-                                raw_message["tool_calls"].push_back({
-                                    {"id", tool_call.id},
-                                    {"type", "function"},
-                                    {"function", {
-                                        {"name", tool_call.name},
-                                        {"arguments", tool_call.arguments_json},
-                                    }},
-                                });
-                            }
+                            raw_message["tool_calls"] = SerializeToolCallsForProvider(result.tool_calls);
                         }
                         result.raw_message_json = raw_message.dump(2);
                         return result;
@@ -858,9 +945,10 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
 
             result.success = true;
             result.tool_calls.clear();
-            for (const auto& tool_call : streamed_tool_calls) {
+            for (auto tool_call : streamed_tool_calls) {
                 if (!tool_call.name.empty()) {
-                    result.tool_calls.push_back(tool_call);
+                    NormalizeToolCall(tool_call);
+                    result.tool_calls.push_back(std::move(tool_call));
                 }
             }
             return result;
