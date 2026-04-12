@@ -1,0 +1,14 @@
+{
+  "bindings": [
+    {
+      "can_delete": false,
+      "can_read": true,
+      "can_write": true,
+      "default_ingest_target": true,
+      "enabled": true,
+      "max_chunks": 8,
+      "rag_id": "rag_1775918532220_8",
+      "retrieval_priority": 20
+    }
+  ]
+}

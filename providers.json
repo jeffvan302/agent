@@ -1,0 +1,20 @@
+{
+  "providers": [
+    {
+      "api_key": "sk-cp-1W5fEAmykvjYT_f5hqhWo1IaC81hT_TEJGSelgjqUBrfqqdryf6xMnONAehDNDiI9YCyek18-NkMeXL3JpDA9IzfmvFkuJ98KyxXxMYEmd3W07Cdt4FLDZ8",
+      "base_url": "https://api.minimax.io/v1",
+      "id": "provider_1775726633372_1",
+      "models": [
+        {
+          "context_window": 0,
+          "display_name": "MiniMax 2.7",
+          "id": "codex-MiniMax-M2.7",
+          "supports_streaming": true,
+          "supports_tools": true,
+          "supports_vision": true
+        }
+      ],
+      "name": "MiniMax 2.7"
+    }
+  ]
+}
