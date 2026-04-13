@@ -1,5 +1,6 @@
 #include "storage.h"
 
+#include "rag_service.h"
 #include "util.h"
 
 #include <nlohmann/json.hpp>
@@ -7,6 +8,8 @@
 #include <algorithm>
 #include <fstream>
 #include <stdexcept>
+#include <unordered_set>
+#include <utility>
 
 using json = nlohmann::json;
 
@@ -155,6 +158,46 @@ ProjectMcpServerBinding ProjectMcpServerBindingFromJson(const json& item) {
     return binding;
 }
 
+json ProjectRagBindingToJson(const ProjectRagBinding& binding) {
+    return json{
+        {"rag_id", binding.rag_id},
+        {"enabled", binding.enabled},
+        {"can_read", binding.can_read},
+        {"can_write", binding.can_write},
+        {"expose_as_tool", binding.expose_as_tool},
+        {"can_delete", binding.can_delete},
+        {"can_export", binding.can_export},
+        {"export_path_template", binding.export_path_template},
+        {"default_ingest_target", binding.default_ingest_target},
+        {"retrieval_priority", binding.retrieval_priority},
+        {"max_chunks", binding.max_chunks},
+        {"default_min_confidence", binding.default_min_confidence},
+        {"default_max_confidence", binding.default_max_confidence},
+    };
+}
+
+ProjectRagBinding ProjectRagBindingFromJson(const json& item) {
+    ProjectRagBinding binding;
+    binding.rag_id = item.value("rag_id", "");
+    binding.enabled = item.value("enabled", true);
+    binding.can_read = item.value("can_read", true);
+    binding.can_write = item.value("can_write", false);
+    binding.expose_as_tool = item.value("expose_as_tool", false);
+    binding.can_delete = item.value("can_delete", false);
+    binding.can_export = item.value("can_export", false);
+    binding.export_path_template = item.value("export_path_template", "");
+    binding.default_ingest_target = item.value("default_ingest_target", false);
+    binding.retrieval_priority = item.value("retrieval_priority", 10);
+    binding.max_chunks = std::max(1, item.value("max_chunks", 8));
+    binding.default_min_confidence = std::clamp(item.value("default_min_confidence", 0.0), 0.0, 1.0);
+    binding.default_max_confidence = std::clamp(item.value("default_max_confidence", 1.0), 0.0, 1.0);
+    if (binding.default_min_confidence > binding.default_max_confidence) {
+        binding.default_min_confidence = 0.0;
+        binding.default_max_confidence = 1.0;
+    }
+    return binding;
+}
+
 json McpServerToJson(const McpServerConfig& server) {
     json variables = json::array();
     for (const auto& variable : server.variables) {
@@ -279,6 +322,47 @@ MessageRecord MessageFromJson(const json& item) {
         message.tool_calls_json = item.value("tool_calls_json", "");
     }
     return message;
+}
+
+json ChatContextDebugEntryToJson(const ChatContextDebugEntry& entry) {
+    json request_messages = json::array();
+    for (const auto& message : entry.request_messages) {
+        request_messages.push_back(MessageToJson(message));
+    }
+
+    return json{
+        {"id", entry.id},
+        {"created_at", entry.created_at},
+        {"kind", entry.kind},
+        {"user_message_index", entry.user_message_index},
+        {"provider_id", entry.provider_id},
+        {"model_id", entry.model_id},
+        {"system_prompt", entry.system_prompt},
+        {"request_messages", std::move(request_messages)},
+        {"compressed_context", entry.compressed_context},
+        {"mcp_context", entry.mcp_context},
+        {"rag_context", entry.rag_context},
+    };
+}
+
+ChatContextDebugEntry ChatContextDebugEntryFromJson(const json& item) {
+    ChatContextDebugEntry entry;
+    entry.id = item.value("id", "");
+    entry.created_at = item.value("created_at", "");
+    entry.kind = item.value("kind", "request");
+    entry.user_message_index = item.value("user_message_index", static_cast<size_t>(0));
+    entry.provider_id = item.value("provider_id", "");
+    entry.model_id = item.value("model_id", "");
+    entry.system_prompt = item.value("system_prompt", "");
+    entry.compressed_context = item.value("compressed_context", "");
+    entry.mcp_context = item.value("mcp_context", "");
+    entry.rag_context = item.value("rag_context", "");
+    if (item.contains("request_messages") && item["request_messages"].is_array()) {
+        for (const auto& message_item : item["request_messages"]) {
+            entry.request_messages.push_back(MessageFromJson(message_item));
+        }
+    }
+    return entry;
 }
 
 json LoadJsonFile(const std::filesystem::path& path, const json& fallback) {
@@ -489,6 +573,33 @@ void AppStorage::SaveMessages(const std::string& project_id, const std::string& 
     SaveJsonFile(ChatMessagesPath(project_id, chat_id), payload);
 }
 
+std::vector<ChatContextDebugEntry> AppStorage::LoadChatContextDebugEntries(const std::string& project_id, const std::string& chat_id) const {
+    const json data = LoadJsonFile(ChatContextDebugPath(project_id, chat_id), json{{"entries", json::array()}});
+    std::vector<ChatContextDebugEntry> entries;
+    if (data.contains("entries") && data["entries"].is_array()) {
+        for (const auto& item : data["entries"]) {
+            entries.push_back(ChatContextDebugEntryFromJson(item));
+        }
+    }
+    return entries;
+}
+
+void AppStorage::SaveChatContextDebugEntries(const std::string& project_id, const std::string& chat_id, const std::vector<ChatContextDebugEntry>& entries) const {
+    json payload;
+    payload["entries"] = json::array();
+    for (const auto& entry : entries) {
+        payload["entries"].push_back(ChatContextDebugEntryToJson(entry));
+    }
+    std::filesystem::create_directories(ChatPath(project_id, chat_id));
+    SaveJsonFile(ChatContextDebugPath(project_id, chat_id), payload);
+}
+
+void AppStorage::AppendChatContextDebugEntry(const std::string& project_id, const std::string& chat_id, const ChatContextDebugEntry& entry) const {
+    auto entries = LoadChatContextDebugEntries(project_id, chat_id);
+    entries.push_back(entry);
+    SaveChatContextDebugEntries(project_id, chat_id, entries);
+}
+
 std::vector<std::string> AppStorage::LoadApprovedMcpServers(const std::string& project_id) const {
     const json data = LoadJsonFile(ProjectMcpConsentPath(project_id), json{{"approved_server_ids", json::array()}});
     std::vector<std::string> server_ids;
@@ -616,4 +727,475 @@ std::filesystem::path AppStorage::ChatMetaPath(const std::string& project_id, co
 
 std::filesystem::path AppStorage::ChatMessagesPath(const std::string& project_id, const std::string& chat_id) const {
     return ChatPath(project_id, chat_id) / "messages.json";
+}
+
+std::filesystem::path AppStorage::ChatContextDebugPath(const std::string& project_id, const std::string& chat_id) const {
+    return ChatPath(project_id, chat_id) / "context_debug.json";
+}
+
+std::filesystem::path AppStorage::CompressionConfigsPath() const {
+    return root_path_ / "context_compression_configs.json";
+}
+
+std::filesystem::path AppStorage::ProjectCompressionPath(const std::string& project_id) const {
+    return ProjectPath(project_id) / "context_compression.json";
+}
+
+std::filesystem::path AppStorage::ChatCompressionStatePath(const std::string& project_id, const std::string& chat_id) const {
+    return ChatPath(project_id, chat_id) / "compression_state.json";
+}
+
+std::filesystem::path AppStorage::ChatCompressionHistoryPath(const std::string& project_id, const std::string& chat_id) const {
+    return ChatPath(project_id, chat_id) / "compression_history.json";
+}
+
+std::filesystem::path AppStorage::ProjectSettingsPath(const std::string& project_id) const {
+    return ProjectPath(project_id) / "project_settings.json";
+}
+
+// ===== Compression Config JSON Helpers =====
+
+json Layer1ConfigToJson(const Layer1Config& cfg) {
+    return json{
+        {"enabled", cfg.enabled},
+        {"max_pins", cfg.max_pins},
+        {"pin_code_blocks", cfg.pin_code_blocks},
+        {"pin_urls", cfg.pin_urls},
+        {"pin_numbers", cfg.pin_numbers},
+        {"pin_first_message", cfg.pin_first_message},
+        {"pin_explicit_instructions", cfg.pin_explicit_instructions},
+        {"pin_user_flagged", cfg.pin_user_flagged},
+    };
+}
+
+Layer1Config Layer1ConfigFromJson(const json& item) {
+    Layer1Config cfg;
+    cfg.enabled = item.value("enabled", true);
+    cfg.max_pins = item.value("max_pins", 10);
+    cfg.pin_code_blocks = item.value("pin_code_blocks", true);
+    cfg.pin_urls = item.value("pin_urls", true);
+    cfg.pin_numbers = item.value("pin_numbers", true);
+    cfg.pin_first_message = item.value("pin_first_message", true);
+    cfg.pin_explicit_instructions = item.value("pin_explicit_instructions", true);
+    cfg.pin_user_flagged = item.value("pin_user_flagged", true);
+    return cfg;
+}
+
+json Layer2ConfigToJson(const Layer2Config& cfg) {
+    return json{
+        {"enabled", cfg.enabled},
+        {"model_id", cfg.model_id},
+        {"model_provider_id", cfg.model_provider_id},
+        {"max_tokens", cfg.max_tokens},
+        {"trigger_threshold_turns", cfg.trigger_threshold_turns},
+    };
+}
+
+Layer2Config Layer2ConfigFromJson(const json& item) {
+    Layer2Config cfg;
+    cfg.enabled = item.value("enabled", true);
+    cfg.model_id = item.value("model_id", "");
+    cfg.model_provider_id = item.value("model_provider_id", "");
+    cfg.max_tokens = item.value("max_tokens", 500);
+    cfg.trigger_threshold_turns = item.value("trigger_threshold_turns", 8);
+    return cfg;
+}
+
+json Layer3ConfigToJson(const Layer3Config& cfg) {
+    return json{
+        {"enabled", cfg.enabled},
+        {"model_id", cfg.model_id},
+        {"model_provider_id", cfg.model_provider_id},
+        {"max_tokens", cfg.max_tokens},
+    };
+}
+
+Layer3Config Layer3ConfigFromJson(const json& item) {
+    Layer3Config cfg;
+    cfg.enabled = item.value("enabled", true);
+    cfg.model_id = item.value("model_id", "");
+    cfg.model_provider_id = item.value("model_provider_id", "");
+    cfg.max_tokens = item.value("max_tokens", 800);
+    return cfg;
+}
+
+json Layer4ConfigToJson(const Layer4Config& cfg) {
+    return json{
+        {"enabled", cfg.enabled},
+        {"min_recent_turns", cfg.min_recent_turns},
+    };
+}
+
+Layer4Config Layer4ConfigFromJson(const json& item) {
+    Layer4Config cfg;
+    cfg.enabled = item.value("enabled", true);
+    cfg.min_recent_turns = item.value("min_recent_turns", 2);
+    return cfg;
+}
+
+std::string StrategyToString(ContextCompressionStrategy strategy) {
+    switch (strategy) {
+    case ContextCompressionStrategy::TruncateTop:
+        return "truncate_top";
+    case ContextCompressionStrategy::HierarchicalStructured:
+        return "hierarchical_structured";
+    case ContextCompressionStrategy::None:
+    default:
+        return "none";
+    }
+}
+
+ContextCompressionStrategy StrategyFromString(const std::string& value) {
+    if (value == "truncate_top") {
+        return ContextCompressionStrategy::TruncateTop;
+    }
+    if (value == "hierarchical_structured") {
+        return ContextCompressionStrategy::HierarchicalStructured;
+    }
+    return ContextCompressionStrategy::None;
+}
+
+json ContextCompressionLayerSettingsToJson(const ContextCompressionLayerSettings& layers) {
+    return json{
+        {"layer1", Layer1ConfigToJson(layers.layer1)},
+        {"layer2", Layer2ConfigToJson(layers.layer2)},
+        {"layer3", Layer3ConfigToJson(layers.layer3)},
+        {"layer4", Layer4ConfigToJson(layers.layer4)},
+    };
+}
+
+ContextCompressionLayerSettings ContextCompressionLayerSettingsFromJson(const json& item) {
+    ContextCompressionLayerSettings layers;
+    if (item.contains("layer1")) {
+        layers.layer1 = Layer1ConfigFromJson(item["layer1"]);
+    }
+    if (item.contains("layer2")) {
+        layers.layer2 = Layer2ConfigFromJson(item["layer2"]);
+    }
+    if (item.contains("layer3")) {
+        layers.layer3 = Layer3ConfigFromJson(item["layer3"]);
+    }
+    if (item.contains("layer4")) {
+        layers.layer4 = Layer4ConfigFromJson(item["layer4"]);
+    }
+    return layers;
+}
+
+json ContextCompressionConfigToJson(const ContextCompressionConfig& config) {
+    return json{
+        {"id", config.id},
+        {"name", config.name},
+        {"strategy", StrategyToString(config.strategy)},
+        {"layers", ContextCompressionLayerSettingsToJson(config.layers)},
+        {"frequency_every_n_prompts", config.frequency_every_n_prompts},
+        {"context_window_trigger_percent", config.context_window_trigger_percent},
+        {"truncate_top_keep_messages", config.truncate_top_keep_messages},
+    };
+}
+
+ContextCompressionConfig ContextCompressionConfigFromJson(const json& item) {
+    ContextCompressionConfig config;
+    config.id = item.value("id", "");
+    config.name = item.value("name", "Unnamed Config");
+    config.strategy = StrategyFromString(item.value("strategy", "none"));
+    if (item.contains("layers")) {
+        config.layers = ContextCompressionLayerSettingsFromJson(item["layers"]);
+    }
+    config.frequency_every_n_prompts = item.value("frequency_every_n_prompts", 10);
+    config.context_window_trigger_percent = item.value("context_window_trigger_percent", 70);
+    config.truncate_top_keep_messages = item.value("truncate_top_keep_messages", 20);
+    return config;
+}
+
+json ChatCompressionStateToJson(const ChatCompressionState& state) {
+    json pinned = json::array();
+    for (const auto& msg : state.layer1_pinned_messages) {
+        pinned.push_back(MessageToJson(msg));
+    }
+    return json{
+        {"last_compression_message_index", state.last_compression_message_index},
+        {"latest_snapshot_id", state.latest_snapshot_id},
+        {"current_compressed_context", state.current_compressed_context},
+        {"layer2_previous_summary", state.layer2_previous_summary},
+        {"layer3_previous_state_json", state.layer3_previous_state_json},
+        {"layer1_pinned_messages", std::move(pinned)},
+    };
+}
+
+ChatCompressionState ChatCompressionStateFromJson(const json& item) {
+    ChatCompressionState state;
+    state.last_compression_message_index = item.value("last_compression_message_index", static_cast<size_t>(0));
+    state.latest_snapshot_id = item.value("latest_snapshot_id", "");
+    state.current_compressed_context = item.value("current_compressed_context", "");
+    state.layer2_previous_summary = item.value("layer2_previous_summary", "");
+    state.layer3_previous_state_json = item.value("layer3_previous_state_json", "");
+    if (item.contains("layer1_pinned_messages") && item["layer1_pinned_messages"].is_array()) {
+        for (const auto& msg_item : item["layer1_pinned_messages"]) {
+            state.layer1_pinned_messages.push_back(MessageFromJson(msg_item));
+        }
+    }
+    return state;
+}
+
+json ChatCompressionSnapshotToJson(const ChatCompressionSnapshot& snapshot) {
+    json pinned = json::array();
+    for (const auto& message : snapshot.pinned_messages) {
+        pinned.push_back(MessageToJson(message));
+    }
+
+    json source_messages = json::array();
+    for (const auto& message : snapshot.source_messages) {
+        source_messages.push_back(MessageToJson(message));
+    }
+
+    return json{
+        {"id", snapshot.id},
+        {"created_at", snapshot.created_at},
+        {"trigger_reason", snapshot.trigger_reason},
+        {"config_id", snapshot.config_id},
+        {"config_name", snapshot.config_name},
+        {"strategy", snapshot.strategy},
+        {"previous_snapshot_id", snapshot.previous_snapshot_id},
+        {"previous_message_index", snapshot.previous_message_index},
+        {"compressed_through_message_index", snapshot.compressed_through_message_index},
+        {"previous_compressed_context", snapshot.previous_compressed_context},
+        {"compressed_context", snapshot.compressed_context},
+        {"layer2_summary", snapshot.layer2_summary},
+        {"layer3_state_json", snapshot.layer3_state_json},
+        {"pinned_messages", std::move(pinned)},
+        {"source_messages", std::move(source_messages)},
+    };
+}
+
+ChatCompressionSnapshot ChatCompressionSnapshotFromJson(const json& item) {
+    ChatCompressionSnapshot snapshot;
+    snapshot.id = item.value("id", "");
+    snapshot.created_at = item.value("created_at", "");
+    snapshot.trigger_reason = item.value("trigger_reason", "");
+    snapshot.config_id = item.value("config_id", "");
+    snapshot.config_name = item.value("config_name", "");
+    snapshot.strategy = item.value("strategy", "");
+    snapshot.previous_snapshot_id = item.value("previous_snapshot_id", "");
+    snapshot.previous_message_index = item.value("previous_message_index", static_cast<size_t>(0));
+    snapshot.compressed_through_message_index = item.value("compressed_through_message_index", static_cast<size_t>(0));
+    snapshot.previous_compressed_context = item.value("previous_compressed_context", "");
+    snapshot.compressed_context = item.value("compressed_context", "");
+    snapshot.layer2_summary = item.value("layer2_summary", "");
+    snapshot.layer3_state_json = item.value("layer3_state_json", "");
+    if (item.contains("pinned_messages") && item["pinned_messages"].is_array()) {
+        for (const auto& message : item["pinned_messages"]) {
+            snapshot.pinned_messages.push_back(MessageFromJson(message));
+        }
+    }
+    if (item.contains("source_messages") && item["source_messages"].is_array()) {
+        for (const auto& message : item["source_messages"]) {
+            snapshot.source_messages.push_back(MessageFromJson(message));
+        }
+    }
+    return snapshot;
+}
+
+json ProjectCompressionSettingsToJson(const ProjectCompressionSettings& settings) {
+    return json{
+        {"enabled", settings.enabled},
+        {"config_id", settings.config_id},
+    };
+}
+
+ProjectCompressionSettings ProjectCompressionSettingsFromJson(const json& item) {
+    ProjectCompressionSettings settings;
+    settings.enabled = item.value("enabled", false);
+    settings.config_id = item.value("config_id", "");
+    return settings;
+}
+
+// ===== Project Settings JSON Helpers =====
+
+json ProjectSettingsToJson(const ProjectSettings& settings) {
+    json j;
+    j["project_name"] = settings.project_name;
+    j["project_instructions"] = settings.project_instructions;
+
+    json mcp_arr = json::array();
+    for (const auto& binding : settings.mcp_bindings) {
+        mcp_arr.push_back(ProjectMcpServerBindingToJson(binding));
+    }
+    j["mcp_bindings"] = mcp_arr;
+
+    json compression_arr = json::array();
+    for (const auto& cfg : settings.compression_configs) {
+        compression_arr.push_back(ContextCompressionConfigToJson(cfg));
+    }
+    j["compression_configs"] = compression_arr;
+
+    j["selected_compression_config_id"] = settings.selected_compression_config_id;
+
+    json rag_arr = json::array();
+    for (const auto& binding : settings.rag_bindings) {
+        rag_arr.push_back(ProjectRagBindingToJson(binding));
+    }
+    j["rag_bindings"] = rag_arr;
+
+    return j;
+}
+
+ProjectSettings ProjectSettingsFromJson(const json& j) {
+    ProjectSettings settings;
+    settings.project_name = j.value("project_name", "");
+    settings.project_instructions = j.value("project_instructions", "");
+    settings.selected_compression_config_id = j.value("selected_compression_config_id", "");
+
+    if (j.contains("mcp_bindings") && j["mcp_bindings"].is_array()) {
+        for (const auto& item : j["mcp_bindings"]) {
+            settings.mcp_bindings.push_back(ProjectMcpServerBindingFromJson(item));
+        }
+    }
+
+    if (j.contains("compression_configs") && j["compression_configs"].is_array()) {
+        for (const auto& item : j["compression_configs"]) {
+            settings.compression_configs.push_back(ContextCompressionConfigFromJson(item));
+        }
+    }
+
+    if (j.contains("rag_bindings") && j["rag_bindings"].is_array()) {
+        for (const auto& item : j["rag_bindings"]) {
+            settings.rag_bindings.push_back(ProjectRagBindingFromJson(item));
+        }
+    }
+
+    return settings;
+}
+
+ProjectSettings AppStorage::LoadProjectSettings(const std::string& project_id) const {
+    auto settings_path = ProjectSettingsPath(project_id);
+    if (std::filesystem::exists(settings_path)) {
+        const json data = LoadJsonFile(settings_path, json::object());
+        ProjectSettings settings = ProjectSettingsFromJson(data);
+        if (settings.selected_compression_config_id.empty()) {
+            auto comp_path = ProjectCompressionPath(project_id);
+            if (std::filesystem::exists(comp_path)) {
+                const json comp_data = LoadJsonFile(comp_path, json::object());
+                ProjectCompressionSettings legacy_compression = ProjectCompressionSettingsFromJson(comp_data);
+                if (legacy_compression.enabled && !legacy_compression.config_id.empty()) {
+                    settings.selected_compression_config_id = legacy_compression.config_id;
+                }
+            }
+        }
+        return settings;
+    }
+
+    // Migration: load from legacy files
+    ProjectSettings settings;
+    settings.mcp_bindings = LoadProjectMcpBindings(project_id);
+
+    // Load compression config id from context_compression.json
+    auto comp_path = ProjectCompressionPath(project_id);
+    if (std::filesystem::exists(comp_path)) {
+        const json comp_data = LoadJsonFile(comp_path, json::object());
+        settings.selected_compression_config_id = comp_data.value("config_id", "");
+    }
+
+    // Load rag bindings from project_rag.json
+    auto rag_path = ProjectPath(project_id) / "project_rag.json";
+    if (std::filesystem::exists(rag_path)) {
+        const json rag_data = LoadJsonFile(rag_path, json::object());
+        if (rag_data.contains("bindings") && rag_data["bindings"].is_array()) {
+            for (const auto& item : rag_data["bindings"]) {
+                settings.rag_bindings.push_back(ProjectRagBindingFromJson(item));
+            }
+        }
+    }
+
+    // Save unified file after migration
+    std::filesystem::create_directories(ProjectPath(project_id));
+    SaveJsonFile(settings_path, ProjectSettingsToJson(settings));
+
+    return settings;
+}
+
+void AppStorage::SaveProjectSettings(const std::string& project_id, const ProjectSettings& settings) const {
+    std::filesystem::create_directories(ProjectPath(project_id));
+    SaveJsonFile(ProjectSettingsPath(project_id), ProjectSettingsToJson(settings));
+}
+
+// ===== Compression Storage Methods =====
+
+std::vector<ContextCompressionConfig> AppStorage::LoadCompressionConfigs() const {
+    const json data = LoadJsonFile(CompressionConfigsPath(), json{{"configs", json::array()}});
+    std::vector<ContextCompressionConfig> configs;
+    std::unordered_set<std::string> used_ids;
+    bool repaired = false;
+    if (data.contains("configs") && data["configs"].is_array()) {
+        for (const auto& item : data["configs"]) {
+            ContextCompressionConfig config = ContextCompressionConfigFromJson(item);
+            if (config.id.empty() || used_ids.find(config.id) != used_ids.end()) {
+                do {
+                    config.id = MakeId("cc");
+                } while (used_ids.find(config.id) != used_ids.end());
+                repaired = true;
+            }
+            used_ids.insert(config.id);
+            configs.push_back(std::move(config));
+        }
+    }
+    if (repaired) {
+        SaveCompressionConfigs(configs);
+    }
+    return configs;
+}
+
+void AppStorage::SaveCompressionConfigs(const std::vector<ContextCompressionConfig>& configs) const {
+    json payload;
+    payload["configs"] = json::array();
+    for (const auto& config : configs) {
+        payload["configs"].push_back(ContextCompressionConfigToJson(config));
+    }
+    SaveJsonFile(CompressionConfigsPath(), payload);
+}
+
+ProjectCompressionSettings AppStorage::LoadProjectCompressionSettings(const std::string& project_id) const {
+    const json data = LoadJsonFile(ProjectCompressionPath(project_id), json::object());
+    return ProjectCompressionSettingsFromJson(data);
+}
+
+void AppStorage::SaveProjectCompressionSettings(const std::string& project_id, const ProjectCompressionSettings& settings) const {
+    std::filesystem::create_directories(ProjectPath(project_id));
+    SaveJsonFile(ProjectCompressionPath(project_id), ProjectCompressionSettingsToJson(settings));
+}
+
+ChatCompressionState AppStorage::LoadChatCompressionState(const std::string& project_id, const std::string& chat_id) const {
+    const json data = LoadJsonFile(ChatCompressionStatePath(project_id, chat_id), json::object());
+    return ChatCompressionStateFromJson(data);
+}
+
+void AppStorage::SaveChatCompressionState(const std::string& project_id, const std::string& chat_id, const ChatCompressionState& state) const {
+    std::filesystem::create_directories(ChatPath(project_id, chat_id));
+    SaveJsonFile(ChatCompressionStatePath(project_id, chat_id), ChatCompressionStateToJson(state));
+}
+
+std::vector<ChatCompressionSnapshot> AppStorage::LoadChatCompressionHistory(const std::string& project_id, const std::string& chat_id) const {
+    const json data = LoadJsonFile(ChatCompressionHistoryPath(project_id, chat_id), json{{"snapshots", json::array()}});
+    std::vector<ChatCompressionSnapshot> snapshots;
+    if (data.contains("snapshots") && data["snapshots"].is_array()) {
+        for (const auto& item : data["snapshots"]) {
+            snapshots.push_back(ChatCompressionSnapshotFromJson(item));
+        }
+    }
+    return snapshots;
+}
+
+void AppStorage::SaveChatCompressionHistory(const std::string& project_id, const std::string& chat_id, const std::vector<ChatCompressionSnapshot>& snapshots) const {
+    json data;
+    data["snapshots"] = json::array();
+    for (const auto& snapshot : snapshots) {
+        data["snapshots"].push_back(ChatCompressionSnapshotToJson(snapshot));
+    }
+    std::filesystem::create_directories(ChatPath(project_id, chat_id));
+    SaveJsonFile(ChatCompressionHistoryPath(project_id, chat_id), data);
+}
+
+void AppStorage::AppendChatCompressionSnapshot(const std::string& project_id, const std::string& chat_id, const ChatCompressionSnapshot& snapshot) const {
+    auto snapshots = LoadChatCompressionHistory(project_id, chat_id);
+    snapshots.push_back(snapshot);
+    SaveChatCompressionHistory(project_id, chat_id, snapshots);
 }

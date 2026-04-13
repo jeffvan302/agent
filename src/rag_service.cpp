@@ -41,8 +41,11 @@ bool IsHtmlExtension(const std::filesystem::path& path);
 std::string MimeTypeForPath(const std::filesystem::path& path);
 std::string HtmlToMarkdownText(const std::string& html);
 bool IsRichExtractionExtension(const std::filesystem::path& path);
+bool IsImageExtension(const std::filesystem::path& path);
 std::string ExtractRichDocumentToMarkdown(const std::filesystem::path& path, std::string* extractor_id);
+std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* extractor_id);
 std::string SanitizeUtf8ForJson(const std::string& text);
+bool PythonModuleAvailable(const std::wstring& python_executable, const std::string& module_name);
 
 std::string RagStorageModeToString(RagDocumentStorageMode mode) {
     switch (mode) {
@@ -64,6 +67,81 @@ RagDocumentStorageMode RagStorageModeFromString(const std::string& value) {
         return RagDocumentStorageMode::ReferenceInPlace;
     }
     return RagDocumentStorageMode::CopyAndTrackOriginal;
+}
+
+std::string DefaultImageVisionPrompt() {
+    return "Describe this image for RAG ingestion. Include visible text, objects, layout, chart or graph interpretation, axes, legends, units, notable trends, and any uncertainty. Return concise Markdown with factual observations only.";
+}
+
+std::string NormalizeImageIngestMode(std::string mode) {
+    mode = Trim(mode);
+    std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (mode == "paddle" || mode == "paddleocr" || mode == "paddle_ocr" || mode == "paddle_ocr_gpu") {
+        return "paddle_ocr_gpu";
+    }
+    if (mode == "vision" || mode == "vlm" || mode == "vision_language" || mode == "vision_language_gpu") {
+        return "vision_language_gpu";
+    }
+    return "tesseract_cpu";
+}
+
+std::string NormalizeImageVisionProvider(std::string provider) {
+    provider = Trim(provider);
+    std::transform(provider.begin(), provider.end(), provider.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (provider == "ollama") {
+        return "ollama";
+    }
+    return provider.empty() ? "none" : provider;
+}
+
+json RagImageIngestSettingsToJson(const RagImageIngestSettings& settings) {
+    return json{
+        {"enabled", settings.enabled},
+        {"mode", NormalizeImageIngestMode(settings.mode)},
+        {"tesseract_language", settings.tesseract_language.empty() ? "eng" : settings.tesseract_language},
+        {"paddle_python_command", settings.paddle_python_command.empty() ? "python" : settings.paddle_python_command},
+        {"paddle_language", settings.paddle_language.empty() ? "en" : settings.paddle_language},
+        {"vision_provider", NormalizeImageVisionProvider(settings.vision_provider)},
+        {"vision_base_url", settings.vision_base_url.empty() ? "http://localhost:11434" : settings.vision_base_url},
+        {"vision_model", settings.vision_model.empty() ? "qwen2.5vl:7b" : settings.vision_model},
+        {"vision_prompt", settings.vision_prompt.empty() ? DefaultImageVisionPrompt() : settings.vision_prompt},
+        {"include_ocr_text", settings.include_ocr_text},
+        {"include_visual_description", settings.include_visual_description},
+    };
+}
+
+RagImageIngestSettings RagImageIngestSettingsFromJson(const json& item) {
+    RagImageIngestSettings settings;
+    settings.enabled = item.value("enabled", true);
+    settings.mode = NormalizeImageIngestMode(item.value("mode", "tesseract_cpu"));
+    settings.tesseract_language = item.value("tesseract_language", "eng");
+    if (Trim(settings.tesseract_language).empty()) {
+        settings.tesseract_language = "eng";
+    }
+    settings.paddle_python_command = item.value("paddle_python_command", "python");
+    if (Trim(settings.paddle_python_command).empty()) {
+        settings.paddle_python_command = "python";
+    }
+    settings.paddle_language = item.value("paddle_language", "en");
+    if (Trim(settings.paddle_language).empty()) {
+        settings.paddle_language = "en";
+    }
+    settings.vision_provider = NormalizeImageVisionProvider(item.value("vision_provider", "ollama"));
+    settings.vision_base_url = item.value("vision_base_url", "http://localhost:11434");
+    if (Trim(settings.vision_base_url).empty()) {
+        settings.vision_base_url = "http://localhost:11434";
+    }
+    settings.vision_model = item.value("vision_model", "qwen2.5vl:7b");
+    if (Trim(settings.vision_model).empty()) {
+        settings.vision_model = "qwen2.5vl:7b";
+    }
+    settings.vision_prompt = item.value("vision_prompt", DefaultImageVisionPrompt());
+    if (Trim(settings.vision_prompt).empty()) {
+        settings.vision_prompt = DefaultImageVisionPrompt();
+    }
+    settings.include_ocr_text = item.value("include_ocr_text", true);
+    settings.include_visual_description = item.value("include_visual_description", true);
+    return settings;
 }
 
 json RagLibraryToJson(const RagLibraryConfig& config) {
@@ -131,10 +209,15 @@ json ProjectRagBindingToJson(const ProjectRagBinding& binding) {
         {"enabled", binding.enabled},
         {"can_read", binding.can_read},
         {"can_write", binding.can_write},
+        {"expose_as_tool", binding.expose_as_tool},
         {"can_delete", binding.can_delete},
+        {"can_export", binding.can_export},
+        {"export_path_template", binding.export_path_template},
         {"default_ingest_target", binding.default_ingest_target},
         {"retrieval_priority", binding.retrieval_priority},
         {"max_chunks", binding.max_chunks},
+        {"default_min_confidence", binding.default_min_confidence},
+        {"default_max_confidence", binding.default_max_confidence},
     };
 }
 
@@ -144,10 +227,19 @@ ProjectRagBinding ProjectRagBindingFromJson(const json& item) {
     binding.enabled = item.value("enabled", true);
     binding.can_read = item.value("can_read", true);
     binding.can_write = item.value("can_write", false);
+    binding.expose_as_tool = item.value("expose_as_tool", false);
     binding.can_delete = item.value("can_delete", false);
+    binding.can_export = item.value("can_export", false);
+    binding.export_path_template = item.value("export_path_template", "");
     binding.default_ingest_target = item.value("default_ingest_target", false);
     binding.retrieval_priority = item.value("retrieval_priority", 10);
     binding.max_chunks = std::max(1, item.value("max_chunks", 8));
+    binding.default_min_confidence = std::clamp(item.value("default_min_confidence", 0.0), 0.0, 1.0);
+    binding.default_max_confidence = std::clamp(item.value("default_max_confidence", 1.0), 0.0, 1.0);
+    if (binding.default_min_confidence > binding.default_max_confidence) {
+        binding.default_min_confidence = 0.0;
+        binding.default_max_confidence = 1.0;
+    }
     return binding;
 }
 
@@ -1397,6 +1489,7 @@ bool IsSupportedTextExtension(const std::filesystem::path& path) {
         L".jsx", L".py", L".ps1", L".bat", L".cmd", L".ini", L".toml",
         L".yaml", L".yml", L".html", L".htm", L".docx", L".docm",
         L".xlsx", L".xlsm", L".pdf", L".css", L".sql",
+        L".png", L".jpg", L".jpeg", L".bmp", L".tif", L".tiff", L".webp",
     };
     return extensions.find(ext) != extensions.end();
 }
@@ -1494,6 +1587,21 @@ std::string MimeTypeForPath(const std::filesystem::path& path) {
     }
     if (ext == L".pdf") {
         return "application/pdf";
+    }
+    if (ext == L".png") {
+        return "image/png";
+    }
+    if (ext == L".jpg" || ext == L".jpeg") {
+        return "image/jpeg";
+    }
+    if (ext == L".bmp") {
+        return "image/bmp";
+    }
+    if (ext == L".tif" || ext == L".tiff") {
+        return "image/tiff";
+    }
+    if (ext == L".webp") {
+        return "image/webp";
     }
     if (ext == L".md" || ext == L".markdown") {
         return "text/markdown";
@@ -1767,6 +1875,12 @@ bool IsPdfExtension(const std::filesystem::path& path) {
     return LowerExtension(path) == L".pdf";
 }
 
+bool IsImageExtension(const std::filesystem::path& path) {
+    const std::wstring ext = LowerExtension(path);
+    return ext == L".png" || ext == L".jpg" || ext == L".jpeg" || ext == L".bmp" ||
+        ext == L".tif" || ext == L".tiff" || ext == L".webp";
+}
+
 bool IsRichExtractionExtension(const std::filesystem::path& path) {
     return IsHtmlExtension(path) || IsDocxExtension(path) || IsXlsxExtension(path) || IsPdfExtension(path);
 }
@@ -1815,6 +1929,338 @@ bool RunProcessAndWait(std::wstring command_line, DWORD timeout_ms, std::string*
         return false;
     }
     return true;
+}
+
+std::string Base64Encode(const std::string& bytes) {
+    static constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string output;
+    output.reserve(((bytes.size() + 2) / 3) * 4);
+    size_t index = 0;
+    while (index < bytes.size()) {
+        const unsigned char a = static_cast<unsigned char>(bytes[index++]);
+        const bool has_b = index < bytes.size();
+        const unsigned char b = has_b ? static_cast<unsigned char>(bytes[index++]) : 0;
+        const bool has_c = index < bytes.size();
+        const unsigned char c = has_c ? static_cast<unsigned char>(bytes[index++]) : 0;
+
+        output.push_back(alphabet[(a >> 2) & 0x3F]);
+        output.push_back(alphabet[((a & 0x03) << 4) | ((b >> 4) & 0x0F)]);
+        output.push_back(has_b ? alphabet[((b & 0x0F) << 2) | ((c >> 6) & 0x03)] : '=');
+        output.push_back(has_c ? alphabet[c & 0x3F] : '=');
+    }
+    return output;
+}
+
+std::string ImageModeLabel(const std::string& mode) {
+    const std::string normalized = NormalizeImageIngestMode(mode);
+    if (normalized == "paddle_ocr_gpu") {
+        return "GPU OCR (PaddleOCR)";
+    }
+    if (normalized == "vision_language_gpu") {
+        return "Full vision understanding (OCR + vision-language model)";
+    }
+    return "CPU OCR (Tesseract)";
+}
+
+std::optional<std::string> ExtractImageWithTesseract(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    const auto tesseract = FindExecutableOnPath(L"tesseract.exe");
+    if (!tesseract) {
+        if (error) {
+            *error = "tesseract.exe was not found on PATH.";
+        }
+        return std::nullopt;
+    }
+
+    const std::filesystem::path temp = CreateTempDirectory("rag_tesseract");
+    try {
+        const std::filesystem::path output_base = temp / "ocr";
+        const std::filesystem::path output_text = temp / "ocr.txt";
+        std::wstring command = QuoteCommandArgument(*tesseract) + L" " +
+            QuoteCommandArgument(path.wstring()) + L" " +
+            QuoteCommandArgument(output_base.wstring());
+        const std::string language = Trim(settings.tesseract_language).empty() ? "eng" : Trim(settings.tesseract_language);
+        command += L" -l " + QuoteCommandArgument(Utf8ToWide(language));
+
+        std::string process_error;
+        if (!RunProcessAndWait(command, 180000, &process_error) || !std::filesystem::exists(output_text)) {
+            if (error) {
+                *error = process_error.empty() ? "Tesseract did not produce OCR output." : process_error;
+            }
+            std::error_code ec;
+            std::filesystem::remove_all(temp, ec);
+            return std::nullopt;
+        }
+
+        std::string text = NormalizeMarkdownWhitespace(ReadWholeFile(output_text));
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        if (Trim(text).empty()) {
+            if (error) {
+                *error = "Tesseract produced no readable OCR text.";
+            }
+            return std::nullopt;
+        }
+        return text;
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        throw;
+    }
+}
+
+std::optional<std::string> ExtractImageWithPaddleOcr(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    std::wstring python_command = Utf8ToWide(Trim(settings.paddle_python_command));
+    if (python_command.empty()) {
+        python_command = L"python";
+    }
+    if (python_command == L"python" || python_command == L"python.exe") {
+        const auto python = FindExecutableOnPath(L"python.exe");
+        if (!python) {
+            if (error) {
+                *error = "python.exe was not found on PATH.";
+            }
+            return std::nullopt;
+        }
+        python_command = *python;
+    }
+
+    const std::filesystem::path temp = CreateTempDirectory("rag_paddleocr");
+    try {
+        const std::filesystem::path script = temp / "paddle_ocr_extract.py";
+        const std::filesystem::path output = temp / "ocr.txt";
+        const std::filesystem::path error_output = temp / "ocr_error.txt";
+        {
+            std::ofstream script_file(script, std::ios::binary | std::ios::trunc);
+            script_file
+                << "import sys, traceback\n"
+                << "from pathlib import Path\n"
+                << "image_path = sys.argv[1]\n"
+                << "out_path = Path(sys.argv[2])\n"
+                << "err_path = Path(sys.argv[3])\n"
+                << "lang = sys.argv[4] if len(sys.argv) > 4 else 'en'\n"
+                << "texts = []\n"
+                << "def add_text(value):\n"
+                << "    value = str(value).strip()\n"
+                << "    if value and value not in texts:\n"
+                << "        texts.append(value)\n"
+                << "def collect(obj):\n"
+                << "    if obj is None:\n"
+                << "        return\n"
+                << "    if isinstance(obj, dict):\n"
+                << "        for key in ('rec_texts', 'texts'):\n"
+                << "            value = obj.get(key)\n"
+                << "            if isinstance(value, (list, tuple)):\n"
+                << "                for item in value:\n"
+                << "                    add_text(item)\n"
+                << "        value = obj.get('text')\n"
+                << "        if isinstance(value, str):\n"
+                << "            add_text(value)\n"
+                << "        for value in obj.values():\n"
+                << "            collect(value)\n"
+                << "        return\n"
+                << "    if isinstance(obj, (list, tuple)):\n"
+                << "        if len(obj) >= 2 and isinstance(obj[1], (list, tuple)) and obj[1] and isinstance(obj[1][0], str):\n"
+                << "            add_text(obj[1][0])\n"
+                << "        for item in obj:\n"
+                << "            collect(item)\n"
+                << "        return\n"
+                << "    for attr in ('json', 'res'):\n"
+                << "        if hasattr(obj, attr):\n"
+                << "            try:\n"
+                << "                collect(getattr(obj, attr))\n"
+                << "            except Exception:\n"
+                << "                pass\n"
+                << "try:\n"
+                << "    from paddleocr import PaddleOCR\n"
+                << "    try:\n"
+                << "        ocr = PaddleOCR(use_angle_cls=True, lang=lang)\n"
+                << "    except TypeError:\n"
+                << "        try:\n"
+                << "            ocr = PaddleOCR(lang=lang)\n"
+                << "        except TypeError:\n"
+                << "            ocr = PaddleOCR()\n"
+                << "    try:\n"
+                << "        result = ocr.ocr(image_path, cls=True)\n"
+                << "    except Exception:\n"
+                << "        try:\n"
+                << "            result = ocr.predict(image_path)\n"
+                << "        except TypeError:\n"
+                << "            result = ocr.predict(input=image_path)\n"
+                << "    collect(result)\n"
+                << "    out_path.write_text('\\n'.join(texts), encoding='utf-8', errors='replace')\n"
+                << "    sys.exit(0 if texts else 4)\n"
+                << "except Exception:\n"
+                << "    err_path.write_text(traceback.format_exc(), encoding='utf-8', errors='replace')\n"
+                << "    sys.exit(2)\n";
+        }
+
+        std::string process_error;
+        const std::string language = Trim(settings.paddle_language).empty() ? "en" : Trim(settings.paddle_language);
+        const std::wstring command = QuoteCommandArgument(python_command) + L" " +
+            QuoteCommandArgument(script.wstring()) + L" " +
+            QuoteCommandArgument(path.wstring()) + L" " +
+            QuoteCommandArgument(output.wstring()) + L" " +
+            QuoteCommandArgument(error_output.wstring()) + L" " +
+            QuoteCommandArgument(Utf8ToWide(language));
+        if (!RunProcessAndWait(command, 300000, &process_error) || !std::filesystem::exists(output)) {
+            if (error) {
+                std::string details = process_error;
+                if (std::filesystem::exists(error_output)) {
+                    details = ReadWholeFile(error_output);
+                }
+                *error = details.empty() ? "PaddleOCR did not produce OCR output." : details.substr(0, 1000);
+            }
+            std::error_code ec;
+            std::filesystem::remove_all(temp, ec);
+            return std::nullopt;
+        }
+
+        std::string text = NormalizeMarkdownWhitespace(ReadWholeFile(output));
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        if (Trim(text).empty()) {
+            if (error) {
+                *error = "PaddleOCR produced no readable OCR text.";
+            }
+            return std::nullopt;
+        }
+        return text;
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        throw;
+    }
+}
+
+std::optional<std::string> DescribeImageWithOllamaVision(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    if (NormalizeImageVisionProvider(settings.vision_provider) != "ollama") {
+        if (error) {
+            *error = "Only Ollama vision-language image description is currently wired in.";
+        }
+        return std::nullopt;
+    }
+    if (Trim(settings.vision_model).empty()) {
+        if (error) {
+            *error = "No vision-language model is configured.";
+        }
+        return std::nullopt;
+    }
+
+    try {
+        json body;
+        body["model"] = Trim(settings.vision_model);
+        body["prompt"] = Trim(settings.vision_prompt).empty() ? DefaultImageVisionPrompt() : settings.vision_prompt;
+        body["stream"] = false;
+        body["images"] = json::array({Base64Encode(ReadWholeFile(path))});
+        const std::string base_url = Trim(settings.vision_base_url).empty() ? "http://localhost:11434" : Trim(settings.vision_base_url);
+        const json response = json::parse(HttpPostJson(JoinUrlPath(base_url, "/api/generate"), body.dump()));
+        std::string description = response.value("response", "");
+        description = NormalizeMarkdownWhitespace(description);
+        if (Trim(description).empty()) {
+            if (error) {
+                *error = "Ollama returned an empty image description.";
+            }
+            return std::nullopt;
+        }
+        return description;
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    } catch (...) {
+        if (error) {
+            *error = "Unexpected Ollama vision-language error.";
+        }
+    }
+    return std::nullopt;
+}
+
+std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* extractor_id) {
+    if (!settings.enabled) {
+        throw std::runtime_error("System-wide image ingestion is disabled.");
+    }
+
+    const std::string mode = NormalizeImageIngestMode(settings.mode);
+    std::vector<std::string> warnings;
+    std::string ocr_text;
+    std::string ocr_engine;
+
+    if (mode == "paddle_ocr_gpu" || mode == "vision_language_gpu") {
+        std::string paddle_error;
+        if (const auto paddle_text = ExtractImageWithPaddleOcr(path, settings, &paddle_error)) {
+            ocr_text = *paddle_text;
+            ocr_engine = "paddleocr";
+        } else if (!paddle_error.empty()) {
+            warnings.push_back("PaddleOCR was requested but did not produce OCR text: " + paddle_error);
+        }
+    }
+
+    if (ocr_text.empty() && settings.include_ocr_text) {
+        std::string tesseract_error;
+        if (const auto tesseract_text = ExtractImageWithTesseract(path, settings, &tesseract_error)) {
+            ocr_text = *tesseract_text;
+            ocr_engine = "tesseract";
+        } else if (!tesseract_error.empty()) {
+            warnings.push_back("Tesseract OCR did not produce text: " + tesseract_error);
+        }
+    }
+
+    std::string visual_description;
+    if (mode == "vision_language_gpu" && settings.include_visual_description) {
+        std::string vision_error;
+        if (const auto description = DescribeImageWithOllamaVision(path, settings, &vision_error)) {
+            visual_description = *description;
+        } else if (!vision_error.empty()) {
+            warnings.push_back("Vision-language description was requested but did not produce output: " + vision_error);
+        }
+    }
+
+    if (ocr_text.empty() && visual_description.empty()) {
+        std::string message = "Image ingestion produced no OCR text or visual description.";
+        if (!warnings.empty()) {
+            message += " Last warning: " + warnings.back();
+        }
+        throw std::runtime_error(message);
+    }
+
+    if (extractor_id) {
+        if (mode == "vision_language_gpu" && !visual_description.empty()) {
+            *extractor_id = ocr_engine.empty() ? "ollama_vision" : (ocr_engine + "_plus_ollama_vision");
+        } else if (!ocr_engine.empty()) {
+            *extractor_id = ocr_engine;
+        } else {
+            *extractor_id = "image_ingest";
+        }
+    }
+
+    std::ostringstream markdown;
+    markdown << "# " << WideToUtf8(path.filename().wstring()) << "\n\n";
+    markdown << "## Image Ingest Metadata\n\n";
+    markdown << "- Pipeline mode: " << ImageModeLabel(mode) << "\n";
+    markdown << "- OCR engine: " << (ocr_engine.empty() ? "none" : ocr_engine) << "\n";
+    markdown << "- Vision provider: " << (mode == "vision_language_gpu" ? NormalizeImageVisionProvider(settings.vision_provider) : "none") << "\n";
+    markdown << "- Vision model: " << (mode == "vision_language_gpu" ? Trim(settings.vision_model) : "none") << "\n";
+    markdown << "- Original image: preserved in the RAG document store.\n\n";
+
+    if (!warnings.empty()) {
+        markdown << "## Image Ingest Warnings\n\n";
+        for (const auto& warning : warnings) {
+            markdown << "- " << NormalizeMarkdownWhitespace(warning) << "\n";
+        }
+        markdown << "\n";
+    }
+
+    if (!visual_description.empty()) {
+        markdown << "## Visual Description\n\n";
+        markdown << visual_description << "\n\n";
+    }
+
+    if (!ocr_text.empty()) {
+        markdown << "## OCR Text\n\n";
+        markdown << ocr_text << "\n";
+    }
+
+    return NormalizeMarkdownWhitespace(markdown.str());
 }
 
 bool ExtractZipWithTar(const std::filesystem::path& source, const std::filesystem::path& destination, std::string* error) {
@@ -2661,7 +3107,7 @@ void RemoveManagedExtractedArtifact(const std::filesystem::path& library_path, c
     }
 }
 
-RagImportPreviewItem BuildImportPreviewItem(const RagLibraryConfig& library, const std::filesystem::path& file, std::string metadata_json) {
+RagImportPreviewItem BuildImportPreviewItem(const RagLibraryConfig& library, const RagImageIngestSettings& image_settings, const std::filesystem::path& file, std::string metadata_json) {
     RagImportPreviewItem item;
     item.source_path = WideToUtf8(std::filesystem::absolute(file).wstring());
     item.display_name = WideToUtf8(file.filename().wstring());
@@ -2685,7 +3131,43 @@ RagImportPreviewItem BuildImportPreviewItem(const RagLibraryConfig& library, con
             return item;
         }
 
+        const bool image_document = IsImageExtension(file);
         const bool rich_document = IsRichExtractionExtension(file);
+        if (image_document) {
+            if (!image_settings.enabled) {
+                item.reason = "Image file detected, but system-wide image ingestion is disabled.";
+                return item;
+            }
+            const std::string mode = NormalizeImageIngestMode(image_settings.mode);
+            const bool tesseract_available = FindExecutableOnPath(L"tesseract.exe").has_value();
+            const bool python_available = FindExecutableOnPath(L"python.exe").has_value();
+            const bool vision_endpoint_available = NormalizeImageVisionProvider(image_settings.vision_provider) == "ollama" &&
+                IsHttpEndpointAvailable(JoinUrlPath(Trim(image_settings.vision_base_url).empty() ? std::string("http://localhost:11434") : Trim(image_settings.vision_base_url), "/api/tags"));
+            if (mode == "tesseract_cpu") {
+                if (!tesseract_available) {
+                    item.reason = "Image ingestion is enabled, but tesseract.exe is missing.";
+                    return item;
+                }
+                item.supported = true;
+                item.reason = "Ready to ingest as image Markdown with CPU Tesseract OCR.";
+            } else if (mode == "paddle_ocr_gpu") {
+                if (!python_available && !tesseract_available) {
+                    item.reason = "PaddleOCR mode needs python.exe for PaddleOCR or tesseract.exe for fallback.";
+                    return item;
+                }
+                item.supported = true;
+                item.reason = "Ready to ingest as image Markdown with PaddleOCR when available, falling back to Tesseract OCR.";
+            } else {
+                if (!vision_endpoint_available && !python_available && !tesseract_available) {
+                    item.reason = "Full vision mode needs a running Ollama vision endpoint, python.exe for PaddleOCR, or tesseract.exe fallback.";
+                    return item;
+                }
+                item.supported = true;
+                item.reason = "Ready to ingest as image Markdown with OCR plus configured vision-language description when available.";
+            }
+            return item;
+        }
+
         if (!rich_document && !FileLooksLikeText(file)) {
             item.reason = "File appears to be binary.";
             return item;
@@ -2722,7 +3204,7 @@ void AddPreviewItem(RagImportPreview& preview, RagImportPreviewItem item) {
     preview.items.push_back(std::move(item));
 }
 
-bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const std::filesystem::path& library_path, const RagFileIngestionSource& source, bool skip_unchanged, IRagEmbeddingProvider* embedding_provider, RagIngestionResult& result) {
+bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const std::filesystem::path& library_path, const RagFileIngestionSource& source, bool skip_unchanged, const RagImageIngestSettings& image_settings, IRagEmbeddingProvider* embedding_provider, RagIngestionResult& result) {
     const std::filesystem::path file = source.source_path;
     const std::string error_prefix = SourcePathForError(source);
     try {
@@ -2743,8 +3225,14 @@ bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const s
             result.errors.push_back(error_prefix + ": file is larger than this RAG library's configured max file size.");
             return false;
         }
+        const bool image_document = IsImageExtension(file);
         const bool rich_document = IsRichExtractionExtension(file);
-        if (!rich_document && !FileLooksLikeText(file)) {
+        if (image_document && !image_settings.enabled) {
+            ++result.files_skipped;
+            result.errors.push_back(error_prefix + ": image ingestion is disabled.");
+            return false;
+        }
+        if (!image_document && !rich_document && !FileLooksLikeText(file)) {
             ++result.files_skipped;
             result.errors.push_back(error_prefix + ": file appears to be binary.");
             return false;
@@ -2776,9 +3264,12 @@ bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const s
         document.file_size = file_size;
         document.mime_type = MimeTypeForPath(file);
         std::string extractor_id;
-        const std::string extracted_text = rich_document ? ExtractRichDocumentToMarkdown(file, &extractor_id) : std::string();
-        const bool segmented_extraction = rich_document && ShouldSegmentExtractedText(library, extracted_text);
-        document.metadata_json = rich_document
+        const std::string extracted_text = image_document
+            ? ExtractImageToMarkdown(file, image_settings, &extractor_id)
+            : (rich_document ? ExtractRichDocumentToMarkdown(file, &extractor_id) : std::string());
+        const bool extracted_markdown_document = rich_document || image_document;
+        const bool segmented_extraction = extracted_markdown_document && ShouldSegmentExtractedText(library, extracted_text);
+        document.metadata_json = extracted_markdown_document
             ? AddExtractionMetadata(source.metadata_json, extractor_id, "text/markdown")
             : AddExtractionMetadata(source.metadata_json, "plain_text_stream", "text/plain");
         document.last_indexed_at = CurrentTimestampUtc();
@@ -2802,7 +3293,7 @@ bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const s
 
             const std::filesystem::path extracted_relative = segmented_extraction
                 ? std::filesystem::path("documents") / "extracted" / Utf8ToWide(document.id) / "manifest.json"
-                : std::filesystem::path("documents") / "extracted" / Utf8ToWide(document.id + (rich_document ? ".md" : ".txt"));
+                : std::filesystem::path("documents") / "extracted" / Utf8ToWide(document.id + (extracted_markdown_document ? ".md" : ".txt"));
             const std::filesystem::path extracted_target = library_path / extracted_relative;
             document.extracted_relative_path = ToGenericUtf8(extracted_relative);
             if (!previous_extracted_relative_path.empty() && previous_extracted_relative_path != document.extracted_relative_path) {
@@ -2811,7 +3302,7 @@ bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const s
 
             SaveDocument(db, document);
             DeleteChunksForDocument(db, document.id);
-            const int chunks_added = rich_document
+            const int chunks_added = extracted_markdown_document
                 ? InsertChunksFromExtractedText(db, library, document, extracted_text, library_path, extracted_relative, embedding_provider, result)
                 : InsertChunksFromTextStream(db, library, document, file, extracted_target, embedding_provider, result);
             ExecSql(db, "COMMIT;");
@@ -2863,6 +3354,14 @@ std::filesystem::path RagService::EmbeddingRuntimeLogPath() const {
     return storage_->root_path() / "data" / "rag_embedding_runtime.log";
 }
 
+std::filesystem::path RagService::ImageIngestSettingsPath() const {
+    return storage_->root_path() / "data" / "rag_image_ingest_settings.json";
+}
+
+std::filesystem::path RagService::ImageIngestLogPath() const {
+    return storage_->root_path() / "data" / "rag_image_ingest_runtime.log";
+}
+
 void RagService::AppendEmbeddingRuntimeLogNoLock(const std::string& message) const {
     const std::filesystem::path path = EmbeddingRuntimeLogPath();
     std::filesystem::create_directories(path.parent_path());
@@ -2888,6 +3387,135 @@ std::string RagService::ReadEmbeddingRuntimeLogTailNoLock(size_t max_bytes) cons
         text = "[log truncated]\r\n" + text;
     }
     return text;
+}
+
+void RagService::AppendImageIngestLogNoLock(const std::string& message) const {
+    const std::filesystem::path path = ImageIngestLogPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path, std::ios::binary | std::ios::app);
+    if (!output.is_open()) {
+        return;
+    }
+    output << "[" << CurrentTimestampUtc() << "] " << message << "\r\n";
+}
+
+std::string RagService::ReadImageIngestLogTailNoLock(size_t max_bytes) const {
+    const std::filesystem::path path = ImageIngestLogPath();
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        return {};
+    }
+    input.seekg(0, std::ios::end);
+    const std::streamoff size = input.tellg();
+    const std::streamoff offset = size > static_cast<std::streamoff>(max_bytes) ? size - static_cast<std::streamoff>(max_bytes) : 0;
+    input.seekg(offset, std::ios::beg);
+    std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    if (offset > 0) {
+        text = "[log truncated]\r\n" + text;
+    }
+    return text;
+}
+
+RagImageIngestSettings RagService::LoadImageIngestSettingsNoLock() const {
+    return RagImageIngestSettingsFromJson(LoadJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(RagImageIngestSettings{})));
+}
+
+RagImageIngestSettings RagService::LoadImageIngestSettings() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return LoadImageIngestSettingsNoLock();
+}
+
+void RagService::SaveImageIngestSettings(const RagImageIngestSettings& settings) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    SaveJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(settings));
+    AppendImageIngestLogNoLock("Saved image ingest settings. Mode: " + NormalizeImageIngestMode(settings.mode) + ".");
+}
+
+RagImageIngestRuntimeStatus RagService::GetImageIngestRuntimeStatus(const RagImageIngestSettings& settings) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagImageIngestRuntimeStatus status;
+    status.enabled = settings.enabled;
+    status.mode = NormalizeImageIngestMode(settings.mode);
+    status.log_path = WideToUtf8(ImageIngestLogPath().wstring());
+    status.tesseract_installed = FindExecutableOnPath(L"tesseract.exe").has_value();
+    status.python_installed = FindExecutableOnPath(L"python.exe").has_value();
+    if (const auto python = FindExecutableOnPath(L"python.exe")) {
+        status.paddleocr_installed = PythonModuleAvailable(*python, "paddleocr");
+    }
+    status.ollama_installed = FindExecutableOnPath(L"ollama.exe").has_value();
+    const std::string provider = NormalizeImageVisionProvider(settings.vision_provider);
+    const std::string base_url = Trim(settings.vision_base_url).empty() ? "http://localhost:11434" : Trim(settings.vision_base_url);
+    status.vision_endpoint_running = provider == "ollama" && IsHttpEndpointAvailable(JoinUrlPath(base_url, "/api/tags"));
+
+    if (!settings.enabled) {
+        status.message = "Image ingestion is disabled.";
+    } else if (status.mode == "tesseract_cpu") {
+        status.message = status.tesseract_installed
+            ? "CPU image ingestion is ready with Tesseract OCR."
+            : "CPU image ingestion needs Tesseract OCR installed.";
+    } else if (status.mode == "paddle_ocr_gpu") {
+        if (status.paddleocr_installed) {
+            status.message = "GPU OCR mode is configured with PaddleOCR. Tesseract remains available as a fallback when installed.";
+        } else if (status.tesseract_installed) {
+            status.message = "PaddleOCR is missing, but Tesseract OCR fallback is available.";
+        } else {
+            status.message = "GPU OCR mode needs PaddleOCR or Tesseract fallback installed.";
+        }
+    } else {
+        if (status.vision_endpoint_running && !Trim(settings.vision_model).empty()) {
+            status.message = "Full vision mode can call the configured Ollama vision-language endpoint.";
+        } else if (status.ollama_installed) {
+            status.message = "Full vision mode needs Ollama running and the configured vision model pulled.";
+        } else {
+            status.message = "Full vision mode needs Ollama and a vision-language model.";
+        }
+    }
+    status.recent_log = ReadImageIngestLogTailNoLock();
+    return status;
+}
+
+RagExtractionToolInstallResult RagService::LaunchImageIngestToolInstaller(const RagImageIngestSettings& settings, const std::string& tool_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagExtractionToolInstallResult result;
+    std::string command;
+    if (tool_id == "tesseract") {
+        command = "winget install --id tesseract-ocr.tesseract -e --accept-package-agreements --accept-source-agreements";
+    } else if (tool_id == "paddleocr") {
+        const std::string python = Trim(settings.paddle_python_command).empty() ? "python" : Trim(settings.paddle_python_command);
+        command = python + " -m pip install paddleocr paddlepaddle";
+    } else if (tool_id == "ollama") {
+        command = "winget install --id Ollama.Ollama -e --accept-package-agreements --accept-source-agreements";
+    }
+
+    if (command.empty()) {
+        result.message = "Unknown image ingest tool installer requested.";
+        return result;
+    }
+
+    result.command = command;
+    AppendImageIngestLogNoLock("Launching visible image ingest installer command: " + command);
+    const std::wstring shell_command = L"/k " + Utf8ToWide(command);
+    HINSTANCE launched = ShellExecuteW(nullptr, L"open", L"cmd.exe", shell_command.c_str(), nullptr, SW_SHOWNORMAL);
+    result.launched = reinterpret_cast<intptr_t>(launched) > 32;
+    result.message = result.launched ? "Installer command launched in a visible command window." : "Failed to launch installer command.";
+    return result;
+}
+
+RagExtractionToolInstallResult RagService::LaunchImageVisionModelInstaller(const RagImageIngestSettings& settings) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagExtractionToolInstallResult result;
+    if (NormalizeImageVisionProvider(settings.vision_provider) != "ollama") {
+        result.message = "Vision model pull is currently available for Ollama only.";
+        return result;
+    }
+    const std::string model = Trim(settings.vision_model).empty() ? "qwen2.5vl:7b" : Trim(settings.vision_model);
+    result.command = "ollama pull " + model;
+    AppendImageIngestLogNoLock("Launching visible Ollama vision model pull command: " + result.command);
+    const std::wstring shell_command = L"/k " + Utf8ToWide(result.command);
+    HINSTANCE launched = ShellExecuteW(nullptr, L"open", L"cmd.exe", shell_command.c_str(), nullptr, SW_SHOWNORMAL);
+    result.launched = reinterpret_cast<intptr_t>(launched) > 32;
+    result.message = result.launched ? "Vision model pull launched in a visible command window." : "Failed to launch vision model pull command.";
+    return result;
 }
 
 RagEmbeddingRuntimeStatus RagService::GetEmbeddingRuntimeStatusNoLock(const RagLibraryConfig& library) const {
@@ -3122,10 +3750,10 @@ std::vector<RagExtractionToolStatus> RagService::GetExtractionToolStatus() const
         "tesseract_ocr",
         "Tesseract OCR",
         L"tesseract.exe",
-        "Future OCR support for scanned/image-only PDFs.",
+        "CPU-friendly OCR for image ingestion.",
         "winget install --id tesseract-ocr.tesseract -e --accept-package-agreements --accept-source-agreements",
-        false,
-        "Optional future tool. OCR ingestion is not wired in yet.");
+        true,
+        "Recommended for the default image ingestion pipeline. The app converts supported image files into Markdown OCR text while preserving the original image.");
 
     add_executable_tool(
         "pandoc",
@@ -3301,6 +3929,9 @@ void RagService::EnsureInitialized() const {
     std::filesystem::create_directories(RagRoot());
     if (!std::filesystem::exists(RegistryPath())) {
         SaveJsonFile(RegistryPath(), json{{"libraries", json::array()}});
+    }
+    if (!std::filesystem::exists(ImageIngestSettingsPath())) {
+        SaveJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(RagImageIngestSettings{}));
     }
     for (const auto& [rag_id, library_path] : LoadRegistryNoLock()) {
         const json data = LoadJsonFile(library_path / "rag.json", json::object());
@@ -3618,6 +4249,132 @@ std::vector<RagDocumentSummary> RagService::ListDocuments(const std::string& rag
     return summaries;
 }
 
+std::optional<RagDocumentRecord> RagService::GetDocument(const std::string& rag_id, const std::string& document_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+        const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+        if (!library_json.is_object() || library_json.empty()) {
+            return std::nullopt;
+        }
+
+        auto db = OpenDatabase(LibraryPath(rag_id) / "rag.sqlite");
+        EnsureRagDatabase(db.get());
+        auto document = FindDocumentById(db.get(), document_id);
+        if (!document || document->rag_id != rag_id) {
+            return std::nullopt;
+        }
+        return document;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::string RagService::LoadDocumentText(const std::string& rag_id, const std::string& document_id, size_t max_chars, bool* truncated, std::string* error) const {
+    if (truncated) {
+        *truncated = false;
+    }
+    if (error) {
+        error->clear();
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+        const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+        if (!library_json.is_object() || library_json.empty()) {
+            if (error) {
+                *error = "RAG library not found.";
+            }
+            return {};
+        }
+
+        const std::filesystem::path library_path = LibraryPath(rag_id);
+        auto db = OpenDatabase(library_path / "rag.sqlite");
+        EnsureRagDatabase(db.get());
+        const auto document = FindDocumentById(db.get(), document_id);
+        if (!document || document->rag_id != rag_id) {
+            if (error) {
+                *error = "Document not found.";
+            }
+            return {};
+        }
+        if (document->extracted_relative_path.empty()) {
+            if (error) {
+                *error = "Document does not have extracted text.";
+            }
+            return {};
+        }
+
+        const size_t limit = max_chars == 0 ? std::numeric_limits<size_t>::max() : max_chars;
+        std::string combined;
+        auto append_text = [&](const std::string& value) {
+            if (combined.size() >= limit) {
+                if (truncated) {
+                    *truncated = true;
+                }
+                return;
+            }
+            const size_t remaining = limit - combined.size();
+            if (value.size() > remaining) {
+                combined.append(value.data(), static_cast<std::string::size_type>(remaining));
+                if (truncated) {
+                    *truncated = true;
+                }
+            } else {
+                combined += value;
+            }
+        };
+
+        const std::filesystem::path extracted_path = library_path / std::filesystem::path(Utf8ToWide(document->extracted_relative_path));
+        if (!std::filesystem::exists(extracted_path)) {
+            if (error) {
+                *error = "Extracted text file was not found.";
+            }
+            return {};
+        }
+
+        if (extracted_path.filename() == L"manifest.json") {
+            const json manifest = LoadJsonFile(extracted_path, json::object());
+            if (!manifest.contains("segments") || !manifest["segments"].is_array()) {
+                if (error) {
+                    *error = "Extracted segment manifest is invalid.";
+                }
+                return {};
+            }
+
+            for (const auto& segment : manifest["segments"]) {
+                const std::string relative_path = segment.value("relative_path", "");
+                if (relative_path.empty()) {
+                    continue;
+                }
+                const std::filesystem::path segment_path = library_path / std::filesystem::path(Utf8ToWide(relative_path));
+                if (!std::filesystem::exists(segment_path)) {
+                    continue;
+                }
+                if (!combined.empty()) {
+                    append_text("\n\n");
+                }
+                append_text(ReadWholeFile(segment_path));
+                if (truncated && *truncated) {
+                    break;
+                }
+            }
+        } else {
+            append_text(ReadWholeFile(extracted_path));
+        }
+
+        return combined;
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    } catch (...) {
+        if (error) {
+            *error = "Unexpected error while reading document text.";
+        }
+    }
+    return {};
+}
+
 RagImportPreview RagService::PreviewFiles(const std::string& rag_id, const std::vector<std::filesystem::path>& files) const {
     std::lock_guard<std::mutex> lock(mutex_);
     RagImportPreview preview;
@@ -3628,8 +4385,9 @@ RagImportPreview RagService::PreviewFiles(const std::string& rag_id, const std::
     }
 
     const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
     for (const auto& file : files) {
-        AddPreviewItem(preview, BuildImportPreviewItem(library, file, DirectFileMetadata(file)));
+        AddPreviewItem(preview, BuildImportPreviewItem(library, image_settings, file, DirectFileMetadata(file)));
     }
     preview.success = preview.errors.empty();
     return preview;
@@ -3649,17 +4407,18 @@ RagImportPreview RagService::PreviewFolder(const std::string& rag_id, const std:
     }
 
     const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
     try {
         if (recursive) {
             for (const auto& entry : std::filesystem::recursive_directory_iterator(folder, std::filesystem::directory_options::skip_permission_denied)) {
                 if (entry.is_regular_file()) {
-                    AddPreviewItem(preview, BuildImportPreviewItem(library, entry.path(), FolderFileMetadata(folder, entry.path(), recursive)));
+                    AddPreviewItem(preview, BuildImportPreviewItem(library, image_settings, entry.path(), FolderFileMetadata(folder, entry.path(), recursive)));
                 }
             }
         } else {
             for (const auto& entry : std::filesystem::directory_iterator(folder, std::filesystem::directory_options::skip_permission_denied)) {
                 if (entry.is_regular_file()) {
-                    AddPreviewItem(preview, BuildImportPreviewItem(library, entry.path(), FolderFileMetadata(folder, entry.path(), recursive)));
+                    AddPreviewItem(preview, BuildImportPreviewItem(library, image_settings, entry.path(), FolderFileMetadata(folder, entry.path(), recursive)));
                 }
             }
         }
@@ -3699,13 +4458,14 @@ RagIngestionResult RagService::ReindexDocument(const std::string& rag_id, const 
         result.errors.push_back(ex.what());
         return result;
     }
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
 
     RagFileIngestionSource source;
     source.source_path = ResolveRebuildSourcePath(library_path, *document);
     source.original_source_uri = document->original_source_uri;
     source.display_name = document->display_name;
     source.metadata_json = document->metadata_json;
-    IngestOneSourceNoLock(db.get(), library, library_path, source, false, embedding_provider.get(), result);
+    IngestOneSourceNoLock(db.get(), library, library_path, source, false, image_settings, embedding_provider.get(), result);
     result.success = result.errors.empty();
     return result;
 }
@@ -3890,6 +4650,7 @@ RagIngestionResult RagService::IngestFiles(const std::string& rag_id, const std:
         result.errors.push_back(ex.what());
         return result;
     }
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
 
     for (const auto& file : files) {
         RagFileIngestionSource source;
@@ -3897,7 +4658,7 @@ RagIngestionResult RagService::IngestFiles(const std::string& rag_id, const std:
         source.original_source_uri = WideToUtf8(std::filesystem::absolute(file).wstring());
         source.display_name = WideToUtf8(file.filename().wstring());
         source.metadata_json = DirectFileMetadata(file);
-        IngestOneSourceNoLock(db.get(), library, library_path, source, true, embedding_provider.get(), result);
+        IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, embedding_provider.get(), result);
     }
 
     result.success = result.errors.empty();
@@ -3972,10 +4733,84 @@ RagIngestionResult RagService::IngestFolder(const std::string& rag_id, const std
         result.errors.push_back(ex.what());
         return result;
     }
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
 
     for (const auto& source : sources) {
-        IngestOneSourceNoLock(db.get(), library, library_path, source, true, embedding_provider.get(), result);
+        IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, embedding_provider.get(), result);
     }
+    result.success = result.errors.empty();
+    return result;
+}
+
+RagIngestionResult RagService::IngestGeneratedDocument(const std::string& rag_id, const std::string& title, const std::string& content, const std::string& metadata_json, const std::string& source_uri) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagIngestionResult result;
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        result.errors.push_back("RAG library not found.");
+        return result;
+    }
+    if (Trim(content).empty()) {
+        result.errors.push_back("Generated document content is empty.");
+        return result;
+    }
+
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const std::filesystem::path library_path = LibraryPath(rag_id);
+    auto db = OpenDatabase(library_path / "rag.sqlite");
+    EnsureRagDatabase(db.get());
+
+    std::unique_ptr<IRagEmbeddingProvider> embedding_provider;
+    try {
+        EnsureEmbeddingRuntimeNoLock(library);
+        embedding_provider = CreateEmbeddingProvider(library);
+    } catch (const std::exception& ex) {
+        result.errors.push_back(ex.what());
+        return result;
+    }
+
+    const std::string generated_id = MakeId("generated");
+    const std::string display_name = Trim(title).empty() ? "Generated document" : Trim(title);
+    const std::filesystem::path generated_dir = library_path / "documents" / "generated_sources";
+    const std::filesystem::path generated_path = generated_dir / (SafeFolderName(display_name) + L"_" + Utf8ToWide(generated_id) + L".md");
+    try {
+        std::filesystem::create_directories(generated_dir);
+        std::ofstream output(generated_path, std::ios::binary | std::ios::trunc);
+        if (!output.is_open()) {
+            result.errors.push_back("Could not write generated document into the RAG store.");
+            return result;
+        }
+        output << content;
+    } catch (const std::exception& ex) {
+        result.errors.push_back(std::string("Could not save generated document: ") + ex.what());
+        return result;
+    } catch (...) {
+        result.errors.push_back("Could not save generated document: unexpected error.");
+        return result;
+    }
+
+    json metadata = json::object();
+    try {
+        if (!Trim(metadata_json).empty()) {
+            metadata = json::parse(metadata_json);
+            if (!metadata.is_object()) {
+                metadata = json::object();
+            }
+        }
+    } catch (...) {
+        metadata = json::object();
+    }
+    metadata["ingest_source"] = "rag_tool_generated_document";
+    metadata["generated_at"] = CurrentTimestampUtc();
+    metadata["source_absolute_path"] = WideToUtf8(std::filesystem::absolute(generated_path).wstring());
+    metadata["generated_document_id"] = generated_id;
+
+    RagFileIngestionSource source;
+    source.source_path = generated_path;
+    source.original_source_uri = Trim(source_uri).empty() ? ("generated://rag-tool/" + generated_id) : Trim(source_uri);
+    source.display_name = display_name;
+    source.metadata_json = metadata.dump();
+    IngestOneSourceNoLock(db.get(), library, library_path, source, false, LoadImageIngestSettingsNoLock(), embedding_provider.get(), result);
     result.success = result.errors.empty();
     return result;
 }
@@ -4001,6 +4836,7 @@ RagIngestionResult RagService::RebuildLibrary(const std::string& rag_id, std::fu
         result.errors.push_back(ex.what());
         return result;
     }
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
 
     const std::vector<RagDocumentRecord> documents = LoadActiveDocuments(db.get());
     std::vector<RagFileIngestionSource> sources;
@@ -4040,7 +4876,7 @@ RagIngestionResult RagService::RebuildLibrary(const std::string& rag_id, std::fu
     int processed = 0;
     for (const auto& source : sources) {
         publish(processed, "Re-ingesting", source.display_name);
-        IngestOneSourceNoLock(db.get(), library, library_path, source, false, embedding_provider.get(), result);
+        IngestOneSourceNoLock(db.get(), library, library_path, source, false, image_settings, embedding_provider.get(), result);
         ++processed;
         publish(processed, "Re-ingested", source.display_name);
     }
@@ -4269,8 +5105,18 @@ std::vector<RagQueryResult> RagService::QueryProject(const std::string& project_
         if (!binding.enabled || !binding.can_read) {
             continue;
         }
+        double min_confidence = std::clamp(binding.default_min_confidence, 0.0, 1.0);
+        double max_confidence = std::clamp(binding.default_max_confidence, 0.0, 1.0);
+        if (min_confidence > max_confidence) {
+            std::swap(min_confidence, max_confidence);
+        }
         auto results = QueryRag(binding.rag_id, query, binding.max_chunks);
-        all_results.insert(all_results.end(), results.begin(), results.end());
+        for (auto& result : results) {
+            const double confidence = std::clamp(result.score, 0.0, 1.0);
+            if (confidence >= min_confidence && confidence <= max_confidence) {
+                all_results.push_back(std::move(result));
+            }
+        }
     }
 
     std::sort(all_results.begin(), all_results.end(), [](const RagQueryResult& left, const RagQueryResult& right) {

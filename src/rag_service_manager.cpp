@@ -21,6 +21,7 @@
 namespace {
 constexpr wchar_t kRagManagerClassName[] = L"AgentRagServiceManagerWindow";
 constexpr wchar_t kRagLibraryEditorClassName[] = L"AgentRagLibraryEditorWindow";
+constexpr wchar_t kRagImageIngestSettingsClassName[] = L"AgentRagImageIngestSettingsWindow";
 constexpr UINT kIngestionFinishedMessage = WM_APP + 70;
 constexpr UINT kRebuildProgressMessage = WM_APP + 71;
 
@@ -45,6 +46,7 @@ enum ControlId : int {
     kReindexDocument = 6118,
     kDeleteDocument = 6119,
     kInstallTools = 6120,
+    kImageIngestSettings = 6121,
     kCloseButton = IDCANCEL,
 };
 
@@ -93,6 +95,38 @@ enum LibraryEditorControlId : int {
     kEditorRuntimeTestEmbedding = 6242,
     kEditorSaveButton = IDOK,
     kEditorCancelButton = IDCANCEL,
+};
+
+enum ImageIngestSettingsControlId : int {
+    kImageEnabled = 6301,
+    kImageCpuMode = 6302,
+    kImagePaddleMode = 6303,
+    kImageVisionMode = 6304,
+    kImageTesseractLanguageLabel = 6305,
+    kImageTesseractLanguageEdit = 6306,
+    kImagePaddlePythonLabel = 6307,
+    kImagePaddlePythonEdit = 6308,
+    kImagePaddleLanguageLabel = 6309,
+    kImagePaddleLanguageEdit = 6310,
+    kImageVisionProviderLabel = 6311,
+    kImageVisionProviderCombo = 6312,
+    kImageVisionBaseUrlLabel = 6313,
+    kImageVisionBaseUrlEdit = 6314,
+    kImageVisionModelLabel = 6315,
+    kImageVisionModelEdit = 6316,
+    kImageVisionPromptLabel = 6317,
+    kImageVisionPromptEdit = 6318,
+    kImageIncludeOcr = 6319,
+    kImageIncludeVisualDescription = 6320,
+    kImageStatus = 6321,
+    kImageCheckStatus = 6322,
+    kImageInstallTesseract = 6323,
+    kImageInstallPaddle = 6324,
+    kImageInstallOllama = 6325,
+    kImagePullVisionModel = 6326,
+    kImageDiagnosticsLog = 6327,
+    kImageSaveButton = IDOK,
+    kImageCancelButton = IDCANCEL,
 };
 
 struct IngestionPayload {
@@ -274,7 +308,7 @@ std::vector<std::filesystem::path> PickFiles(HWND owner) {
     dialog.lpstrFile = buffer.data();
     dialog.nMaxFile = static_cast<DWORD>(buffer.size());
     dialog.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_ALLOWMULTISELECT;
-    dialog.lpstrFilter = L"RAG Supported Files\0*.txt;*.md;*.json;*.csv;*.log;*.xml;*.cpp;*.c;*.h;*.hpp;*.cs;*.js;*.ts;*.tsx;*.jsx;*.py;*.ps1;*.bat;*.cmd;*.ini;*.toml;*.yaml;*.yml;*.html;*.htm;*.docx;*.docm;*.xlsx;*.xlsm;*.pdf;*.css;*.sql\0All Files\0*.*\0";
+    dialog.lpstrFilter = L"RAG Supported Files\0*.txt;*.md;*.json;*.csv;*.log;*.xml;*.cpp;*.c;*.h;*.hpp;*.cs;*.js;*.ts;*.tsx;*.jsx;*.py;*.ps1;*.bat;*.cmd;*.ini;*.toml;*.yaml;*.yml;*.html;*.htm;*.docx;*.docm;*.xlsx;*.xlsm;*.pdf;*.css;*.sql;*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff;*.webp\0All Files\0*.*\0";
 
     if (!GetOpenFileNameW(&dialog)) {
         return files;
@@ -349,6 +383,36 @@ std::string ProviderFromComboIndex(int index) {
     default:
         return "none";
     }
+}
+
+std::string NormalizeImageMode(std::string mode) {
+    mode = Trim(mode);
+    std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (mode == "paddle" || mode == "paddleocr" || mode == "paddle_ocr" || mode == "paddle_ocr_gpu") {
+        return "paddle_ocr_gpu";
+    }
+    if (mode == "vision" || mode == "vlm" || mode == "vision_language" || mode == "vision_language_gpu") {
+        return "vision_language_gpu";
+    }
+    return "tesseract_cpu";
+}
+
+int ImageVisionProviderComboIndex(const std::string& provider) {
+    std::string normalized = Trim(provider);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return normalized == "ollama" ? 1 : 0;
+}
+
+std::string ImageVisionProviderFromComboIndex(int index) {
+    return index == 1 ? "ollama" : "none";
+}
+
+std::wstring ImageStatusText(const RagImageIngestRuntimeStatus& status) {
+    std::wstring text = L"Image ingest status: " + Utf8ToWide(status.message);
+    if (!status.log_path.empty()) {
+        text += L" | Log: " + Utf8ToWide(status.log_path);
+    }
+    return text;
 }
 
 class RagLibraryEditorDialog {
@@ -432,6 +496,65 @@ private:
     HWND cancel_button_ = nullptr;
 };
 
+class RagImageIngestSettingsDialog {
+public:
+    static bool Show(HWND owner, RagService* rag_service);
+
+private:
+    RagImageIngestSettingsDialog(HWND owner, RagService* rag_service, RagImageIngestSettings settings)
+        : owner_(owner), rag_service_(rag_service), settings_(std::move(settings)) {}
+
+    static void RegisterWindowClass(HINSTANCE instance);
+    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
+
+    void OnCreate();
+    void LayoutControls() const;
+    void OnCommand(int control_id);
+    RagImageIngestSettings BuildSettingsFromFields() const;
+    void LoadSettingsIntoFields();
+    void RefreshStatus();
+    void InstallTool(const std::string& tool_id);
+    void PullVisionModel();
+    bool ValidateAndSave();
+
+    HWND owner_ = nullptr;
+    HWND hwnd_ = nullptr;
+    RagService* rag_service_ = nullptr;
+    HFONT font_ = nullptr;
+    RagImageIngestSettings settings_;
+    bool saved_ = false;
+
+    HWND enabled_checkbox_ = nullptr;
+    HWND cpu_radio_ = nullptr;
+    HWND paddle_radio_ = nullptr;
+    HWND vision_radio_ = nullptr;
+    HWND tesseract_language_label_ = nullptr;
+    HWND tesseract_language_edit_ = nullptr;
+    HWND paddle_python_label_ = nullptr;
+    HWND paddle_python_edit_ = nullptr;
+    HWND paddle_language_label_ = nullptr;
+    HWND paddle_language_edit_ = nullptr;
+    HWND vision_provider_label_ = nullptr;
+    HWND vision_provider_combo_ = nullptr;
+    HWND vision_base_url_label_ = nullptr;
+    HWND vision_base_url_edit_ = nullptr;
+    HWND vision_model_label_ = nullptr;
+    HWND vision_model_edit_ = nullptr;
+    HWND vision_prompt_label_ = nullptr;
+    HWND vision_prompt_edit_ = nullptr;
+    HWND include_ocr_checkbox_ = nullptr;
+    HWND include_visual_description_checkbox_ = nullptr;
+    HWND status_label_ = nullptr;
+    HWND check_status_button_ = nullptr;
+    HWND install_tesseract_button_ = nullptr;
+    HWND install_paddle_button_ = nullptr;
+    HWND install_ollama_button_ = nullptr;
+    HWND pull_vision_model_button_ = nullptr;
+    HWND diagnostics_log_edit_ = nullptr;
+    HWND save_button_ = nullptr;
+    HWND cancel_button_ = nullptr;
+};
+
 class RagServiceManagerWindow {
 public:
     RagServiceManagerWindow(HWND owner, RagService* rag_service, std::function<std::string()> active_project_id_provider)
@@ -460,6 +583,7 @@ private:
     void ReindexDocument();
     void DeleteDocument();
     void ShowExtractionTools();
+    void ShowImageIngestSettings();
     void OnRebuildProgress(ProgressPayload* payload);
     void OnIngestionFinished(IngestionPayload* payload);
     void Search();
@@ -485,6 +609,7 @@ private:
     HWND attach_write_button_ = nullptr;
     HWND detach_button_ = nullptr;
     HWND install_tools_button_ = nullptr;
+    HWND image_ingest_settings_button_ = nullptr;
     HWND ingest_button_ = nullptr;
     HWND ingest_folder_button_ = nullptr;
     HWND rebuild_button_ = nullptr;
@@ -1045,6 +1170,400 @@ bool RagLibraryEditorDialog::ValidateAndSave() {
     return true;
 }
 
+bool RagImageIngestSettingsDialog::Show(HWND owner, RagService* rag_service) {
+    if (!rag_service) {
+        return false;
+    }
+
+    HINSTANCE instance = reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr));
+    RegisterWindowClass(instance);
+    auto* dialog = new RagImageIngestSettingsDialog(owner, rag_service, rag_service->LoadImageIngestSettings());
+    const DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE;
+    const DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+
+    if (owner) {
+        EnableWindow(owner, FALSE);
+    }
+
+    dialog->hwnd_ = CreateWindowExW(
+        ex_style,
+        kRagImageIngestSettingsClassName,
+        L"Image Ingest Settings",
+        style,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        780,
+        760,
+        owner,
+        nullptr,
+        instance,
+        dialog);
+
+    if (!dialog->hwnd_) {
+        if (owner) {
+            EnableWindow(owner, TRUE);
+        }
+        delete dialog;
+        return false;
+    }
+
+    ShowWindow(dialog->hwnd_, SW_SHOW);
+    UpdateWindow(dialog->hwnd_);
+
+    MSG msg{};
+    while (IsWindow(dialog->hwnd_) && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (!IsDialogMessageW(dialog->hwnd_, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+
+    if (owner) {
+        EnableWindow(owner, TRUE);
+        SetActiveWindow(owner);
+    }
+
+    const bool saved = dialog->saved_;
+    delete dialog;
+    return saved;
+}
+
+void RagImageIngestSettingsDialog::RegisterWindowClass(HINSTANCE instance) {
+    static bool registered = false;
+    if (registered) {
+        return;
+    }
+
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.hInstance = instance;
+    wc.lpfnWndProc = &RagImageIngestSettingsDialog::WindowProc;
+    wc.lpszClassName = kRagImageIngestSettingsClassName;
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    RegisterClassExW(&wc);
+    registered = true;
+}
+
+LRESULT CALLBACK RagImageIngestSettingsDialog::WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+    auto* self = reinterpret_cast<RagImageIngestSettingsDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+        self = reinterpret_cast<RagImageIngestSettingsDialog*>(create->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        self->hwnd_ = hwnd;
+    }
+    if (!self) {
+        return DefWindowProcW(hwnd, message, w_param, l_param);
+    }
+
+    switch (message) {
+    case WM_CREATE:
+        self->OnCreate();
+        return 0;
+    case WM_COMMAND:
+        self->OnCommand(LOWORD(w_param));
+        return 0;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    default:
+        return DefWindowProcW(hwnd, message, w_param, l_param);
+    }
+}
+
+void RagImageIngestSettingsDialog::OnCreate() {
+    font_ = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+
+    enabled_checkbox_ = CreateWindowExW(0, L"BUTTON", L"Enable image ingestion for all RAG libraries", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageEnabled), nullptr, nullptr);
+    cpu_radio_ = CreateWindowExW(0, L"BUTTON", L"CPU default: Tesseract OCR only", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | WS_GROUP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageCpuMode), nullptr, nullptr);
+    paddle_radio_ = CreateWindowExW(0, L"BUTTON", L"GPU OCR: PaddleOCR, with Tesseract fallback", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImagePaddleMode), nullptr, nullptr);
+    vision_radio_ = CreateWindowExW(0, L"BUTTON", L"Full GPU vision: OCR plus Qwen2.5-VL / InternVL-style description", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionMode), nullptr, nullptr);
+    tesseract_language_label_ = CreateWindowExW(0, L"STATIC", L"Tesseract language", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageTesseractLanguageLabel), nullptr, nullptr);
+    tesseract_language_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageTesseractLanguageEdit), nullptr, nullptr);
+    paddle_python_label_ = CreateWindowExW(0, L"STATIC", L"PaddleOCR Python command", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImagePaddlePythonLabel), nullptr, nullptr);
+    paddle_python_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImagePaddlePythonEdit), nullptr, nullptr);
+    paddle_language_label_ = CreateWindowExW(0, L"STATIC", L"PaddleOCR language", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImagePaddleLanguageLabel), nullptr, nullptr);
+    paddle_language_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImagePaddleLanguageEdit), nullptr, nullptr);
+    vision_provider_label_ = CreateWindowExW(0, L"STATIC", L"Vision provider", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionProviderLabel), nullptr, nullptr);
+    vision_provider_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionProviderCombo), nullptr, nullptr);
+    vision_base_url_label_ = CreateWindowExW(0, L"STATIC", L"Vision base URL", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionBaseUrlLabel), nullptr, nullptr);
+    vision_base_url_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionBaseUrlEdit), nullptr, nullptr);
+    vision_model_label_ = CreateWindowExW(0, L"STATIC", L"Vision model", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionModelLabel), nullptr, nullptr);
+    vision_model_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionModelEdit), nullptr, nullptr);
+    vision_prompt_label_ = CreateWindowExW(0, L"STATIC", L"Vision description prompt", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionPromptLabel), nullptr, nullptr);
+    vision_prompt_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionPromptEdit), nullptr, nullptr);
+    include_ocr_checkbox_ = CreateWindowExW(0, L"BUTTON", L"Include OCR text in extracted Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageIncludeOcr), nullptr, nullptr);
+    include_visual_description_checkbox_ = CreateWindowExW(0, L"BUTTON", L"Include visual description in extracted Markdown when full vision mode is selected", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageIncludeVisualDescription), nullptr, nullptr);
+    status_label_ = CreateWindowExW(0, L"STATIC", L"Image ingest status: not checked.", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageStatus), nullptr, nullptr);
+    check_status_button_ = CreateWindowExW(0, L"BUTTON", L"Check Status", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageCheckStatus), nullptr, nullptr);
+    install_tesseract_button_ = CreateWindowExW(0, L"BUTTON", L"Install Tesseract", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageInstallTesseract), nullptr, nullptr);
+    install_paddle_button_ = CreateWindowExW(0, L"BUTTON", L"Install PaddleOCR", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageInstallPaddle), nullptr, nullptr);
+    install_ollama_button_ = CreateWindowExW(0, L"BUTTON", L"Install Ollama", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageInstallOllama), nullptr, nullptr);
+    pull_vision_model_button_ = CreateWindowExW(0, L"BUTTON", L"Pull Vision Model", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImagePullVisionModel), nullptr, nullptr);
+    diagnostics_log_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageDiagnosticsLog), nullptr, nullptr);
+    save_button_ = CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageSaveButton), nullptr, nullptr);
+    cancel_button_ = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageCancelButton), nullptr, nullptr);
+
+    for (HWND control : {enabled_checkbox_, cpu_radio_, paddle_radio_, vision_radio_, tesseract_language_label_, tesseract_language_edit_, paddle_python_label_, paddle_python_edit_, paddle_language_label_, paddle_language_edit_, vision_provider_label_, vision_provider_combo_, vision_base_url_label_, vision_base_url_edit_, vision_model_label_, vision_model_edit_, vision_prompt_label_, vision_prompt_edit_, include_ocr_checkbox_, include_visual_description_checkbox_, status_label_, check_status_button_, install_tesseract_button_, install_paddle_button_, install_ollama_button_, pull_vision_model_button_, diagnostics_log_edit_, save_button_, cancel_button_}) {
+        SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    }
+
+    ComboBox_AddString(vision_provider_combo_, L"None");
+    ComboBox_AddString(vision_provider_combo_, L"Ollama");
+
+    LoadSettingsIntoFields();
+    CenterWindowToOwner(hwnd_, owner_);
+    LayoutControls();
+    RefreshStatus();
+    SetFocus(cpu_radio_);
+}
+
+void RagImageIngestSettingsDialog::LayoutControls() const {
+    const int margin = Scale(hwnd_, 14);
+    const int gutter = Scale(hwnd_, 8);
+    const int label_height = Scale(hwnd_, 18);
+    const int edit_height = Scale(hwnd_, 24);
+    const int button_height = Scale(hwnd_, 30);
+    const int footer_button_width = Scale(hwnd_, 96);
+    RECT rect{};
+    GetClientRect(hwnd_, &rect);
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    const int column_width = (width - margin * 2 - gutter * 2) / 3;
+
+    int y = margin;
+    MoveWindow(enabled_checkbox_, margin, y, width - margin * 2, Scale(hwnd_, 22), TRUE);
+    y += Scale(hwnd_, 28);
+    MoveWindow(cpu_radio_, margin, y, width - margin * 2, Scale(hwnd_, 22), TRUE);
+    y += Scale(hwnd_, 24);
+    MoveWindow(paddle_radio_, margin, y, width - margin * 2, Scale(hwnd_, 22), TRUE);
+    y += Scale(hwnd_, 24);
+    MoveWindow(vision_radio_, margin, y, width - margin * 2, Scale(hwnd_, 22), TRUE);
+    y += Scale(hwnd_, 30);
+
+    MoveWindow(tesseract_language_label_, margin, y, column_width, label_height, TRUE);
+    MoveWindow(paddle_python_label_, margin + column_width + gutter, y, column_width, label_height, TRUE);
+    MoveWindow(paddle_language_label_, margin + (column_width + gutter) * 2, y, column_width, label_height, TRUE);
+    y += label_height + Scale(hwnd_, 4);
+    MoveWindow(tesseract_language_edit_, margin, y, column_width, edit_height, TRUE);
+    MoveWindow(paddle_python_edit_, margin + column_width + gutter, y, column_width, edit_height, TRUE);
+    MoveWindow(paddle_language_edit_, margin + (column_width + gutter) * 2, y, column_width, edit_height, TRUE);
+    y += edit_height + gutter;
+
+    MoveWindow(vision_provider_label_, margin, y, column_width, label_height, TRUE);
+    MoveWindow(vision_base_url_label_, margin + column_width + gutter, y, column_width, label_height, TRUE);
+    MoveWindow(vision_model_label_, margin + (column_width + gutter) * 2, y, column_width, label_height, TRUE);
+    y += label_height + Scale(hwnd_, 4);
+    MoveWindow(vision_provider_combo_, margin, y, column_width, Scale(hwnd_, 120), TRUE);
+    MoveWindow(vision_base_url_edit_, margin + column_width + gutter, y, column_width, edit_height, TRUE);
+    MoveWindow(vision_model_edit_, margin + (column_width + gutter) * 2, y, column_width, edit_height, TRUE);
+    y += edit_height + gutter;
+
+    MoveWindow(vision_prompt_label_, margin, y, width - margin * 2, label_height, TRUE);
+    y += label_height + Scale(hwnd_, 4);
+    MoveWindow(vision_prompt_edit_, margin, y, width - margin * 2, Scale(hwnd_, 94), TRUE);
+    y += Scale(hwnd_, 94) + gutter;
+
+    MoveWindow(include_ocr_checkbox_, margin, y, width - margin * 2, Scale(hwnd_, 22), TRUE);
+    y += Scale(hwnd_, 24);
+    MoveWindow(include_visual_description_checkbox_, margin, y, width - margin * 2, Scale(hwnd_, 22), TRUE);
+    y += Scale(hwnd_, 30);
+
+    MoveWindow(status_label_, margin, y, width - margin * 2, label_height, TRUE);
+    y += label_height + Scale(hwnd_, 4);
+    const int action_width = (width - margin * 2 - gutter * 4) / 5;
+    MoveWindow(check_status_button_, margin, y, action_width, button_height, TRUE);
+    MoveWindow(install_tesseract_button_, margin + (action_width + gutter), y, action_width, button_height, TRUE);
+    MoveWindow(install_paddle_button_, margin + (action_width + gutter) * 2, y, action_width, button_height, TRUE);
+    MoveWindow(install_ollama_button_, margin + (action_width + gutter) * 3, y, action_width, button_height, TRUE);
+    MoveWindow(pull_vision_model_button_, margin + (action_width + gutter) * 4, y, action_width, button_height, TRUE);
+    y += button_height + gutter;
+
+    const int buttons_y = height - margin - button_height;
+    MoveWindow(diagnostics_log_edit_, margin, y, width - margin * 2, buttons_y - y - gutter, TRUE);
+    MoveWindow(cancel_button_, width - margin - footer_button_width, buttons_y, footer_button_width, button_height, TRUE);
+    MoveWindow(save_button_, width - margin - footer_button_width * 2 - gutter, buttons_y, footer_button_width, button_height, TRUE);
+}
+
+void RagImageIngestSettingsDialog::OnCommand(int control_id) {
+    switch (control_id) {
+    case kImageCheckStatus:
+    case kImageCpuMode:
+    case kImagePaddleMode:
+    case kImageVisionMode:
+    case kImageVisionProviderCombo:
+        RefreshStatus();
+        break;
+    case kImageInstallTesseract:
+        InstallTool("tesseract");
+        break;
+    case kImageInstallPaddle:
+        InstallTool("paddleocr");
+        break;
+    case kImageInstallOllama:
+        InstallTool("ollama");
+        break;
+    case kImagePullVisionModel:
+        PullVisionModel();
+        break;
+    case kImageSaveButton:
+        ValidateAndSave();
+        break;
+    case kImageCancelButton:
+        DestroyWindow(hwnd_);
+        break;
+    default:
+        break;
+    }
+}
+
+RagImageIngestSettings RagImageIngestSettingsDialog::BuildSettingsFromFields() const {
+    RagImageIngestSettings settings = settings_;
+    settings.enabled = Button_GetCheck(enabled_checkbox_) == BST_CHECKED;
+    if (Button_GetCheck(vision_radio_) == BST_CHECKED) {
+        settings.mode = "vision_language_gpu";
+    } else if (Button_GetCheck(paddle_radio_) == BST_CHECKED) {
+        settings.mode = "paddle_ocr_gpu";
+    } else {
+        settings.mode = "tesseract_cpu";
+    }
+    settings.tesseract_language = WideToUtf8(TrimWide(GetWindowTextString(tesseract_language_edit_)));
+    settings.paddle_python_command = WideToUtf8(TrimWide(GetWindowTextString(paddle_python_edit_)));
+    settings.paddle_language = WideToUtf8(TrimWide(GetWindowTextString(paddle_language_edit_)));
+    settings.vision_provider = ImageVisionProviderFromComboIndex(static_cast<int>(ComboBox_GetCurSel(vision_provider_combo_)));
+    settings.vision_base_url = WideToUtf8(TrimWide(GetWindowTextString(vision_base_url_edit_)));
+    settings.vision_model = WideToUtf8(TrimWide(GetWindowTextString(vision_model_edit_)));
+    settings.vision_prompt = WideToUtf8(TrimWide(GetWindowTextString(vision_prompt_edit_)));
+    settings.include_ocr_text = Button_GetCheck(include_ocr_checkbox_) == BST_CHECKED;
+    settings.include_visual_description = Button_GetCheck(include_visual_description_checkbox_) == BST_CHECKED;
+    return settings;
+}
+
+void RagImageIngestSettingsDialog::LoadSettingsIntoFields() {
+    Button_SetCheck(enabled_checkbox_, settings_.enabled ? BST_CHECKED : BST_UNCHECKED);
+    const std::string mode = NormalizeImageMode(settings_.mode);
+    Button_SetCheck(cpu_radio_, mode == "tesseract_cpu" ? BST_CHECKED : BST_UNCHECKED);
+    Button_SetCheck(paddle_radio_, mode == "paddle_ocr_gpu" ? BST_CHECKED : BST_UNCHECKED);
+    Button_SetCheck(vision_radio_, mode == "vision_language_gpu" ? BST_CHECKED : BST_UNCHECKED);
+    SetWindowTextW(tesseract_language_edit_, Utf8ToWide(settings_.tesseract_language.empty() ? "eng" : settings_.tesseract_language).c_str());
+    SetWindowTextW(paddle_python_edit_, Utf8ToWide(settings_.paddle_python_command.empty() ? "python" : settings_.paddle_python_command).c_str());
+    SetWindowTextW(paddle_language_edit_, Utf8ToWide(settings_.paddle_language.empty() ? "en" : settings_.paddle_language).c_str());
+    ComboBox_SetCurSel(vision_provider_combo_, ImageVisionProviderComboIndex(settings_.vision_provider));
+    SetWindowTextW(vision_base_url_edit_, Utf8ToWide(settings_.vision_base_url.empty() ? "http://localhost:11434" : settings_.vision_base_url).c_str());
+    SetWindowTextW(vision_model_edit_, Utf8ToWide(settings_.vision_model.empty() ? "qwen2.5vl:7b" : settings_.vision_model).c_str());
+    SetWindowTextW(vision_prompt_edit_, Utf8ToWide(settings_.vision_prompt).c_str());
+    Button_SetCheck(include_ocr_checkbox_, settings_.include_ocr_text ? BST_CHECKED : BST_UNCHECKED);
+    Button_SetCheck(include_visual_description_checkbox_, settings_.include_visual_description ? BST_CHECKED : BST_UNCHECKED);
+}
+
+void RagImageIngestSettingsDialog::RefreshStatus() {
+    if (!rag_service_) {
+        return;
+    }
+    const RagImageIngestSettings settings = BuildSettingsFromFields();
+    const RagImageIngestRuntimeStatus status = rag_service_->GetImageIngestRuntimeStatus(settings);
+    SetWindowTextW(status_label_, ImageStatusText(status).c_str());
+
+    std::wstring log = Utf8ToWide(status.recent_log);
+    if (!log.empty()) {
+        log += L"\r\n";
+    }
+    log += L"Current diagnostics\r\n";
+    log += L"- Enabled: " + std::wstring(status.enabled ? L"yes" : L"no") + L"\r\n";
+    log += L"- Mode: " + Utf8ToWide(status.mode) + L"\r\n";
+    log += L"- Tesseract installed: " + std::wstring(status.tesseract_installed ? L"yes" : L"no") + L"\r\n";
+    log += L"- Python installed: " + std::wstring(status.python_installed ? L"yes" : L"no") + L"\r\n";
+    log += L"- PaddleOCR installed: " + std::wstring(status.paddleocr_installed ? L"yes" : L"no") + L"\r\n";
+    log += L"- Ollama installed: " + std::wstring(status.ollama_installed ? L"yes" : L"no") + L"\r\n";
+    log += L"- Vision endpoint running: " + std::wstring(status.vision_endpoint_running ? L"yes" : L"no") + L"\r\n";
+    log += L"- Message: " + Utf8ToWide(status.message) + L"\r\n";
+    SetWindowTextW(diagnostics_log_edit_, log.c_str());
+    SendMessageW(diagnostics_log_edit_, EM_SETSEL, static_cast<WPARAM>(-1), static_cast<LPARAM>(-1));
+    SendMessageW(diagnostics_log_edit_, EM_SCROLLCARET, 0, 0);
+
+    EnableWindow(install_tesseract_button_, status.tesseract_installed ? FALSE : TRUE);
+    EnableWindow(install_paddle_button_, status.paddleocr_installed ? FALSE : TRUE);
+    EnableWindow(install_ollama_button_, status.ollama_installed ? FALSE : TRUE);
+    EnableWindow(pull_vision_model_button_, status.ollama_installed ? TRUE : FALSE);
+}
+
+void RagImageIngestSettingsDialog::InstallTool(const std::string& tool_id) {
+    if (!rag_service_) {
+        return;
+    }
+    const RagExtractionToolInstallResult result = rag_service_->LaunchImageIngestToolInstaller(BuildSettingsFromFields(), tool_id);
+    std::wstring log = GetWindowTextString(diagnostics_log_edit_);
+    if (!log.empty()) {
+        log += L"\r\n";
+    }
+    log += L"Installer result: " + Utf8ToWide(result.message) + L"\r\n";
+    if (!result.command.empty()) {
+        log += L"Command: " + Utf8ToWide(result.command) + L"\r\n";
+    }
+    SetWindowTextW(diagnostics_log_edit_, log.c_str());
+    RefreshStatus();
+}
+
+void RagImageIngestSettingsDialog::PullVisionModel() {
+    if (!rag_service_) {
+        return;
+    }
+    const RagExtractionToolInstallResult result = rag_service_->LaunchImageVisionModelInstaller(BuildSettingsFromFields());
+    std::wstring log = GetWindowTextString(diagnostics_log_edit_);
+    if (!log.empty()) {
+        log += L"\r\n";
+    }
+    log += L"Vision model pull result: " + Utf8ToWide(result.message) + L"\r\n";
+    if (!result.command.empty()) {
+        log += L"Command: " + Utf8ToWide(result.command) + L"\r\n";
+    }
+    SetWindowTextW(diagnostics_log_edit_, log.c_str());
+    RefreshStatus();
+}
+
+bool RagImageIngestSettingsDialog::ValidateAndSave() {
+    RagImageIngestSettings settings = BuildSettingsFromFields();
+    if (Trim(settings.tesseract_language).empty()) {
+        MessageBoxW(hwnd_, L"Tesseract language is required. Use eng for English.", L"Missing Tesseract Language", MB_OK | MB_ICONERROR);
+        SetFocus(tesseract_language_edit_);
+        return false;
+    }
+    if (Trim(settings.paddle_python_command).empty()) {
+        MessageBoxW(hwnd_, L"PaddleOCR Python command is required. Use python unless you have a custom Python executable.", L"Missing PaddleOCR Command", MB_OK | MB_ICONERROR);
+        SetFocus(paddle_python_edit_);
+        return false;
+    }
+    if (Trim(settings.paddle_language).empty()) {
+        MessageBoxW(hwnd_, L"PaddleOCR language is required. Use en for English.", L"Missing PaddleOCR Language", MB_OK | MB_ICONERROR);
+        SetFocus(paddle_language_edit_);
+        return false;
+    }
+    if (NormalizeImageMode(settings.mode) == "vision_language_gpu" && settings.include_visual_description) {
+        if (settings.vision_provider != "ollama") {
+            MessageBoxW(hwnd_, L"Full vision mode currently requires the Ollama vision provider.", L"Vision Provider Required", MB_OK | MB_ICONERROR);
+            SetFocus(vision_provider_combo_);
+            return false;
+        }
+        if (Trim(settings.vision_base_url).empty()) {
+            MessageBoxW(hwnd_, L"Vision base URL is required for full vision mode.", L"Missing Vision Base URL", MB_OK | MB_ICONERROR);
+            SetFocus(vision_base_url_edit_);
+            return false;
+        }
+        if (Trim(settings.vision_model).empty()) {
+            MessageBoxW(hwnd_, L"Vision model is required for full vision mode.", L"Missing Vision Model", MB_OK | MB_ICONERROR);
+            SetFocus(vision_model_edit_);
+            return false;
+        }
+    }
+
+    rag_service_->SaveImageIngestSettings(settings);
+    saved_ = true;
+    DestroyWindow(hwnd_);
+    return true;
+}
+
 HWND RagServiceManagerWindow::Create(HINSTANCE instance) {
     RegisterWindowClass(instance);
     hwnd_ = CreateWindowExW(
@@ -1136,6 +1655,7 @@ void RagServiceManagerWindow::OnCreate() {
     attach_write_button_ = CreateWindowExW(0, L"BUTTON", L"Attach RW", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAttachReadWrite), nullptr, nullptr);
     detach_button_ = CreateWindowExW(0, L"BUTTON", L"Detach", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kDetachProject), nullptr, nullptr);
     install_tools_button_ = CreateWindowExW(0, L"BUTTON", L"Install Tools", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstallTools), nullptr, nullptr);
+    image_ingest_settings_button_ = CreateWindowExW(0, L"BUTTON", L"Image Ingest Settings", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageIngestSettings), nullptr, nullptr);
     ingest_button_ = CreateWindowExW(0, L"BUTTON", L"Ingest Files", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kIngestFiles), nullptr, nullptr);
     ingest_folder_button_ = CreateWindowExW(0, L"BUTTON", L"Ingest Folder", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kIngestFolder), nullptr, nullptr);
     rebuild_button_ = CreateWindowExW(0, L"BUTTON", L"Rebuild DB", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRebuildLibrary), nullptr, nullptr);
@@ -1149,7 +1669,7 @@ void RagServiceManagerWindow::OnCreate() {
     status_label_ = CreateWindowExW(0, L"STATIC", L"Manage reusable RAG libraries and attach them to the active project.", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatusLabel), nullptr, nullptr);
     close_button_ = CreateWindowExW(0, L"BUTTON", L"Close", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCloseButton), nullptr, nullptr);
 
-    for (HWND control : {libraries_list_, details_edit_, add_button_, edit_button_, remove_button_, attach_read_button_, attach_write_button_, detach_button_, install_tools_button_, ingest_button_, ingest_folder_button_, rebuild_button_, documents_button_, reindex_document_button_, delete_document_button_, search_edit_, search_button_, results_edit_, status_label_, close_button_}) {
+    for (HWND control : {libraries_list_, details_edit_, add_button_, edit_button_, remove_button_, attach_read_button_, attach_write_button_, detach_button_, install_tools_button_, image_ingest_settings_button_, ingest_button_, ingest_folder_button_, rebuild_button_, documents_button_, reindex_document_button_, delete_document_button_, search_edit_, search_button_, results_edit_, status_label_, close_button_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
     SendMessageW(progress_bar_, PBM_SETRANGE32, 0, 100);
@@ -1183,7 +1703,9 @@ void RagServiceManagerWindow::LayoutControls(int width, int height) const {
 
     const int tools_y = footer_y - button_height - gutter;
     MoveWindow(libraries_list_, margin, y, left_width, tools_y - y - gutter, TRUE);
-    MoveWindow(install_tools_button_, margin, tools_y, left_width, button_height, TRUE);
+    const int install_width = (left_width - gutter) / 2;
+    MoveWindow(install_tools_button_, margin, tools_y, install_width, button_height, TRUE);
+    MoveWindow(image_ingest_settings_button_, margin + install_width + gutter, tools_y, left_width - install_width - gutter, button_height, TRUE);
 
     const int right_x = margin + left_width + gutter;
     const int right_width = width - right_x - margin;
@@ -1252,6 +1774,9 @@ void RagServiceManagerWindow::RefreshLibraries() {
             const auto binding = FindBinding(bindings, library.id);
             if (binding) {
                 label += binding->can_write ? L" [project RW]" : L" [project RO]";
+                if (binding->expose_as_tool) {
+                    label += L" [tool]";
+                }
             } else {
                 label += L" [not attached]";
             }
@@ -1317,6 +1842,7 @@ void RagServiceManagerWindow::RefreshDetails() {
             details += binding->enabled ? L"enabled" : L"disabled";
             details += binding->can_read ? L", read" : L", no read";
             details += binding->can_write ? L", write" : L", no write";
+            details += binding->expose_as_tool ? L", tool" : L", no tool";
             details += binding->can_delete ? L", delete" : L", no delete";
             details += L", priority " + std::to_wstring(binding->retrieval_priority);
             details += L", max chunks " + std::to_wstring(binding->max_chunks);
@@ -1710,6 +2236,15 @@ void RagServiceManagerWindow::ShowExtractionTools() {
     UpdateStatus(result.launched ? L"RAG tool installer launched." : L"No RAG tool installer was launched.");
 }
 
+void RagServiceManagerWindow::ShowImageIngestSettings() {
+    if (RagImageIngestSettingsDialog::Show(hwnd_, rag_service_)) {
+        UpdateStatus(L"Image ingest settings saved. New image imports will use the updated system-wide pipeline.");
+        SetWindowTextW(results_edit_, L"Image ingest settings saved.\r\n\r\nSupported image files are preserved as originals and converted into extracted Markdown during RAG ingestion. CPU mode uses Tesseract OCR; GPU OCR mode attempts PaddleOCR with Tesseract fallback; full vision mode adds an Ollama vision-language description when available.");
+    } else {
+        UpdateStatus(L"Image ingest settings closed.");
+    }
+}
+
 void RagServiceManagerWindow::OnRebuildProgress(ProgressPayload* payload) {
     std::unique_ptr<ProgressPayload> guard(payload);
     const int total = std::max(1, payload->progress.total_items);
@@ -1815,6 +2350,9 @@ void RagServiceManagerWindow::OnCommand(int control_id, int notification_code) {
         break;
     case kInstallTools:
         ShowExtractionTools();
+        break;
+    case kImageIngestSettings:
+        ShowImageIngestSettings();
         break;
     case kIngestFiles:
         IngestFiles();

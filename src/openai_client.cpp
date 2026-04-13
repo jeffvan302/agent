@@ -17,6 +17,9 @@
 
 using json = nlohmann::json;
 
+// Static provider cache for compression model calls
+static std::vector<ProviderConfig> s_provider_cache;
+
 namespace {
 struct InternetHandleCloser {
     void operator()(void* handle) const {
@@ -743,6 +746,133 @@ ChatCompletionResult OpenAIClient::CreateToolAwareCompletion(const ChatRequestOp
         result.error = "Unexpected error while sending the tool-aware chat request.";
         return result;
     }
+}
+
+ChatCompletionResult OpenAIClient::CreateSimpleCompletion(const ChatRequestOptions& request) {
+    ChatCompletionResult result;
+
+    try {
+        const std::string url = JoinChatCompletionsUrl(request.provider.base_url);
+        const ParsedUrl parsed = CrackUrl(url);
+        const std::string body = BuildRequestBody(request, false, {}).dump();
+        constexpr int kMaxAttempts = 4;
+        std::string last_error;
+
+        for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+            UniqueInternetHandle session(WinHttpOpen(L"AgentDesktop/0.2", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+            if (!session) {
+                last_error = FormatWinHttpError("Failed to open WinHTTP session.", GetLastError());
+                if (attempt < kMaxAttempts) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
+                    continue;
+                }
+                result.error = last_error;
+                return result;
+            }
+
+            UniqueInternetHandle connection(WinHttpConnect(static_cast<HINTERNET>(session.get()), parsed.host.c_str(), parsed.port, 0));
+            if (!connection) {
+                last_error = FormatWinHttpError("Failed to connect to host.", GetLastError());
+                if (attempt < kMaxAttempts) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
+                    continue;
+                }
+                result.error = last_error;
+                return result;
+            }
+
+            const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
+            UniqueInternetHandle request_handle(WinHttpOpenRequest(static_cast<HINTERNET>(connection.get()), L"POST", parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
+            if (!request_handle) {
+                result.error = FormatWinHttpError("Failed to create WinHTTP request.", GetLastError());
+                return result;
+            }
+
+            WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 15000, 15000, 30000, 30000);
+
+            std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
+            if (!request.provider.api_key.empty()) {
+                headers += L"Authorization: Bearer ";
+                headers += Utf8ToWide(request.provider.api_key);
+                headers += L"\r\n";
+            }
+
+            if (!WinHttpSendRequest(static_cast<HINTERNET>(request_handle.get()), headers.c_str(), static_cast<DWORD>(headers.size()), reinterpret_cast<LPVOID>(const_cast<char*>(body.data())), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0)) {
+                last_error = FormatWinHttpError("Failed to send HTTP request.", GetLastError());
+                if (attempt < kMaxAttempts) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
+                    continue;
+                }
+                result.error = last_error;
+                return result;
+            }
+
+            if (!WinHttpReceiveResponse(static_cast<HINTERNET>(request_handle.get()), nullptr)) {
+                last_error = FormatWinHttpError("Failed to receive HTTP response.", GetLastError());
+                if (attempt < kMaxAttempts) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
+                    continue;
+                }
+                result.error = last_error;
+                return result;
+            }
+
+            const DWORD status_code = QueryStatusCode(static_cast<HINTERNET>(request_handle.get()));
+            if (status_code < 200 || status_code >= 300) {
+                const std::string error_body = ReadEntireResponse(static_cast<HINTERNET>(request_handle.get()));
+                const std::string details = ExtractErrorMessage(error_body);
+                last_error = FormatHttpErrorMessage(status_code, details, attempt);
+                if (IsRetryableStatusCode(status_code) && attempt < kMaxAttempts) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, QueryRetryAfterSeconds(static_cast<HINTERNET>(request_handle.get())))));
+                    continue;
+                }
+                result.error = last_error;
+                return result;
+            }
+
+            const std::string response = ReadEntireResponse(static_cast<HINTERNET>(request_handle.get()));
+            try {
+                const auto payload = json::parse(response);
+                result.success = true;
+                if (payload.contains("choices") && payload["choices"].is_array() && !payload["choices"].empty()) {
+                    const auto& choice = payload["choices"][0];
+                    result.finish_reason = choice.value("finish_reason", "");
+                    if (choice.contains("message")) {
+                        const json& msg_json = choice["message"];
+                        result.message.role = msg_json.value("role", "assistant");
+                        result.message.content = ExtractContentString(msg_json.value("content", json{}));
+                        result.assistant_text = result.message.content;
+                    }
+                }
+                return result;
+            } catch (...) {
+                result.error = "Received a non-JSON response from the provider.";
+                return result;
+            }
+        }
+
+        result.error = last_error.empty() ? "The request failed after multiple attempts." : last_error;
+        return result;
+    } catch (const std::exception& ex) {
+        result.error = ex.what();
+        return result;
+    } catch (...) {
+        result.error = "Unexpected error while sending the simple completion request.";
+        return result;
+    }
+}
+
+void OpenAIClient::SetProviderCache(const std::vector<ProviderConfig>& providers) {
+    s_provider_cache = providers;
+}
+
+std::optional<ProviderConfig> OpenAIClient::LookupProvider(const std::string& provider_id) {
+    for (const auto& p : s_provider_cache) {
+        if (p.id == provider_id) {
+            return p;
+        }
+    }
+    return std::nullopt;
 }
 
 ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOptions& request, const std::vector<ChatToolDefinition>& tools, const std::function<void(const std::string&)>& on_delta) {

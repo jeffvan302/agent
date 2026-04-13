@@ -29,11 +29,28 @@ public:
 
     std::vector<MessageRecord> LoadMessages(const std::string& project_id, const std::string& chat_id) const;
     void SaveMessages(const std::string& project_id, const std::string& chat_id, const std::vector<MessageRecord>& messages) const;
+    std::vector<ChatContextDebugEntry> LoadChatContextDebugEntries(const std::string& project_id, const std::string& chat_id) const;
+    void SaveChatContextDebugEntries(const std::string& project_id, const std::string& chat_id, const std::vector<ChatContextDebugEntry>& entries) const;
+    void AppendChatContextDebugEntry(const std::string& project_id, const std::string& chat_id, const ChatContextDebugEntry& entry) const;
 
     std::vector<std::string> LoadApprovedMcpServers(const std::string& project_id) const;
     void SaveApprovedMcpServers(const std::string& project_id, const std::vector<std::string>& server_ids) const;
     std::vector<ProjectMcpServerBinding> LoadProjectMcpBindings(const std::string& project_id) const;
     void SaveProjectMcpBindings(const std::string& project_id, const std::vector<ProjectMcpServerBinding>& bindings) const;
+
+    std::vector<ContextCompressionConfig> LoadCompressionConfigs() const;
+    void SaveCompressionConfigs(const std::vector<ContextCompressionConfig>& configs) const;
+    ProjectCompressionSettings LoadProjectCompressionSettings(const std::string& project_id) const;
+    void SaveProjectCompressionSettings(const std::string& project_id, const ProjectCompressionSettings& settings) const;
+    ChatCompressionState LoadChatCompressionState(const std::string& project_id, const std::string& chat_id) const;
+    void SaveChatCompressionState(const std::string& project_id, const std::string& chat_id, const ChatCompressionState& state) const;
+    std::vector<ChatCompressionSnapshot> LoadChatCompressionHistory(const std::string& project_id, const std::string& chat_id) const;
+    void SaveChatCompressionHistory(const std::string& project_id, const std::string& chat_id, const std::vector<ChatCompressionSnapshot>& snapshots) const;
+    void AppendChatCompressionSnapshot(const std::string& project_id, const std::string& chat_id, const ChatCompressionSnapshot& snapshot) const;
+
+    std::filesystem::path ProjectSettingsPath(const std::string& project_id) const;
+    ProjectSettings LoadProjectSettings(const std::string& project_id) const;
+    void SaveProjectSettings(const std::string& project_id, const ProjectSettings& settings) const;
 
     void RenameProject(const std::string& project_id, const std::string& new_name) const;
     void RenameChat(const std::string& project_id, const std::string& chat_id, const std::string& new_name) const;
@@ -56,6 +73,11 @@ private:
     std::filesystem::path ChatPath(const std::string& project_id, const std::string& chat_id) const;
     std::filesystem::path ChatMetaPath(const std::string& project_id, const std::string& chat_id) const;
     std::filesystem::path ChatMessagesPath(const std::string& project_id, const std::string& chat_id) const;
+    std::filesystem::path ChatContextDebugPath(const std::string& project_id, const std::string& chat_id) const;
+    std::filesystem::path CompressionConfigsPath() const;
+    std::filesystem::path ProjectCompressionPath(const std::string& project_id) const;
+    std::filesystem::path ChatCompressionStatePath(const std::string& project_id, const std::string& chat_id) const;
+    std::filesystem::path ChatCompressionHistoryPath(const std::string& project_id, const std::string& chat_id) const;
 
     std::filesystem::path root_path_;
 };

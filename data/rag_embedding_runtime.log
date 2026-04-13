@@ -866,3 +866,322 @@ time=2026-04-12T02:31:16.829-04:00 level=INFO source=server.go:1398 msg="waiting
 time=2026-04-12T02:31:17.581-04:00 level=INFO source=server.go:1402 msg="llama runner started in 1.06 seconds"
 [GIN] 2026/04/12 - 02:31:17 | 200 |    1.5192484s |       127.0.0.1 | POST     "/api/embed"
 [2026-04-12T06:32:43Z] Stopping app-managed Ollama process.
+[2026-04-12T06:34:22Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T02:34:22.946-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T02:34:22.946-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T02:34:22.948-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T02:34:22.948-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T02:34:22.949-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T02:34:22.950-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T02:34:22.960-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T02:34:22.961-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52802"
+time=2026-04-12T02:34:23.141-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52810"
+time=2026-04-12T02:34:23.307-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52818"
+time=2026-04-12T02:34:23.746-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52838"
+time=2026-04-12T02:34:23.746-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52839"
+time=2026-04-12T02:34:24.020-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.0 GiB"
+time=2026-04-12T02:34:24.020-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 02:34:25 | 200 |      1.0489ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T06:34:25Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T06:43:19Z] Stopping app-managed Ollama process.
+[2026-04-12T07:19:03Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T03:19:03.924-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T03:19:03.924-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T03:19:03.932-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T03:19:03.933-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T03:19:03.933-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T03:19:03.934-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T03:19:03.946-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T03:19:03.947-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64432"
+time=2026-04-12T03:19:04.817-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64452"
+time=2026-04-12T03:19:05.106-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53605"
+time=2026-04-12T03:19:06.066-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53615"
+time=2026-04-12T03:19:06.066-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53614"
+time=2026-04-12T03:19:06.342-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T03:19:06.342-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 03:19:06 | 200 |      6.3115ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T07:19:06Z] Ollama is responding at http://localhost:11434.
+[GIN] 2026/04/12 - 03:26:08 | 200 |       504.9µs |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 03:29:36 | 200 |       505.1µs |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 03:29:39 | 200 |         762µs |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 03:55:05 | 200 |       503.5µs |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 03:56:01 | 200 |      1.0502ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 04:17:09 | 200 |      1.0324ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 04:17:39 | 200 |       503.4µs |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 04:32:14 | 200 |      1.0589ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 04:37:50 | 200 |      1.0167ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 04:38:07 | 200 |      1.0524ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 04:38:40 | 200 |      1.0489ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 04:39:15 | 200 |       505.3µs |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/12 - 04:44:31 | 200 |       504.3µs |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T08:49:16Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T04:49:16.973-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T04:49:16.973-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T04:49:16.974-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T04:49:16.974-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T04:49:16.975-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T04:49:16.976-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T04:49:16.989-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 49694"
+time=2026-04-12T04:49:17.210-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 49702"
+time=2026-04-12T04:49:17.366-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 49710"
+time=2026-04-12T04:49:17.808-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T04:49:17.810-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 49720"
+time=2026-04-12T04:49:17.810-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 49719"
+time=2026-04-12T04:49:18.084-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T04:49:18.084-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 04:49:19 | 200 |      1.5868ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T08:49:19Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T08:50:19Z] Stopping app-managed Ollama process.
+[2026-04-12T08:50:58Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T04:50:58.760-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T04:50:58.760-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T04:50:58.761-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T04:50:58.762-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T04:50:58.762-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T04:50:58.763-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T04:50:58.774-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52270"
+time=2026-04-12T04:50:58.917-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52277"
+time=2026-04-12T04:50:59.340-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T04:50:59.341-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52286"
+time=2026-04-12T04:50:59.544-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52295"
+time=2026-04-12T04:50:59.544-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 52294"
+time=2026-04-12T04:50:59.768-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T04:50:59.768-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 04:51:01 | 200 |      1.0234ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T08:51:01Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T08:52:18Z] Stopping app-managed Ollama process.
+[2026-04-12T08:57:08Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T04:57:09.051-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T04:57:09.051-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T04:57:09.052-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T04:57:09.053-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T04:57:09.054-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T04:57:09.055-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T04:57:09.065-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 58873"
+time=2026-04-12T04:57:09.281-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 58881"
+time=2026-04-12T04:57:09.438-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 58889"
+time=2026-04-12T04:57:09.887-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T04:57:09.889-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 58898"
+time=2026-04-12T04:57:09.889-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 58899"
+time=2026-04-12T04:57:10.165-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T04:57:10.165-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 04:57:11 | 200 |      1.5642ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T08:57:11Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T09:02:44Z] Stopping app-managed Ollama process.
+[2026-04-12T09:09:21Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T05:09:21.279-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T05:09:21.279-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T05:09:21.280-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T05:09:21.280-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T05:09:21.281-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T05:09:21.282-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T05:09:21.294-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 55776"
+time=2026-04-12T05:09:21.508-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 55784"
+time=2026-04-12T05:09:21.675-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 55793"
+time=2026-04-12T05:09:22.125-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T05:09:22.126-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 55802"
+time=2026-04-12T05:09:22.126-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 55803"
+time=2026-04-12T05:09:22.403-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T05:09:22.404-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 05:09:23 | 200 |       1.582ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T09:09:23Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T09:11:11Z] Stopping app-managed Ollama process.
+[2026-04-12T09:11:18Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T05:11:18.342-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T05:11:18.342-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T05:11:18.343-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T05:11:18.344-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T05:11:18.344-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T05:11:18.346-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T05:11:18.359-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 57022"
+time=2026-04-12T05:11:18.572-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 57030"
+time=2026-04-12T05:11:18.730-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 57038"
+time=2026-04-12T05:11:19.167-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T05:11:19.169-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 61483"
+time=2026-04-12T05:11:19.169-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 61482"
+time=2026-04-12T05:11:19.412-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T05:11:19.413-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 05:11:20 | 200 |      1.0435ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T09:11:20Z] Ollama is responding at http://localhost:11434.
+[GIN] 2026/04/12 - 05:11:28 | 200 |       505.7µs |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T09:11:42Z] Stopping app-managed Ollama process.
+[2026-04-12T09:14:39Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T05:14:40.017-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T05:14:40.017-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T05:14:40.018-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T05:14:40.019-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T05:14:40.019-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T05:14:40.020-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T05:14:40.032-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 49820"
+time=2026-04-12T05:14:40.481-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T05:14:40.482-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 49829"
+time=2026-04-12T05:14:40.694-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 49837"
+time=2026-04-12T05:14:40.852-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 49846"
+time=2026-04-12T05:14:40.852-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 49845"
+time=2026-04-12T05:14:41.127-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T05:14:41.127-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 05:14:42 | 200 |      1.5263ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T09:14:42Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T09:17:04Z] Stopping app-managed Ollama process.
+[2026-04-12T09:23:25Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T05:23:25.838-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T05:23:25.838-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T05:23:25.839-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T05:23:25.840-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T05:23:25.841-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T05:23:25.842-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T05:23:25.854-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59701"
+time=2026-04-12T05:23:26.077-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59709"
+time=2026-04-12T05:23:26.232-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59717"
+time=2026-04-12T05:23:26.671-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T05:23:26.672-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59727"
+time=2026-04-12T05:23:26.672-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59726"
+time=2026-04-12T05:23:26.956-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T05:23:26.956-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 05:23:28 | 200 |      1.5704ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T09:23:28Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T09:24:44Z] Stopping app-managed Ollama process.
+[2026-04-12T09:26:09Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T05:26:09.449-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T05:26:09.450-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T05:26:09.451-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T05:26:09.451-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T05:26:09.452-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T05:26:09.453-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T05:26:09.465-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53536"
+time=2026-04-12T05:26:09.675-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53544"
+time=2026-04-12T05:26:09.832-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53552"
+time=2026-04-12T05:26:10.284-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T05:26:10.285-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53562"
+time=2026-04-12T05:26:10.285-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53561"
+time=2026-04-12T05:26:10.539-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T05:26:10.539-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 05:26:11 | 200 |      1.5052ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T09:26:11Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T09:29:52Z] Stopping app-managed Ollama process.
+[2026-04-12T10:49:23Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T06:49:23.428-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T06:49:23.429-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T06:49:23.430-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T06:49:23.431-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T06:49:23.431-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T06:49:23.432-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T06:49:23.444-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51931"
+time=2026-04-12T06:49:23.663-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51939"
+time=2026-04-12T06:49:23.820-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51947"
+time=2026-04-12T06:49:24.273-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T06:49:24.275-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51957"
+time=2026-04-12T06:49:24.275-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51956"
+time=2026-04-12T06:49:24.553-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T06:49:24.553-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 06:49:25 | 200 |      1.0294ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T10:49:25Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T10:53:14Z] Stopping app-managed Ollama process.
+[2026-04-12T11:00:38Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T07:00:38.779-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T07:00:38.780-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T07:00:38.781-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T07:00:38.781-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T07:00:38.782-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T07:00:38.783-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T07:00:38.795-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 54540"
+time=2026-04-12T07:00:39.246-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T07:00:39.248-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 54550"
+time=2026-04-12T07:00:39.461-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 54558"
+time=2026-04-12T07:00:39.621-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 54567"
+time=2026-04-12T07:00:39.621-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 54566"
+time=2026-04-12T07:00:39.907-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T07:00:39.907-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 07:00:41 | 200 |      2.1086ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T11:00:41Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T11:05:55Z] Stopping app-managed Ollama process.
+[2026-04-12T11:12:50Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T07:12:50.788-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T07:12:50.789-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T07:12:50.790-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T07:12:50.790-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T07:12:50.791-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T07:12:50.792-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T07:12:50.804-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 54522"
+time=2026-04-12T07:12:51.034-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 54531"
+time=2026-04-12T07:12:51.205-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 54541"
+time=2026-04-12T07:12:51.659-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T07:12:51.661-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 58167"
+time=2026-04-12T07:12:51.661-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 58166"
+time=2026-04-12T07:12:51.938-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T07:12:51.938-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 07:12:53 | 200 |       1.063ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T11:12:53Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T11:25:00Z] Stopping app-managed Ollama process.
+[2026-04-12T11:36:51Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T07:36:52.091-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T07:36:52.092-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T07:36:52.093-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T07:36:52.094-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T07:36:52.094-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T07:36:52.095-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T07:36:52.108-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 62388"
+time=2026-04-12T07:36:52.581-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T07:36:52.582-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 62398"
+time=2026-04-12T07:36:52.800-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 62406"
+time=2026-04-12T07:36:52.962-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 62415"
+time=2026-04-12T07:36:52.962-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 62414"
+time=2026-04-12T07:36:53.239-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T07:36:53.239-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 07:36:54 | 200 |      1.0338ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T11:36:54Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T11:39:28Z] Stopping app-managed Ollama process.
+[2026-04-12T11:47:20Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T07:47:20.170-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T07:47:20.170-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T07:47:20.171-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T07:47:20.172-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T07:47:20.172-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T07:47:20.174-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T07:47:20.186-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59822"
+time=2026-04-12T07:47:20.418-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59831"
+time=2026-04-12T07:47:20.586-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59841"
+time=2026-04-12T07:47:21.042-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T07:47:21.043-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59860"
+time=2026-04-12T07:47:21.043-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59861"
+time=2026-04-12T07:47:21.329-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T07:47:21.329-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 07:47:22 | 200 |      1.0352ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T11:47:22Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T11:49:22Z] Stopping app-managed Ollama process.
+[2026-04-12T11:53:51Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T07:53:51.158-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T07:53:51.158-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T07:53:51.159-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T07:53:51.159-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T07:53:51.161-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T07:53:51.162-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T07:53:51.174-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64214"
+time=2026-04-12T07:53:51.376-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64221"
+time=2026-04-12T07:53:51.531-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64229"
+time=2026-04-12T07:53:51.971-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T07:53:51.973-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64240"
+time=2026-04-12T07:53:51.973-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64241"
+time=2026-04-12T07:53:52.245-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T07:53:52.245-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 07:53:53 | 200 |      2.7474ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T11:53:53Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T11:56:03Z] Stopping app-managed Ollama process.
+[2026-04-12T12:01:21Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-12T08:01:21.226-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-12T08:01:21.227-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-12T08:01:21.228-04:00 level=INFO source=images.go:499 msg="total blobs: 4"
+time=2026-04-12T08:01:21.229-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-12T08:01:21.229-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.5)"
+time=2026-04-12T08:01:21.231-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-12T08:01:21.242-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51885"
+time=2026-04-12T08:01:21.471-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51894"
+time=2026-04-12T08:01:21.641-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51904"
+time=2026-04-12T08:01:22.105-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-12T08:01:22.107-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51913"
+time=2026-04-12T08:01:22.107-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51916"
+time=2026-04-12T08:01:22.383-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.5 GiB"
+time=2026-04-12T08:01:22.383-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/12 - 08:01:23 | 200 |      1.0304ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-12T12:01:23Z] Ollama is responding at http://localhost:11434.
+[2026-04-12T12:01:56Z] Stopping app-managed Ollama process.

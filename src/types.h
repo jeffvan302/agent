@@ -31,6 +31,20 @@ struct MessageRecord {
     std::string tool_calls_json;
 };
 
+struct ChatContextDebugEntry {
+    std::string id;
+    std::string created_at;
+    std::string kind = "request";
+    size_t user_message_index = 0;
+    std::string provider_id;
+    std::string model_id;
+    std::string system_prompt;
+    std::vector<MessageRecord> request_messages;
+    std::string compressed_context;
+    std::string mcp_context;
+    std::string rag_context;
+};
+
 struct ChatInfo {
     std::string id;
     std::string name;
@@ -129,10 +143,15 @@ struct ProjectRagBinding {
     bool enabled = true;
     bool can_read = true;
     bool can_write = false;
+    bool expose_as_tool = false;
     bool can_delete = false;
+    bool can_export = false;
+    std::string export_path_template;
     bool default_ingest_target = false;
     int retrieval_priority = 10;
     int max_chunks = 8;
+    double default_min_confidence = 0.0;
+    double default_max_confidence = 1.0;
 };
 
 struct RagDocumentRecord {
@@ -250,6 +269,33 @@ struct RagExtractionToolInstallResult {
     std::string message;
 };
 
+struct RagImageIngestSettings {
+    bool enabled = true;
+    std::string mode = "tesseract_cpu";
+    std::string tesseract_language = "eng";
+    std::string paddle_python_command = "python";
+    std::string paddle_language = "en";
+    std::string vision_provider = "ollama";
+    std::string vision_base_url = "http://localhost:11434";
+    std::string vision_model = "qwen2.5vl:7b";
+    std::string vision_prompt;
+    bool include_ocr_text = true;
+    bool include_visual_description = true;
+};
+
+struct RagImageIngestRuntimeStatus {
+    std::string mode;
+    std::string message;
+    bool enabled = true;
+    bool tesseract_installed = false;
+    bool python_installed = false;
+    bool paddleocr_installed = false;
+    bool ollama_installed = false;
+    bool vision_endpoint_running = false;
+    std::string log_path;
+    std::string recent_log;
+};
+
 struct RagQueryResult {
     std::string rag_id;
     std::string rag_name;
@@ -262,4 +308,107 @@ struct RagQueryResult {
     std::string metadata_json;
     std::string last_indexed_at;
     double score = 0.0;
+};
+
+// ===== Context Compression Types =====
+
+enum class ContextCompressionStrategy {
+    None,
+    TruncateTop,
+    HierarchicalStructured,
+};
+
+struct Layer1Config {
+    bool enabled = true;
+    int max_pins = 10;
+    bool pin_code_blocks = true;
+    bool pin_urls = true;
+    bool pin_numbers = true;
+    bool pin_first_message = true;
+    bool pin_explicit_instructions = true;
+    bool pin_user_flagged = true;  // user may add [PIN] or explicit remember/important markers
+};
+
+struct Layer2Config {
+    bool enabled = true;
+    std::string model_id;
+    std::string model_provider_id;
+    int max_tokens = 500;
+    int trigger_threshold_turns = 8;
+};
+
+struct Layer3Config {
+    bool enabled = true;
+    std::string model_id;
+    std::string model_provider_id;
+    int max_tokens = 800;
+};
+
+struct Layer4Config {
+    bool enabled = true;
+    int min_recent_turns = 2;
+};
+
+struct ContextCompressionLayerSettings {
+    Layer1Config layer1;
+    Layer2Config layer2;
+    Layer3Config layer3;
+    Layer4Config layer4;
+};
+
+struct ContextCompressionConfig {
+    std::string id;
+    std::string name;
+    ContextCompressionStrategy strategy = ContextCompressionStrategy::None;
+
+    // Common settings for all strategies
+    int frequency_every_n_prompts = 10;        // 0 = manual only
+    int context_window_trigger_percent = 70;  // 0 = manual only
+
+    // TruncateTop-specific settings
+    int truncate_top_keep_messages = 20;
+
+    // HierarchicalStructured-specific settings
+    ContextCompressionLayerSettings layers;
+};
+
+struct ChatCompressionState {
+    size_t last_compression_message_index = 0;
+    std::string latest_snapshot_id;
+    std::string current_compressed_context;
+    std::string layer2_previous_summary;
+    std::string layer3_previous_state_json;
+    std::vector<MessageRecord> layer1_pinned_messages;
+};
+
+struct ChatCompressionSnapshot {
+    std::string id;
+    std::string created_at;
+    std::string trigger_reason;
+    std::string config_id;
+    std::string config_name;
+    std::string strategy;
+    std::string previous_snapshot_id;
+    size_t previous_message_index = 0;
+    size_t compressed_through_message_index = 0;
+    std::string previous_compressed_context;
+    std::string compressed_context;
+    std::string layer2_summary;
+    std::string layer3_state_json;
+    std::vector<MessageRecord> pinned_messages;
+    std::vector<MessageRecord> source_messages;
+};
+
+struct ProjectCompressionSettings {
+    bool enabled = false;
+    std::string config_id;
+};
+
+struct ProjectSettings {
+    std::string project_name;
+    std::string project_instructions;
+    std::vector<ProjectMcpServerBinding> mcp_bindings;
+    std::vector<ContextCompressionConfig> compression_configs;
+    std::string selected_compression_config_id;
+    std::vector<ProjectRagBinding> rag_bindings;
 };

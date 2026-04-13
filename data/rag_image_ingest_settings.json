@@ -1,0 +1,13 @@
+{
+  "enabled": false,
+  "include_ocr_text": true,
+  "include_visual_description": true,
+  "mode": "tesseract_cpu",
+  "paddle_language": "en",
+  "paddle_python_command": "python",
+  "tesseract_language": "eng",
+  "vision_base_url": "http://localhost:11434",
+  "vision_model": "qwen2.5vl:7b",
+  "vision_prompt": "Describe this image for RAG ingestion. Include visible text, objects, layout, chart or graph interpretation, axes, legends, units, notable trends, and any uncertainty. Return concise Markdown with factual observations only.",
+  "vision_provider": "ollama"
+}

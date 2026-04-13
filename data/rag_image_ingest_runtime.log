@@ -1,0 +1,6 @@
+[2026-04-13T02:01:21Z] Launching visible image ingest installer command: winget install --id tesseract-ocr.tesseract -e --accept-package-agreements --accept-source-agreements
+[2026-04-13T02:01:38Z] Launching visible image ingest installer command: winget install --id tesseract-ocr.tesseract -e --accept-package-agreements --accept-source-agreements
+[2026-04-13T02:01:44Z] Launching visible image ingest installer command: python -m pip install paddleocr paddlepaddle
+[2026-04-13T02:01:51Z] Launching visible image ingest installer command: winget install --id tesseract-ocr.tesseract -e --accept-package-agreements --accept-source-agreements
+[2026-04-13T02:02:08Z] Saved image ingest settings. Mode: tesseract_cpu.
+[2026-04-13T02:02:21Z] Saved image ingest settings. Mode: tesseract_cpu.

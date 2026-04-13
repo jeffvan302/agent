@@ -1,7 +1,7 @@
 # RAG Service Requirements Specification
 
 **Status:** Implementation in progress - proof-of-concept RAG engine active  
-**Last Updated:** April 12, 2026  
+**Last Updated:** April 13, 2026
 **Purpose:** Define the requirements for a standalone, reusable Retrieval-Augmented Generation (RAG) service that can be attached to one or more agent projects.  
 **Primary Goal:** Provide local, efficient, low-cost document ingestion, indexing, vector search, and retrieval for use in AI chat/project context.
 
@@ -56,7 +56,7 @@ Project: Compliance Assistant
 - Cloud-hosted RAG is not required for the first implementation.
 - Multi-user network permissions are not required initially.
 - Complex access control lists beyond project-level read/write permissions are not required initially.
-- OCR for scanned PDFs is not required initially.
+- OCR for scanned PDFs is not required initially. Standalone image-file OCR/vision ingestion is now implemented as a proof-of-concept pipeline, but scanned/image-only PDF page OCR remains separate future work.
 - Fully automatic semantic deduplication is not required initially.
 - Cross-machine synchronization is not required initially.
 - Model-based reranking is not required initially, but the architecture should allow it later.
@@ -650,7 +650,7 @@ Discover source
 
 ### 8.1 Supported Initial Input Types
 
-Initial version:
+Implemented/prototype version:
 
 - `.txt`
 - `.md`
@@ -668,14 +668,33 @@ Initial version:
 - `.py`
 - `.ps1`
 - `.bat`
+- `.cmd`
+- `.ini`
+- `.toml`
+- `.yaml`
+- `.yml`
+- `.html`
+- `.htm`
+- `.css`
+- `.sql`
+- `.docx`
+- `.docm`
+- `.xlsx`
+- `.xlsm`
+- `.pdf`
+- `.png`
+- `.jpg`
+- `.jpeg`
+- `.bmp`
+- `.tif`
+- `.tiff`
+- `.webp`
 
 Later versions:
 
-- PDF text extraction
-- DOCX
-- XLSX
-- HTML
-- Images with OCR
+- Richer PDF/OCR handling for scanned or image-only PDFs
+- More robust GPU PaddleOCR packaging and model management
+- More vision-language providers beyond the first Ollama path
 - Audio transcription
 
 ### 8.2 Folder Ingestion
@@ -1159,18 +1178,21 @@ Errors should be visible per document and per ingestion job.
 - Add PDF text extraction
 - Add DOCX/XLSX extraction
 - Add HTML extraction
-- Add OCR option
+- Add standalone image OCR/vision ingestion
+- Add OCR option for scanned/image-only PDFs
 - Add audio transcription ingestion
 - Add preview-before-ingest
 
 ---
 
-## 18. Current Implementation Progress - April 12, 2026
+## 18. Current Implementation Progress - April 13, 2026
 
 This section records the current proof-of-concept implementation state observed in the application code. It should be treated as the baseline for the next RAG development steps.
 
 ### 18.1 Snapshot
 
+- Overall status: operational proof-of-concept. The RAG engine can be used today for local library creation, file/folder ingestion, rich document extraction, standalone image-file OCR/vision extraction, embedding-backed or keyword-only indexing, passive chat context, active model-callable tools, rebuild, and diagnostics.
+- Production readiness status: not production-ready yet for large-scale stores, long-running unattended ingestion, high-safety persistent memory, or fully controlled retrieval budgets. The highest-risk gaps are production vector indexing, ingestion job persistence, token-budget-aware context construction, RAG working sets, metadata filters, and safety/audit controls for write-enabled RAGs.
 - The RAG engine exists as an in-process C++ module exposed through `RagService`.
 - RAG libraries are independent from projects and can be attached to projects through project-to-RAG bindings.
 - The app now has a RAG Service Manager screen launched from the main window.
@@ -1181,8 +1203,125 @@ This section records the current proof-of-concept implementation state observed 
 - A "none" embedding provider is also supported for keyword-only or diagnostic use.
 - The initial vector search is implemented as a SQLite embedding BLOB scan with cosine similarity, not a production vector index.
 - Hybrid retrieval currently merges vector similarity with SQLite FTS5 keyword search and falls back to a simple keyword scan when needed.
-- Text, code, Markdown, JSON, CSV, XML, HTML, DOCX/DOCM, XLSX/XLSM, and PDF ingestion paths exist.
+- Text, code, Markdown, JSON, CSV, XML, HTML, DOCX/DOCM, XLSX/XLSM, PDF, and standalone image ingestion paths exist.
 - Rebuild Database now clears the indexed database rows and re-ingests saved original documents, rather than merely trying to refresh existing rows.
+- Active model-callable RAG tools are now wired into chat execution for models with tool support when a project RAG binding has Enable, Read, and Tool checked.
+- Current built-in RAG tools include `rag_list_libraries`, `rag_search`, `rag_get_document`, `rag_write_document_to_drive`, and `rag_ingest_generated_document`.
+- Project Settings now includes a fuller RAG binding editor for enabled/read/write/tool/delete/export/write-file permissions, write-file folder path template, default ingest target, retrieval priority, per-binding max chunks, and default confidence thresholds.
+
+### 18.1A Detailed Current RAG Baseline
+
+This subsection is the current detailed RAG implementation baseline. It captures features that are already present in code even when they were originally described as future requirements.
+
+#### Engine Boundary
+
+- The RAG engine runs in-process inside `agent.exe`.
+- The engine is exposed through the `RagService` C++ class.
+- The RAG service is not directly coupled to Win32 controls; UI windows call the service API.
+- The service is still designed as a separable internal module that can later become a DLL, sidecar service, plugin, or MCP server.
+- There is no external `rag_service.exe`, plugin interface, or MCP server wrapper yet.
+
+#### Public RAG Service Capabilities
+
+The current `RagService` API supports:
+
+- Initialize and locate the RAG root.
+- List, get, create, update, and delete RAG libraries.
+- Get library stats.
+- List indexed documents.
+- Get a single document record.
+- Load extracted document text, including reassembling segmented extracted documents from a segment manifest.
+- Preview files and folders before ingestion.
+- Ingest selected files.
+- Ingest selected folders, with recursive option.
+- Ingest generated Markdown/text documents created by the active RAG write tool.
+- Reindex a single document.
+- Delete a single document, with optional managed file deletion.
+- Load, save, upsert, and remove project RAG bindings.
+- Rebuild a library from saved original documents with progress callbacks.
+- Query one library.
+- Query all readable project-attached libraries.
+- Build passive chat context blocks.
+- Check, start, stop, install, and test embedding runtimes.
+- Inspect and launch installation for extraction tools.
+- Load and save system-wide image ingest settings.
+- Check image ingest runtime status for Tesseract, Python, PaddleOCR, Ollama, and the configured vision endpoint.
+- Launch visible installer commands for Tesseract, PaddleOCR, Ollama, and the configured Ollama vision model.
+
+#### Project Binding And Permissions
+
+- A project can attach to multiple RAG libraries.
+- Project bindings currently store Enabled, Read, Write, Tool, Delete, Export/Write file, Write-file folder path template, Default ingest target, Retrieval priority, Max chunks, and default minimum/maximum confidence thresholds.
+- The RAG Service Manager quick-attach buttons can attach the selected RAG as read-only or read/write.
+- Project Settings can toggle Enabled, Read, Write, Tool, Delete, Write file, and Default ingest target.
+- Project Settings can configure the write-file folder path template for RAG document exports; the path may include project variable placeholders such as `$<ProjectFolder>$`.
+- Project Settings can edit Retrieval priority, Max chunks, default minimum confidence, and default maximum confidence.
+- Tool exposure requires Enabled and Read.
+- Write file/export requires Enabled and Read.
+- Write requires Enabled and Read.
+- Write-capable active tools require Write.
+- Delete permission and Default ingest target require Enabled, Read, and Write.
+- Only one RAG binding can be marked as the project's default ingest target at a time.
+- Delete and Write file/export permissions are configurable in Project Settings; write-file export is enforced by the active RAG tool, while document deletion still needs a separate project-permission check.
+
+#### Passive RAG Context Injection
+
+- Passive RAG context injection still runs during chat send for readable attached RAGs.
+- The query is based on the current user message.
+- Returned chunks are formatted into a "Retrieved Project Knowledge" system prompt block.
+- The context block includes RAG name, document title, chunk ID, source path, retrieval method, score, metadata JSON, and text.
+- Passive injection uses a fixed global result limit in the chat send path and per-binding max chunks in project querying.
+- Passive injection filters results through each binding's default minimum/maximum confidence thresholds.
+- Passive injection does not yet use the selected model's `context_window` for token-budget-aware trimming.
+- There is no per-project or per-RAG switch yet to disable passive injection while leaving active RAG tools enabled.
+
+#### Active RAG Tool Mode
+
+- Active RAG tools are advertised only when the selected model supports tools and the active project has at least one enabled readable RAG binding with Tool checked.
+- Active RAG tools are inserted into the same OpenAI-compatible `tools` array as MCP tools.
+- RAG tool calls are routed inside the chat tool loop rather than through an external MCP server.
+- RAG tool calls are shown in the existing tool trace pane as `RAG / <tool name>`.
+- RAG tool results are returned to the model as JSON text in standard tool result messages.
+- RAG tool definitions are intentionally explicit about when to use each tool, what each tool returns, what defaults apply, and which follow-up tool should be used next.
+- `rag_list_libraries` returns the active project's exposed RAG libraries with name, description, storage policy, embedding settings, vector backend, permissions, retrieval priority, max chunks, default confidence window, and configured write-file folder template.
+- `rag_list_libraries` also returns per-library `available_tool_actions` and a top-level recommended workflow so the model can choose between search, document retrieval, write-to-drive export, and generated-document ingestion without guessing.
+- `rag_search` can search all exposed readable RAGs or a caller-provided list of RAG IDs.
+- `rag_search` supports query, max results, candidate limit, minimum confidence, maximum confidence, include text, and retrieval mode intent.
+- When `rag_search` omits minimum or maximum confidence, it uses the selected RAG's project binding default for that side of the confidence window.
+- `rag_search` returns the confidence window used for each searched RAG library for diagnostics.
+- `rag_search` returns results sorted by score/confidence, with source, document, chunk, retrieval method, metadata, and optional text.
+- `rag_search` confidence is currently normalized by clamping the existing retrieval score into the `0.0` to `1.0` range.
+- `rag_search` accepts `retrieval_mode`, but the current backend still runs the hybrid/fallback retrieval path and reports the actual retrieval method per result.
+- `rag_get_document` returns document metadata, managed source path information, extracted relative path, original URI, MIME/file metadata, provenance metadata, and optional extracted text.
+- `rag_get_document` can reassemble segmented rich-document extraction output from the segment manifest up to the requested character limit.
+- `rag_write_document_to_drive` writes either the managed/file-backed original document or the extracted Markdown/text representation to the RAG binding's configured write-file folder without using filesystem MCP tools.
+- `rag_write_document_to_drive` accepts either a full relative `target_relative_path` or a `target_folder_relative_path` plus optional `target_file_name`.
+- `rag_write_document_to_drive` expands project variable placeholders in the configured folder, requires an absolute resolved folder, automatically creates the configured folder and any missing nested target folders, rejects absolute or `..` target paths, and refuses to overwrite existing files unless `overwrite=true`.
+- `rag_ingest_generated_document` writes generated Markdown/text content into a write-enabled exposed RAG.
+- If `rag_ingest_generated_document` does not receive a `rag_id`, it uses the default ingest target if configured, otherwise the only write-enabled exposed RAG when exactly one exists.
+- Generated documents are stored under `documents/generated_sources` before normal ingestion and indexing.
+- Generated documents receive provenance metadata including generated timestamp and generated document ID.
+- There is no active RAG working set yet; search results are not pinned into future prompts unless the model summarizes them into the conversation or the passive RAG injector retrieves them later.
+- The active write-file tool can export managed originals and extracted Markdown/text into the configured project folder. A richer export history/provenance screen is still pending.
+- There is no active tool for ingesting an existing project file or web-discovered document yet.
+
+#### UI And Diagnostics
+
+- The RAG Service Manager is launched from the main window's `RAG Service` button.
+- The manager displays libraries, details, stats, binding state, and status messages.
+- The manager supports Add, Edit, Remove, Attach Read-Only, Attach Read/Write, Detach, Install Tools, Image Ingest Settings, Ingest Files, Ingest Folder, Rebuild Database, Browse Docs, Reindex Doc, Delete Doc, Search, and Close.
+- File and folder ingestion run on background threads and post completion back to the UI.
+- Rebuild posts progress updates back to the UI and updates the progress bar.
+- Browse Docs shows document IDs, titles, source URIs, stored/extracted paths, metadata, chunk count, and embedding count.
+- Reindex and Delete currently ask for a document ID from the user.
+- Delete can remove database rows only or database rows plus managed original/extracted files.
+- The extraction tool screen lists installed/missing tools, recommended status, purpose, notes, and install command.
+- The extraction tool installer opens a visible command window and uses `winget` where available.
+- The Image Ingest Settings screen is system-wide rather than per-project or per-RAG. It provides CPU Tesseract OCR mode, GPU PaddleOCR mode, full vision-language mode, Tesseract/Paddle/Ollama installer buttons, Ollama vision-model pull, provider/model/base-URL fields, prompt editing, and diagnostics.
+- The RAG library editor has one screen for name, description, storage location, enabled state, file limits, chunking, embedding provider/base/model/dimensions, vector backend, segmentation settings, runtime diagnostics, runtime control buttons, install buttons, test embedding, and recent log output.
+- The embedding runtime log is written to `data/rag_embedding_runtime.log`.
+- The image ingest runtime/settings log is written to `data/rag_image_ingest_runtime.log`.
+- There is not yet a dedicated RAG injected-context viewer or RAG working-set diagnostics screen.
 
 ### 18.2 Implemented Data Model
 
@@ -1198,9 +1337,13 @@ The following data structures exist in the application:
   - RAG library ID.
   - Enabled flag.
   - Read, write, and delete permissions.
+  - Export/write-file permission.
+  - Write-file folder path template.
+  - Tool exposure flag for model-callable RAG tools.
   - Default ingest target flag.
   - Retrieval priority.
   - Per-binding max chunks.
+  - Default minimum and maximum confidence thresholds.
 - `RagDocumentRecord`
   - Document ID, RAG ID, display name, original source URI, source type.
   - Stored original relative path and extracted relative path.
@@ -1210,6 +1353,17 @@ The following data structures exist in the application:
   - Chunk ID, document ID, chunk index, text, offsets, token estimate, metadata JSON.
 - Diagnostic and workflow types
   - Library stats, document previews, ingestion progress, embedding runtime status, embedding test results, extraction tool status, and query results.
+- `RagImageIngestSettings`
+  - System-wide enabled flag.
+  - Mode: `tesseract_cpu`, `paddle_ocr_gpu`, or `vision_language_gpu`.
+  - Tesseract language.
+  - PaddleOCR Python command and language.
+  - Vision provider, base URL, model, and description prompt.
+  - Flags controlling whether OCR text and visual descriptions are included in extracted Markdown.
+- `RagImageIngestRuntimeStatus`
+  - Current mode and readiness message.
+  - Tesseract, Python, PaddleOCR, Ollama, and vision-endpoint status.
+  - Diagnostics log path and recent log tail.
 
 ### 18.3 Current Storage And Data Layout
 
@@ -1222,7 +1376,10 @@ The following data structures exist in the application:
   - `rag_catalog.json` as a fallback catalog.
   - `documents/original` for managed copies of source documents.
   - `documents/extracted` for extracted text or Markdown-like representations.
+  - `documents/generated_sources` for generated documents created by the active RAG write tool before indexing.
   - `indexes` for future external vector index files.
+- System-wide image ingest settings are stored at `data/rag_image_ingest_settings.json`.
+- Image ingest diagnostics are written to `data/rag_image_ingest_runtime.log`.
 - SQLite is configured with WAL mode, normal synchronous mode, and foreign keys.
 - The SQLite schema currently includes:
   - `documents`
@@ -1247,10 +1404,11 @@ The following data structures exist in the application:
 - The ingest preview workflow reports supported files, skipped files, and errors before import.
 - Supported plain-text or text-like extensions include TXT, Markdown, JSON, CSV, logs, XML, common C/C++/C#/JavaScript/TypeScript/Python/PowerShell/batch/config formats, HTML, CSS, and SQL.
 - Supported rich document extensions currently include DOCX, DOCM, XLSX, XLSM, and PDF.
+- Supported standalone image extensions currently include PNG, JPG/JPEG, BMP, TIF/TIFF, and WebP.
 - The import path computes a content hash and can skip unchanged files during normal ingestion.
 - Existing chunks for a document are deleted and replaced when a source is re-ingested.
 - If the library uses managed storage, source files are copied into `documents/original`.
-- Extracted rich text is written into `documents/extracted`.
+- Extracted rich text and image-derived Markdown are written into `documents/extracted`.
 - A configurable max file size is enforced before ingestion.
 - Text is sanitized before JSON embedding requests and before storage to avoid invalid UTF-8 failures.
 
@@ -1266,7 +1424,24 @@ The following data structures exist in the application:
   - A built-in literal text fallback for simple PDFs.
 - Extraction tool diagnostics list recommended and optional tools.
 - The installer workflow can launch `winget` to install recommended missing tools such as Poppler.
-- OCR for scanned PDFs is not yet implemented. Tesseract is listed as a future extraction tool.
+- OCR for scanned/image-only PDFs is not yet implemented. Standalone image files use the separate image ingest pipeline below.
+
+### 18.5A Image Ingestion And Vision Extraction
+
+- Image ingestion is implemented as a system-wide setting opened from the RAG Service Manager using the `Image Ingest Settings` button beside `Install Tools`.
+- Image settings are not per-project and not per-RAG. All RAG libraries use the same image ingest pipeline when image files are imported.
+- Default mode is CPU-safe Tesseract OCR.
+- GPU OCR mode attempts PaddleOCR through a configured Python command and falls back to Tesseract OCR when PaddleOCR is unavailable or fails.
+- Full vision mode attempts OCR plus an Ollama vision-language description using the configured base URL, model, and prompt.
+- The default configured vision model is `qwen2.5vl:7b`, but the field is editable so the user can select an available Qwen2.5-VL, InternVL-style, or other Ollama-served vision model.
+- The settings window includes installer buttons for Tesseract, PaddleOCR, and Ollama, plus a model-pull button that runs `ollama pull <configured model>`.
+- Image originals are preserved under the same managed original-document storage path as other ingested files.
+- Image-derived Markdown contains metadata, warnings, optional visual description, and OCR text sections.
+- The extracted Markdown is chunked, embedded, searched, rebuilt, exported, and retrieved through the same RAG document pipeline as rich documents.
+- Import preview checks whether the selected image pipeline has at least one viable path before marking image files as ready.
+- Ingested image metadata records the extractor path used and marks the extracted content as Markdown.
+- The first VLM integration path uses Ollama `/api/generate` with image input. LM Studio/OpenAI-compatible vision providers are not wired in yet.
+- The app does not yet automatically start an Ollama vision runtime from the image settings screen; the endpoint must be running for full vision descriptions to succeed.
 
 ### 18.6 Large Extracted Document Segmentation
 
@@ -1315,7 +1490,214 @@ The following data structures exist in the application:
 - If no FTS/vector result is available, a simple keyword fallback scan is used.
 - Retrieval result metadata includes library name, document name, chunk ID, source path, score, and search method.
 - The chat request builder appends a "Retrieved Project Knowledge" block to the system prompt when RAG results are found.
+- The chat request builder also exposes built-in RAG tools when the selected model supports tools and the active project has tool-enabled readable RAG bindings.
 - RAG context injection currently uses a chunk count limit but does not yet apply token-budget-aware trimming.
+
+### 18.8A Active RAG Tool Mode
+
+The current RAG implementation supports both passive and active usage.
+
+Passive mode automatically queries readable project RAG libraries at send time and injects matching chunks into the system prompt.
+
+Active mode exposes built-in RAG tools to the model through the same OpenAI-compatible `tools` array used for MCP tools. A tool is exposed only when the selected model supports tools and the current project binding has Enable, Read, and Tool checked. Write actions additionally require the binding's Write permission.
+
+In active RAG tool mode, the model can decide when to search, which RAG library to search, whether the confidence is good enough, whether more document text is needed, and whether generated content should be persisted into a write-enabled RAG. Ongoing selected-reference context and abandonment are still future work.
+
+Both modes should remain available:
+
+- Passive auto-injection for simple projects where RAG should always provide background context.
+- Active RAG tool mode for agent workflows, deep searches, research tasks, document retrieval, and selective context building.
+
+#### 18.8A.1 Model-Visible RAG Library Descriptions
+
+Each RAG library's name and description is visible to the model through `rag_list_libraries` when RAG tools are exposed.
+
+The description is important because it tells the model what the RAG is for and how it should be used.
+
+Examples:
+
+- "Internal HR Documents: Use for company policy, benefits, onboarding, and employee-process questions."
+- "Legal Reference Library: Use for contract templates, prior legal research, regulatory summaries, and source document retrieval."
+- "Project Generated Research: Use as a writable project research memory for web-found documents and generated summaries."
+
+The model-visible RAG listing currently includes:
+
+- RAG library ID.
+- Name.
+- Description.
+- Whether it is enabled for the active project.
+- Read permission.
+- Write permission.
+- Delete permission.
+- Export/write-file permission.
+- Write-file folder path template.
+- Default ingest target flag.
+- Retrieval priority.
+- Default maximum chunks.
+- Default minimum and maximum confidence thresholds.
+- Storage/source policy summary, such as managed-copy or reference-in-place.
+- Embedding provider, model, base URL, and vector backend.
+
+Future listing fields should include metadata schemas and configured retrieval filters.
+
+#### 18.8A.2 Implemented And Planned RAG Tool Functions
+
+The active RAG tool interface currently exposes:
+
+```text
+rag_list_libraries()
+```
+
+Returns project-attached RAG libraries that are enabled, readable, and exposed as tools. The response includes model-visible descriptions, read/write/delete/export/default-ingest permissions, retrieval priority, max chunks, default confidence window, configured write-file folder template, storage policy, and embedding/vector settings.
+
+```text
+rag_search(query, rag_ids?, max_results?, candidate_limit?, min_confidence?, max_confidence?, retrieval_mode?, include_text?)
+```
+
+Searches one or more RAG libraries.
+
+Results are returned ordered by score/confidence from highest to lowest.
+
+The implemented tool supports these result-selection strategies:
+
+- Return the top N results regardless of confidence.
+- Return only results above a minimum confidence threshold.
+- Return only results between a confidence range, such as 0.25 to 0.45, for needle-in-a-haystack exploration.
+- Return at most N results from that confidence window.
+- Search one RAG library or all readable project-attached RAG libraries.
+- Increase `candidate_limit` before threshold filtering for broader searches.
+- Optionally include chunk text or metadata-only results.
+- Use each RAG binding's default confidence threshold when a request omits `min_confidence` or `max_confidence`.
+- Return per-RAG confidence windows in the tool response for debugging and repeatability.
+
+The current backend always executes the existing hybrid/fallback retrieval path and reports the actual `retrieval_method` per result. Requested `retrieval_mode` is accepted as intent, but vector-only, keyword-only, and reranked execution modes are not separate backends yet.
+
+If no result reaches the requested threshold, the tool should return a clear "no sufficiently relevant results" response rather than injecting weak results automatically.
+
+The model may then decide to:
+
+- Lower the threshold.
+- Ask for the top five or top ten results regardless of score.
+- Search a different RAG.
+- Search a lower-confidence band.
+- Abandon the RAG search path.
+
+```text
+rag_get_document(rag_id, document_id, include_text?, max_chars?)
+```
+
+Retrieves document metadata, extracted text, managed original path information, source URI, MIME type, stored relative paths, provenance metadata, and truncation status. Segmented extracted documents are reassembled from their segment manifest up to the requested character limit.
+
+```text
+rag_write_document_to_drive(rag_id, document_id, version, target_relative_path?, target_folder_relative_path?, target_file_name?, overwrite?)
+```
+
+Writes a RAG document directly to the configured write-file folder for that project binding. This does not call any filesystem MCP server or external tool.
+
+Supported `version` values:
+
+- `original` copies the managed original file when available, or the file-backed original path for reference-in-place libraries.
+- `extracted_markdown` writes the extracted Markdown/text representation created during ingestion. Segmented rich-document extractions are reassembled before writing.
+
+The tool enforces these safety rules:
+
+- The RAG binding must be Enabled, Read, Tool, and Write file/export enabled.
+- The configured folder path must expand from project variable placeholders into an absolute path.
+- The caller can provide either a full relative target file path or a relative target folder plus optional file name.
+- The target path and target folder are relative to the configured folder.
+- Absolute target paths and `..` path traversal are rejected.
+- Missing configured folders and missing nested target folders are created automatically by the tool; the model does not need to call any separate folder creation tool.
+- Existing files are not overwritten unless `overwrite=true`.
+- The tool response includes the resolved folder, final target path, relative path, source version, document title, whether missing directories were created, and byte count.
+
+```text
+rag_ingest_generated_document(rag_id?, title, content, source_uri?, metadata?)
+```
+
+Allows a model to create a Markdown/text document and ingest it into a write-enabled RAG library. If `rag_id` is omitted, the tool uses the default ingest target when configured, otherwise the only write-enabled exposed RAG if there is exactly one. Generated documents are first written under `documents/generated_sources`, receive provenance metadata, and are then passed through the normal ingestion/indexing pipeline so rebuild can use the saved generated original.
+
+The remaining planned active RAG functions are:
+
+```text
+rag_add_to_context(result_ids, reason?, expiry?)
+```
+
+Adds selected search results into a per-chat RAG working set.
+
+The selected results should be injected into later prompts until removed, expired, superseded, or compressed into the chat context.
+
+```text
+rag_abandon_context(result_ids? or all?)
+```
+
+Removes selected RAG references from the working set when the model decides they are irrelevant or no longer useful.
+
+```text
+rag_ingest_project_file(rag_id, project_relative_path, metadata?)
+```
+
+Adds an existing file from the active project folder into a write-enabled RAG.
+
+This supports workflows where another tool creates the file first, then RAG indexes it.
+
+```text
+rag_ingest_web_document(rag_id, source_url, title, content or captured_file, metadata?)
+```
+
+Future workflow for adding web-sourced documents discovered during research.
+
+If the model uses web search or a browser/search MCP tool to find relevant documents, it should be able to preserve those documents or summaries into a write-enabled RAG.
+
+The stored metadata should include:
+
+- Original URL.
+- Retrieval timestamp.
+- Source title.
+- Content hash.
+- Tool/source that found the document.
+- Project ID and chat ID, when applicable.
+- Model-generated summary, if available.
+- User confirmation status, if confirmation is required.
+
+#### 18.8A.3 RAG Working Set
+
+Active RAG search should not automatically inject every search result into future prompts.
+
+Instead, selected results should be stored in a per-chat RAG working set.
+
+Each working-set item should include:
+
+- RAG ID and RAG name.
+- Document ID.
+- Chunk ID or document-level reference.
+- Source path or URL.
+- Confidence score.
+- Retrieval method.
+- Selected text.
+- Metadata JSON.
+- Reason selected.
+- Selected by model/user/system.
+- Created timestamp.
+- Expiry policy.
+- Abandoned flag and abandonment reason.
+
+The request builder should inject the active working set into the context window with token-budget limits.
+
+Context compression should be able to fold selected RAG working-set facts into compressed context when appropriate, while preserving source labels.
+
+#### 18.8A.4 Writable RAG Safety And Provenance
+
+Write-enabled RAG libraries are powerful and should be treated as persistent project memory.
+
+Any tool that writes generated or web-derived content into a RAG must preserve provenance and avoid silently polluting high-trust libraries.
+
+Recommended controls:
+
+- Project binding controls whether a RAG is readable, writable, deletable, exportable, and a default ingest target.
+- RAG descriptions should tell the model whether the library is authoritative, experimental, generated, temporary, legal/HR-specific, project-specific, or archival.
+- Generated content should default to a generated/research RAG rather than an authoritative source RAG unless explicitly configured.
+- The UI should expose pending or recent RAG writes for diagnostics.
+- For higher-safety modes, generated/web ingestion should require user confirmation before indexing.
 
 ### 18.9 Current UI Workflows
 
@@ -1328,6 +1710,7 @@ The following data structures exist in the application:
   - Attach selected library to the active project as read/write.
   - Detach selected library from the active project.
   - Install extraction tools.
+  - Edit system-wide Image Ingest Settings.
   - Ingest files.
   - Ingest folder.
   - Rebuild database.
@@ -1336,24 +1719,42 @@ The following data structures exist in the application:
   - Delete a document by ID.
   - Search selected library or active project RAG context.
   - View progress and status messages.
+- Project Settings supports enabling a RAG binding, setting read/write/delete/write-file access, configuring the write-file folder path template, marking that binding for active RAG tool exposure, selecting the default ingest target, and editing retrieval priority, max chunks, and default confidence thresholds.
+- When the selected model supports tools, the chat execution loop exposes active RAG tools beside MCP tools and routes RAG tool results back through the normal tool-call loop.
 - The manager displays library details, stats, binding state, and rebuild-required warnings.
 - The rebuild workflow asks for confirmation, clears database content, re-ingests saved originals, and updates the progress bar.
 - The folder ingest workflow asks whether ingestion should recurse into child folders.
 - The document browse and search workflows expose provenance and metadata for diagnostics.
-- There is no full binding editor yet for changing retrieval priority, per-binding max chunks, default ingest target, or delete permission after quick attach.
+- RAG tool calls are shown in the existing tool trace pane as `RAG / <tool name>`.
 
 ### 18.10 Reliability Fixes Already Applied
 
 - PDF and embedding text paths now sanitize invalid UTF-8 and problematic control bytes before JSON serialization.
 - Working rich document extraction writes sanitized extracted text.
+- Standalone image ingestion now converts supported images into Markdown through the selected system-wide OCR/vision pipeline while preserving the original image.
 - Rebuild no longer depends on the previous chunk/index state. It clears rows and re-ingests saved originals.
 - Large extracted documents can be segmented before chunking to avoid processing one huge extracted file at once.
 - The Poppler `pdftotext.exe` path is now a visible diagnostic/install workflow instead of a hidden dependency.
 
 ### 18.11 Partially Implemented Or Important Gaps
 
+The following gaps are current as of April 13, 2026. Items are grouped by risk rather than by original phase.
+
+#### 18.11.1 Retrieval And Context Gaps
+
 - A production vector backend is not implemented yet. The `vector_backend` setting exists, but only the SQLite vector BLOB scan is active.
 - HNSWlib, FAISS, Qdrant, sqlite-vss, and ChromaDB integrations are not yet implemented.
+- A per-chat RAG working set for selected/pinned/abandoned references is not implemented.
+- Passive RAG context injection and active RAG tool mode can both be enabled at the same time. There is no per-project/per-RAG policy yet to choose passive-only, active-only, both, or disabled retrieval behavior.
+- RAG context injection does not yet show a dedicated "what was injected" diagnostic screen.
+- RAG context injection does not yet integrate with the configured model context window for token-budget-aware trimming.
+- Advanced metadata fields, tags, and metadata filters are not implemented.
+- Query reranking is not implemented.
+- Query diversity controls are not implemented.
+- Tool-driven RAG search with minimum confidence, maximum confidence, top-N fallback, lower-confidence-band search, and per-call result windows is implemented for active RAG tool mode, but it does not yet support metadata filters, diversity controls, independent vector-only/keyword-only execution, or reranking.
+
+#### 18.11.2 Ingestion And Index Maintenance Gaps
+
 - There is no persistent ingestion job queue with job IDs, pause, resume, cancel, retry, or crash recovery.
 - `ingestion_events` exists in SQLite but is not yet used as a complete diagnostic/job table.
 - Incremental indexing is file-level only. There is no per-chunk diffing or partial re-embedding.
@@ -1363,30 +1764,45 @@ The following data structures exist in the application:
 - Hidden/system file policy is not yet exposed.
 - Paste-text ingestion, chat-message ingestion, summary ingestion, attachment ingestion, and MCP-result ingestion are not implemented.
 - RAG indexing of chat messages and condensed summaries is not implemented.
+
+#### 18.11.3 Rich Document, Image, And Media Gaps
+
 - OCR for scanned/image PDFs is not implemented.
 - Audio transcription ingestion is not implemented.
-- Image ingestion and image captioning are not implemented.
-- Advanced metadata fields, tags, and metadata filters are not implemented.
-- Query reranking is not implemented.
-- Query diversity controls and score thresholds are not implemented.
-- RAG context injection does not yet show a dedicated "what was injected" diagnostic screen.
-- RAG context injection does not yet integrate with the configured model context window for token-budget-aware trimming.
-- Per-project RAG bindings store read/write/delete/default/priority/max-chunks values, but the UI only exposes quick read-only/read-write attach and detach.
-- Delete permission exists in the model but document deletion currently follows the manager workflow rather than a complete per-project permission editor.
+- Image ingestion is implemented for standalone image files, but the GPU path is still an early adapter: PaddleOCR installation/runtime packaging, GPU detection, automatic model downloads, and non-Ollama VLM providers need hardening.
+- Full image captioning/description currently depends on an already-running Ollama endpoint and a compatible local vision model.
+
+#### 18.11.4 Write, Export, And Safety Gaps
+
+- RAG document write-to-drive/export is implemented for original files and extracted Markdown/text through `rag_write_document_to_drive`; export history and a richer provenance/audit UI remain pending.
+- Generated-document ingestion through model-callable RAG tools is implemented for write-enabled exposed RAGs. Project-file ingestion and web-document ingestion remain future work.
+- Generated-document ingestion through the active tool does not yet have an optional user-confirmation workflow or a recent-write review screen.
+- Model-visible RAG descriptions are exposed through `rag_list_libraries` for agent planning.
+- Per-project RAG bindings now expose read/write/delete/write-file/default-ingest/priority/max-chunks/confidence-threshold values in Project Settings, but RAG Service Manager quick attach/detach remains a simpler shortcut workflow.
+- Delete permission exists in the model and Project Settings UI, but document deletion currently follows the manager workflow rather than project binding policy.
+
+#### 18.11.5 Packaging, Security, And Service Boundary Gaps
+
 - The app still runs the RAG engine in-process. It has not been extracted to a plugin, DLL, separate `rag_service.exe`, or MCP server.
 - API key encryption and remote embedding privacy warnings are not complete.
 - Storage folder migration for an existing RAG library is not implemented. The edit screen treats storage location as effectively fixed after creation.
 
 ### 18.12 Recommended Next Implementation Order
 
-1. Add a full project RAG binding editor so the user can adjust read/write/delete permissions, retrieval priority, max chunks, and default ingest target.
-2. Add token-budget-aware RAG context construction using the selected model's optional context window value.
-3. Add a persistent ingestion job table and diagnostics screen using the existing `ingestion_events` schema.
-4. Add include/exclude filters, hidden/system file handling, and stronger inaccessible-file handling for real folder ingestion.
-5. Add "injected context" diagnostics so the user can see exactly which chunks were sent to the model for a chat turn.
-6. Add the first production vector backend, with HNSWlib as the likely local-first candidate and FAISS/Qdrant reserved for higher-volume or optional advanced paths.
-7. Add chat/message/summary indexing after the library ingestion and diagnostics workflow is stable.
-8. Add OCR for scanned PDFs after the text-PDF pipeline is stable.
+1. Add a per-binding retrieval mode policy so each RAG can be passive-only, active-tool-only, both, or disabled for retrieval.
+2. Add a per-chat RAG working set with selected-reference context pinning, abandonment, expiry, and diagnostics.
+3. Add token-budget-aware RAG context construction using the selected model's optional `context_window` value.
+4. Add "injected context" and "RAG working set" diagnostics so the user can see exactly which chunks were sent to the model for a chat turn and which references were selected by the model.
+5. Add write-file/export history and provenance diagnostics for documents written from RAG to drive.
+6. Add project-file and web-document ingestion tools for write-enabled RAG libraries.
+7. Add recent-write diagnostics and optional user-confirmation policy for generated/web RAG writes.
+8. Add a persistent ingestion job table and diagnostics screen using the existing `ingestion_events` schema.
+9. Add include/exclude filters, hidden/system file handling, and stronger inaccessible-file handling for real folder ingestion.
+10. Add metadata filters, diversity controls, independent vector/keyword modes, and optional reranking to active `rag_search`.
+11. Add the first production vector backend, with HNSWlib as the likely local-first candidate and FAISS/Qdrant reserved for higher-volume or optional advanced paths.
+12. Add chat/message/summary indexing after the library ingestion and diagnostics workflow is stable.
+13. Harden image ingestion: GPU detection, PaddleOCR package/runtime validation, Ollama vision runtime start/stop, additional VLM providers, model availability checks, and batch/progress handling for many images.
+14. Add OCR for scanned/image-only PDFs after the standalone image pipeline and text-PDF pipeline are stable.
 
 ---
 
@@ -1402,3 +1818,148 @@ The following data structures exist in the application:
 - Should read-only RAG libraries be cryptographically sealed or only permission-protected in the app?
 - When should the in-process RAG engine be extracted into a separate `rag_service.exe`?
 - Should the future external RAG interface be a private app protocol, an MCP server, or both?
+- Which local-first vision provider should become the preferred production image understanding path: Ollama-served Qwen2.5-VL, InternVL-style models, LM Studio/OpenAI-compatible vision endpoints, or an embedded Python/transformers sidecar?
+- Should image ingestion store a separate structured vision metadata record in addition to the extracted Markdown, especially for charts, tables, and diagrams?
+- Should write-enabled RAG tool ingestion require user confirmation by default for authoritative libraries, while allowing automatic writes for scratch/research libraries?
+
+---
+
+## 20. Next Steps Toward The Full RAG Service
+
+This section is the actionable implementation roadmap from the current proof-of-concept toward a full local RAG service. The earlier sections describe the target requirements and current implementation status; this section identifies what should be done next, in priority order.
+
+### 20.1 Critical Next Steps
+
+These are the most important items to implement next because they affect correctness, model behavior, diagnostics, and the ability to trust RAG output.
+
+1. Implement per-binding retrieval mode policy.
+   - Add project/RAG binding settings for passive-only, active-tool-only, both, or disabled.
+   - Use this policy when building passive context and active tool definitions.
+   - This prevents duplicate retrieval behavior and lets projects decide whether RAG should be automatic background context or model-controlled search.
+
+2. Implement a per-chat RAG working set.
+   - Allow selected RAG search results or document references to be retained across later prompts.
+   - Track selected, abandoned, expired, and compressed references.
+   - Add model-callable tools such as `rag_add_to_context` and `rag_abandon_context`.
+   - This is the missing bridge between active RAG search and stable context over a multi-turn task.
+
+3. Add token-budget-aware RAG context construction.
+   - Use the selected model's optional `context_window` value when deciding how much RAG context can be injected.
+   - Budget for system prompt, project instructions, MCP context, tool definitions, compressed context, chat history, and retrieved RAG content.
+   - Trim by priority, confidence, recency, and working-set selection instead of only fixed chunk counts.
+
+4. Add RAG context diagnostics.
+   - Create a dedicated view showing exactly which RAG chunks were retrieved, selected, filtered, injected, skipped, or trimmed for a chat turn.
+   - Include RAG ID/name, document ID/title, chunk ID, score, retrieval method, metadata, and final injected character/token estimate.
+   - This is critical for debugging why the model did or did not know something.
+
+5. Add write/export audit history.
+   - Record every `rag_write_document_to_drive` and `rag_ingest_generated_document` event.
+   - Show source document, target path, generated/source URI, model/tool caller, timestamp, overwrite status, and project/chat ID.
+   - This is important before write-enabled RAGs become a normal workflow.
+
+### 20.2 High-Priority Reliability Work
+
+These items make ingestion safer and more repeatable for larger document sets.
+
+1. Implement persistent ingestion jobs.
+   - Use or extend the existing `ingestion_events` schema.
+   - Add job IDs, per-file status, progress, errors, retry state, cancellation, and crash recovery.
+   - Surface the job history in the RAG Service Manager.
+
+2. Harden folder ingestion.
+   - Add include/exclude glob filters.
+   - Add hidden/system file policy.
+   - Continue safely through permission-denied or locked files.
+   - Preserve skipped-file diagnostics in the persistent job record.
+
+3. Add project-file and web-document ingestion tools.
+   - `rag_ingest_project_file` should ingest an existing file from the active project folder into a write-enabled RAG.
+   - `rag_ingest_web_document` should store web-sourced documents or generated summaries with source URL, retrieval timestamp, tool provenance, and optional user confirmation.
+
+4. Add recent-write review and optional confirmation.
+   - Let authoritative RAGs require confirmation for generated/web writes.
+   - Allow scratch/research RAGs to accept automatic model writes when configured.
+
+### 20.3 Retrieval Quality Work
+
+These items improve search result quality, especially as libraries grow.
+
+1. Add metadata filters and user-defined tags.
+   - Support filtering by document type, source folder, original path, ingest source, date, tags, author/source, and custom metadata fields.
+   - Expose safe filter options through active RAG tools.
+
+2. Add query diversity controls.
+   - Avoid returning ten near-identical chunks from the same document when broader coverage would help.
+   - Add per-document caps and optional diversity scoring.
+
+3. Add independent retrieval modes.
+   - Implement true keyword-only, vector-only, hybrid, and fallback modes rather than treating `retrieval_mode` as intent only.
+   - Return the actual mode used for every result.
+
+4. Add optional reranking.
+   - Add a local or provider-backed reranker after candidate retrieval.
+   - Keep reranking optional because it adds latency and may require another model/provider.
+
+5. Add a production vector backend.
+   - Keep SQLite vector BLOB scan as a simple fallback.
+   - Add HNSWlib first if the goal is local, fast, low-cost vector search.
+   - Keep FAISS/Qdrant as advanced options for larger or specialized deployments.
+
+### 20.4 Rich Document And Image Work
+
+These items expand ingestion quality for non-text sources.
+
+1. Harden standalone image ingestion.
+   - Add GPU detection and clearer CPU/GPU status.
+   - Validate PaddleOCR package/runtime availability more accurately.
+   - Add model availability checks for Ollama vision models.
+   - Add batch progress for many images.
+   - Add LM Studio/OpenAI-compatible vision endpoint support if needed.
+
+2. Add scanned/image-only PDF OCR.
+   - Detect PDFs where text extraction returns little or no text.
+   - Render pages to images using Poppler or MuPDF.
+   - Run the existing image OCR/vision pipeline per page.
+   - Store page-level Markdown with page numbers and extraction metadata.
+
+3. Add structured image metadata.
+   - For charts, diagrams, and tables, store structured observations in metadata JSON in addition to Markdown.
+   - Include axes, units, legend labels, table headers, detected text, and uncertainty notes when available.
+
+4. Add audio transcription ingestion.
+   - Treat audio as another extraction pipeline that generates Markdown/text plus provenance metadata.
+
+### 20.5 Service Boundary And Packaging Work
+
+These items prepare the RAG engine to become reusable outside the current app process.
+
+1. Keep the in-process `RagService` API clean while adding features.
+   - Avoid coupling retrieval, ingestion, and storage logic to Win32 UI classes.
+   - Keep UI workflows as callers of the service API.
+
+2. Decide the future external interface.
+   - Candidate forms are DLL/plugin, sidecar `rag_service.exe`, MCP server, or a combination.
+   - A sidecar or MCP server becomes more attractive once ingestion jobs and production vector indexing are heavier.
+
+3. Add packaging and data-location cleanup.
+   - Move runtime data out of the source tree for packaged builds.
+   - Add migration rules for existing proof-of-concept data.
+   - Add backup/export/import for RAG libraries and project bindings.
+
+4. Add security hardening.
+   - Add DPAPI or equivalent protection where secrets are stored.
+   - Add explicit warnings for remote embedding/vision providers.
+   - Add stronger write/delete permission enforcement in all UI and tool paths.
+
+### 20.6 Recommended Immediate Sprint
+
+The next implementation sprint should focus on these items in order:
+
+1. Per-binding retrieval mode policy.
+2. Per-chat RAG working set.
+3. RAG injected-context and working-set diagnostics.
+4. Token-budget-aware RAG context trimming.
+5. Persistent ingestion job records.
+
+These five items are more critical than adding more file types because they determine whether RAG behavior is understandable, controllable, and safe during real project chats.

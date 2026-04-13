@@ -25,6 +25,8 @@ public:
     bool DeleteLibrary(const std::string& rag_id, std::string* error);
     RagLibraryStats GetStats(const std::string& rag_id) const;
     std::vector<RagDocumentSummary> ListDocuments(const std::string& rag_id) const;
+    std::optional<RagDocumentRecord> GetDocument(const std::string& rag_id, const std::string& document_id) const;
+    std::string LoadDocumentText(const std::string& rag_id, const std::string& document_id, size_t max_chars, bool* truncated, std::string* error) const;
     RagImportPreview PreviewFiles(const std::string& rag_id, const std::vector<std::filesystem::path>& files) const;
     RagImportPreview PreviewFolder(const std::string& rag_id, const std::filesystem::path& folder, bool recursive) const;
     RagIngestionResult ReindexDocument(const std::string& rag_id, const std::string& document_id);
@@ -37,6 +39,7 @@ public:
 
     RagIngestionResult IngestFiles(const std::string& rag_id, const std::vector<std::filesystem::path>& files);
     RagIngestionResult IngestFolder(const std::string& rag_id, const std::filesystem::path& folder, bool recursive);
+    RagIngestionResult IngestGeneratedDocument(const std::string& rag_id, const std::string& title, const std::string& content, const std::string& metadata_json, const std::string& source_uri);
     RagIngestionResult RebuildLibrary(const std::string& rag_id, std::function<void(const RagProgressUpdate&)> progress = {});
     std::vector<RagQueryResult> QueryRag(const std::string& rag_id, const std::string& query, int max_results) const;
     std::vector<RagQueryResult> QueryProject(const std::string& project_id, const std::string& query, int global_max_results) const;
@@ -49,6 +52,11 @@ public:
     RagEmbeddingTestResult TestEmbeddingProvider(const RagLibraryConfig& library) const;
     std::vector<RagExtractionToolStatus> GetExtractionToolStatus() const;
     RagExtractionToolInstallResult LaunchExtractionToolInstaller(bool recommended_only) const;
+    RagImageIngestSettings LoadImageIngestSettings() const;
+    void SaveImageIngestSettings(const RagImageIngestSettings& settings) const;
+    RagImageIngestRuntimeStatus GetImageIngestRuntimeStatus(const RagImageIngestSettings& settings) const;
+    RagExtractionToolInstallResult LaunchImageIngestToolInstaller(const RagImageIngestSettings& settings, const std::string& tool_id) const;
+    RagExtractionToolInstallResult LaunchImageVisionModelInstaller(const RagImageIngestSettings& settings) const;
 
     std::filesystem::path RagRoot() const;
 
@@ -64,10 +72,16 @@ private:
     std::filesystem::path RegistryPath() const;
     std::filesystem::path ProjectRagBindingsPath(const std::string& project_id) const;
     std::filesystem::path EmbeddingRuntimeLogPath() const;
+    std::filesystem::path ImageIngestSettingsPath() const;
+    std::filesystem::path ImageIngestLogPath() const;
+
     RagEmbeddingRuntimeStatus GetEmbeddingRuntimeStatusNoLock(const RagLibraryConfig& library) const;
     void EnsureEmbeddingRuntimeNoLock(const RagLibraryConfig& library) const;
     void AppendEmbeddingRuntimeLogNoLock(const std::string& message) const;
     std::string ReadEmbeddingRuntimeLogTailNoLock(size_t max_bytes = 12000) const;
+    RagImageIngestSettings LoadImageIngestSettingsNoLock() const;
+    void AppendImageIngestLogNoLock(const std::string& message) const;
+    std::string ReadImageIngestLogTailNoLock(size_t max_bytes = 12000) const;
     void ShutdownManagedEmbeddingRuntimes() const;
 
     std::vector<std::pair<std::string, std::filesystem::path>> LoadRegistryNoLock() const;

@@ -2,6 +2,7 @@
 
 #include "types.h"
 
+#include <optional>
 #include <functional>
 #include <string>
 #include <vector>
@@ -48,6 +49,7 @@ struct ChatCompletionResult {
     std::string finish_reason;
     std::string raw_message_json;
     std::string error;
+    MessageRecord message;  // Full message record with role and content
 };
 
 class OpenAIClient {
@@ -56,4 +58,10 @@ public:
     static ChatExecutionResult StreamChat(const ChatRequestOptions& request, const std::function<void(const std::string&)>& on_delta);
     static ChatCompletionResult CreateToolAwareCompletion(const ChatRequestOptions& request, const std::vector<ChatToolDefinition>& tools);
     static ChatCompletionResult StreamToolAwareCompletion(const ChatRequestOptions& request, const std::vector<ChatToolDefinition>& tools, const std::function<void(const std::string&)>& on_delta);
+    // Non-streaming completion for compression model calls
+    static ChatCompletionResult CreateSimpleCompletion(const ChatRequestOptions& request);
+
+    // Provider cache for compression model calls (L2/L3 of HSC)
+    static void SetProviderCache(const std::vector<ProviderConfig>& providers);
+    static std::optional<ProviderConfig> LookupProvider(const std::string& provider_id);
 };

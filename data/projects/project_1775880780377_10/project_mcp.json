@@ -24,15 +24,6 @@
     {
       "server_id": "mcp_server_1775857473938_6",
       "variables": []
-    },
-    {
-      "server_id": "mcp_server_1775879351362_7",
-      "variables": [
-        {
-          "name": "ProjectFolder",
-          "value": "K:\\tester"
-        }
-      ]
     }
   ]
 }

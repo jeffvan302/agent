@@ -80,7 +80,7 @@ if /I "%BUILD_TYPE%"=="release" (
 )
 
 set INCLUDES=/I"%SCRIPT_DIR%src" /I"%SCRIPT_DIR%third_party" /I"%SCRIPT_DIR%third_party\sqlite"
-set SOURCES=src\main.cpp src\util.cpp src\storage.cpp src\openai_client.cpp src\prompt_dialog.cpp src\project_setup_dialog.cpp src\provider_manager.cpp src\mcp_manager.cpp src\mcp_server_manager.cpp src\rag_service.cpp src\rag_service_manager.cpp third_party\sqlite\sqlite3.c
+set SOURCES=src\main.cpp src\util.cpp src\storage.cpp src\openai_client.cpp src\prompt_dialog.cpp src\project_setup_dialog.cpp src\project_settings_dialog.cpp src\provider_manager.cpp src\mcp_manager.cpp src\mcp_server_manager.cpp src\rag_service.cpp src\rag_service_manager.cpp src\context_compression.cpp src\context_compression_manager.cpp third_party\sqlite\sqlite3.c
 set LIBS=user32.lib gdi32.lib comctl32.lib comdlg32.lib shell32.lib shlwapi.lib ole32.lib winhttp.lib
 
 rc /nologo /fo "%OUT_DIR%\app.res" app.rc

@@ -3,7 +3,7 @@
 **Platform:** Windows (Win32/Win64)
 **Language:** C++ (C++20 or later)
 **Version:** 0.1.0 - Active Proof-of-Concept Implementation
-**Date:** April 12, 2026
+**Date:** April 13, 2026
 
 ---
 
@@ -13,7 +13,7 @@ A native Windows desktop application with a full graphical user interface (GUI) 
 
 **Every feature described in this document - configuration, model management, MCP server management, project/chat management, Model Tool authoring, logging, and diagnostics - must be accessible and manageable through the GUI.** While JSON config files remain human-editable as a fallback, the GUI is the primary interface for all operations.
 
-### 1.1 Current Implementation Snapshot - April 12, 2026
+### 1.1 Current Implementation Snapshot - April 13, 2026
 
 The current proof-of-concept is a native Win32 C++20 desktop application with these implemented or partially implemented foundations:
 
@@ -28,8 +28,165 @@ The current proof-of-concept is a native Win32 C++20 desktop application with th
 - Per-project and shared MCP server scopes, with per-project variable values and context injection for variables marked for prompt context.
 - Independent RAG libraries stored outside individual projects and attached to projects with read-only or read/write bindings.
 - RAG library management, local document ingestion, folder ingestion with recursive option, rebuild workflow, progress display, rich document extraction, embedding runtime controls, and project RAG context injection.
+- System-wide RAG image ingestion settings, with CPU Tesseract OCR as the default path, optional PaddleOCR mode, and optional Ollama vision-language description mode for richer image/graph understanding.
 - Local embedding provider support for Ollama and LM Studio, plus a `none` provider for keyword-only or diagnostic use.
 - Current RAG retrieval using SQLite metadata, SQLite FTS5 keyword search, embedding BLOB cosine scan, and hybrid result merging.
+- Built-in active RAG tools can be exposed to tool-capable models per project binding: list RAG libraries, search with confidence windows, retrieve extracted document text, and ingest generated documents into write-enabled RAGs.
+
+### 1.1A Detailed Implementation Baseline - April 13, 2026
+
+This section is the current source-of-truth implementation checkpoint. It captures features that have been added during the proof-of-concept, including several items that were added before they were fully reflected in the original phase roadmap.
+
+#### Application Shell, Storage, And Build
+
+- The application is a native Win32 C++20 desktop app built by `build.bat` into `build/agent.exe`.
+- The main window currently uses a project/chat tree, model dropdown, provider/MCP/project/RAG/context buttons, transcript pane, tool trace pane, multiline prompt input, Send, Compress, Context Msgs, and status label.
+- Application data is stored as JSON under the repository/app root during the proof-of-concept rather than in a Windows profile data directory.
+- Provider config is stored in `providers.json`.
+- MCP server config and global MCP variables are stored in `mcp_servers.json`.
+- Projects are stored under `data/projects/<project_id>`.
+- Chat metadata and messages are stored under `data/projects/<project_id>/chats/<chat_id>`.
+- Chat request diagnostics are stored in `context_debug.json`.
+- Chat compression state and history are stored in `compression_state.json` and `compression_history.json`.
+- Unified project settings are stored in `project_settings.json`, with migration from older `project_mcp.json`, `project_rag.json`, and `context_compression.json` files.
+- Context compression global configs are stored in `context_compression_configs.json`.
+
+#### Chat And OpenAI-Compatible API
+
+- Chat completions use the OpenAI-compatible `/v1/chat/completions` style request format.
+- Streaming chat output is rendered incrementally into the transcript pane and auto-scrolls while responses arrive.
+- Tool-aware streaming is implemented so assistant text and tool calls can be processed in the same request flow.
+- Message history persists assistant tool-call requests and tool result messages, including tool call IDs and raw tool-call JSON when available.
+- Invalid tool-call argument JSON is caught and returned to the model as a tool error instead of crashing or sending malformed arguments onward.
+- The tool loop supports up to 8 tool-call rounds before failing with a loop-limit error.
+- Model configuration includes optional `context_window`, `supports_streaming`, `supports_tools`, and `supports_vision` flags.
+- If `context_window` is positive, the app estimates request input plus reserved output tokens and warns/blocks before sending requests that are likely too large.
+- If `context_window` is blank or zero, context window preflight is ignored.
+
+#### Provider And Model Management
+
+- The Provider Manager can add, edit, remove, and save provider/model records.
+- Providers include name, base URL, API key, and model list.
+- Models include display name, context window, streaming/tool/vision support flags, and are selectable per chat.
+- A provider test path exists for verifying a minimal connection.
+- API keys are still stored in plaintext JSON; DPAPI encryption is not implemented yet.
+
+#### MCP Implementation
+
+- Stdio MCP servers are implemented using Windows process spawning and JSON-RPC over stdin/stdout.
+- MCP lifecycle currently includes `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`.
+- Tool discovery supports pagination by continuing `tools/list` when `nextCursor` is returned.
+- MCP tools are bridged into OpenAI-compatible `tools` definitions and invoked through the chat tool loop.
+- Tool results are displayed in the tool trace pane and persisted as tool messages in chat history.
+- MCP server add/edit is handled in one editor screen with name, command, arguments, working directory, environment entries, scope, variables, enabled, auto-connect, and Test.
+- Multiline arguments and environment entries are supported.
+- The MCP test workflow launches the configured process, sends initialize/initialized, calls `tools/list`, and captures stdin/stdout/stderr diagnostics.
+- Windows command launching handles direct executables, `.cmd`/`.bat` through `cmd.exe`, and PowerShell scripts through PowerShell.
+- MCP servers can be scoped as per-project process or shared process.
+- Shared MCP servers cannot use project variables.
+- MCP variables can be declared per server and globally.
+- MCP variables support `None`, `Folder`, and `File` value kinds.
+- Variables can be substituted in command, working directory, arguments, and environment entries using `$Name$` or `$<Name>$`.
+- Variables can be marked for prompt-context injection; injected values include both value and description.
+- Project Settings can select MCP servers and fill required variable values for the active project.
+- Auto-connect is supported for selected servers.
+- Streamable HTTP MCP, resources, prompts, roots, sampling, elicitation, cancellation, progress notifications, logging notifications, and ping are not implemented yet.
+
+#### Project Settings
+
+- Project Settings is now the central per-project configuration screen.
+- It can edit project name and selected MCP servers.
+- It can edit per-project MCP variable values, including browse buttons for Folder/File variable kinds.
+- It can select a global context compression configuration for the project.
+- It can enable/disable project RAG libraries and set Read, Write, Tool, Delete, Export, and Default ingest target flags.
+- It can edit per-binding RAG retrieval priority, maximum chunks, and default minimum/maximum confidence thresholds.
+- It can configure a per-binding RAG write-file folder path template for direct document export/write-to-drive workflows.
+- The RAG write-file folder path template supports project variable placeholders such as `$<ProjectFolder>$`, resolved from the active project's MCP variable values at tool-call time.
+- RAG Tool and Write file/export imply Enabled and Read.
+- RAG Write implies Enabled and Read.
+- RAG Delete and Default ingest target imply Enabled, Read, and Write.
+- Only one RAG binding can be marked as the project's default ingest target at a time.
+- Disabling RAG Read or Enabled clears dependent Tool, Write, Delete, Export, and Default ingest options.
+- Project instructions are editable in a multiline scrollable text box.
+- Project instructions can be imported from a Markdown file.
+- Project instructions are injected into the chat system prompt as "Project Instructions".
+
+#### Context Compression And Debugging
+
+- A Context Window manager exists and stores global context compression configs.
+- The manager supports a None strategy in data, plus editable Truncate Top and Hierarchical Structured strategies.
+- Truncate Top keeps a configured number of recent messages and builds a compressed block from the older context.
+- Hierarchical Structured compression implements Layer 1 pinned messages, Layer 2 running summary, Layer 3 structured state JSON, and Layer 4 recency window.
+- Layer 1 settings include max pins plus code block, URL, number, first-message, explicit-instruction, and user-flagged pin options.
+- Layer 2 and Layer 3 can each choose provider/model and max token settings.
+- Layer 4 has a minimum recent-turn setting.
+- Compression configs include frequency and context-window trigger percentage settings.
+- Manual Compress rebuilds from the latest sent/received message range rather than repeatedly compressing an already-current compressed context.
+- If no new messages exist since the last compression, Compress shows the existing compressed context instead of creating a duplicate snapshot.
+- Compression snapshots preserve previous snapshot ID, previous message index, compressed-through index, previous compressed context, new compressed context, Layer 2 summary, Layer 3 state JSON, pinned messages, and source messages.
+- The Context Msgs debug window shows a left-side list and right-side detail pane for saved prompts, assistant replies, tool calls, tool results, request context, and compression snapshots.
+- Context debug entries capture system prompt, exact request messages, compressed context, MCP project context, and RAG context for each user send.
+- Message pinning UI is not implemented yet.
+- Token counting is still approximate and not tokenizer-specific.
+- Compression failure handling and model-call diagnostics need more hardening.
+
+#### RAG Implementation Summary
+
+- Current RAG status: operational proof-of-concept. It can create reusable local libraries, ingest and rebuild documents, generate embeddings when configured, retrieve from attached libraries, inject passive context into chat requests, and expose model-callable RAG tools. It is usable for experimentation, but not yet production-grade for very large stores or high-safety persistent memory workflows.
+- RAG libraries are independent from projects and stored in user-selected storage folders.
+- The RAG Service Manager can create, edit, remove, attach, detach, ingest, rebuild, browse, reindex, delete, search, inspect extraction tools, and open system-wide Image Ingest Settings.
+- The RAG library editor includes one-screen settings for name, description, storage location, chunking, max file size, embedding provider, embedding model, dimensions, vector backend, base URL, large extracted-document segmentation, enabled state, runtime controls, and save/cancel.
+- Supported embedding providers are `none`, Ollama, and LM Studio.
+- Ollama runtime controls include status, start, stop, install Ollama, install embed text model, test embedding, and recent log display.
+- The app can start Ollama automatically for selected Ollama RAG libraries and stop the app-managed process on shutdown.
+- RAG ingestion supports individual files and folders, including recursive folder ingestion.
+- Ingest preview reports supported/skipped files, bytes, and reasons before ingestion starts.
+- Rebuild clears database rows and re-ingests saved originals with progress updates.
+- Rich document extraction supports HTML, DOCX/DOCM, XLSX/XLSM, and PDF using Poppler `pdftotext`, MuPDF `mutool`, Python `pypdf`, and a simple fallback.
+- Standalone image ingestion supports PNG, JPG/JPEG, BMP, TIF/TIFF, and WebP by preserving the original image and generating extracted Markdown from OCR and optional vision-language description.
+- Image ingest settings are global/system-wide, not per-project. CPU mode uses Tesseract OCR, GPU OCR mode attempts PaddleOCR with Tesseract fallback, and full vision mode attempts OCR plus an Ollama-served vision-language description.
+- Large extracted rich documents can be split into overlapping Markdown segments with a manifest before chunking.
+- RAG retrieval supports SQLite FTS5 keyword search, SQLite embedding BLOB cosine scan, hybrid merging, and keyword fallback.
+- Passive RAG context injection adds a "Retrieved Project Knowledge" block to the system prompt when readable attached RAGs return results.
+- Active built-in RAG tools are exposed to tool-capable models when a project RAG binding has Tool enabled.
+- Implemented active RAG tools are `rag_list_libraries`, `rag_search`, `rag_get_document`, `rag_write_document_to_drive`, and `rag_ingest_generated_document`.
+- RAG tool definitions include explicit model-facing workflow guidance so the model knows when to list libraries, search, retrieve a document, write a document to drive, or ingest generated content.
+- `rag_list_libraries` returns per-library `available_tool_actions` and recommended workflow guidance, including which actions are permitted by the active project binding.
+- Per-project RAG confidence defaults are applied to both passive context retrieval and active `rag_search` when the tool call does not provide explicit confidence thresholds.
+- `rag_write_document_to_drive` can write either the managed original document or the extracted Markdown/text representation into the project-configured write-file folder without using filesystem MCP tools.
+- `rag_write_document_to_drive` accepts either a full relative target file path or a relative target folder plus optional file name; any missing configured folder or nested target folders are created automatically by the tool.
+- Generated RAG tool documents are saved under `documents/generated_sources` before being indexed, so rebuild can re-ingest them.
+- Highest-priority outstanding RAG work: retrieval mode policy, per-chat RAG working set, token-budget-aware context trimming, persistent ingestion jobs, write/export audit history, project/web ingestion tools, production vector backend, metadata filters, diversity controls, reranking, scanned-PDF OCR, and GPU image-ingest hardening.
+
+#### Diagnostics Currently Available
+
+- Main transcript streaming preview.
+- Tool trace pane for MCP and built-in RAG tool calls.
+- MCP server test diagnostics with stdin/stdout/stderr and detected tools.
+- MCP status and last-error display in the MCP Server Manager.
+- RAG import previews and ingestion/rebuild summaries.
+- RAG rebuild progress bar and current item status.
+- RAG embedding runtime log tail in the RAG library editor.
+- RAG extraction tool diagnostics and installer launch result.
+- RAG Image Ingest Settings diagnostics, installer launch buttons, and image ingest runtime log tail.
+- Context compression preview window.
+- Context messages debug window with saved request context and compression snapshot details.
+
+#### Important Current Gaps
+
+- No central log viewer for API requests, MCP JSON-RPC traffic, RAG jobs, and app errors.
+- No DPAPI encryption for API keys.
+- No Streamable HTTP MCP transport.
+- No MCP resources, prompts, roots, sampling, elicitation, progress/cancellation UI, or ping.
+- No Model-as-Tool implementation yet.
+- No Python bridge or plugin runtime yet.
+- No workflow engine yet.
+- No chat attachment/multi-modal prompt input pipeline yet; RAG standalone image-file ingestion is now implemented separately.
+- No theming, compact mode, or collapsible left panel.
+- No local llama.cpp provider yet.
+- No automated test suite or structured regression harness.
+- Build artifacts and runtime data are currently present in the working tree during development and should be separated or ignored before release packaging.
+- RAG-specific gaps are tracked in detail in `rag_service_requirements.md`, with the current highest priorities being retrieval mode policy, RAG working set, token-budget-aware RAG context, ingestion job persistence, and production vector indexing.
 
 ### 1.2 Why C++
 
@@ -91,7 +248,7 @@ C++ was chosen as the implementation language for two strategic reasons:
 - Support for **streaming responses** via Server-Sent Events (SSE) is required - tokens must render incrementally in the chat window
 - The current implementation renders streaming deltas into the main transcript pane while a request is running and auto-scrolls to the newest text.
 - Tool-aware streaming is implemented so assistant text and tool calls can arrive during the same streamed response.
-- Support for **function calling / tool use** as defined by the OpenAI API (the `tools` and `tool_choice` parameters) - this is how MCP tools are surfaced to the model
+- Support for **function calling / tool use** as defined by the OpenAI API (the `tools` and `tool_choice` parameters) - this is how MCP tools and built-in project RAG tools are surfaced to the model
 - Request construction must include: model selection, message history, system prompt, temperature, max tokens, and the tools array
 - Responses must be parsed for: assistant content, tool call requests, finish reason, and usage statistics
 - HTTP communication should use a robust library (e.g., libcurl, cpp-httplib, or WinHTTP) with TLS support
@@ -484,7 +641,7 @@ The application supports attaching files and media to messages, with intelligent
 
 - The application supports independent, reusable **RAG libraries** instead of one vector store owned by each project.
 - A project can attach to one or more RAG libraries at the same time.
-- Each project-to-RAG binding can be read-only or read/write. The data model also supports delete permission, retrieval priority, default ingest target, and per-binding max chunks.
+- Each project-to-RAG binding can control enabled/read/write/delete/export permissions, active tool exposure, default ingest target, retrieval priority, per-binding max chunks, and default minimum/maximum confidence thresholds.
 - RAG libraries can be domain-specific, such as legal documents, HR documents, engineering notes, project source material, or task-specific research sets.
 - RAG libraries are stored under `data/rag_libraries` by default, but each library can be created in a user-selected storage parent folder because these databases can become large.
 - Each library stores configuration, managed source documents, extracted text, SQLite metadata, FTS indexes, embeddings, and future vector index files in its own folder.
@@ -500,6 +657,7 @@ The application supports attaching files and media to messages, with intelligent
   - DOCX/DOCM extraction through native OOXML parsing.
   - XLSX/XLSM extraction through native OOXML parsing into Markdown table-style text.
   - PDF extraction through Poppler `pdftotext.exe`, MuPDF `mutool.exe`, Python `pypdf`, and a simple built-in fallback.
+  - Standalone image extraction for PNG, JPG/JPEG, BMP, TIF/TIFF, and WebP through the system-wide Image Ingest Settings pipeline.
   - Large extracted documents can be split into overlapping Markdown segments before chunking.
 - **Current embedding support**:
   - `none` for keyword-only or diagnostic indexing.
@@ -516,12 +674,26 @@ The application supports attaching files and media to messages, with intelligent
   - When constructing a chat request, the app queries attached readable RAG libraries using the current user message.
   - The top matching chunks are formatted into a "Retrieved Project Knowledge" block and appended to the system prompt.
   - The block includes provenance such as RAG name, source document, chunk ID, source path, search method, score, metadata, and retrieved text.
+  - Project binding default confidence thresholds filter passive RAG context results.
+- **Active RAG tool mode**:
+  - RAG can be exposed as model-callable tools rather than only passive auto-injection when the selected model supports tools and the project RAG binding has Tool enabled.
+  - The model can list project-attached RAG libraries and see each library's description, permissions, retrieval priority, max chunks, default confidence window, write-file folder template, embedding settings, and intended use.
+  - `rag_search` supports top-N results, candidate limits, minimum confidence thresholds, confidence ranges, maximum result counts, specific RAG IDs, and optional chunk text.
+  - If a `rag_search` call omits minimum or maximum confidence, the selected RAG library's project binding default is used for that side of the confidence window.
+  - RAG search results should always be ordered by confidence unless another ordering is explicitly requested.
+  - If no result meets the requested threshold, the model should be able to retry with top five/top ten results, lower the threshold, search another RAG, search a lower-confidence band, or abandon the search.
+  - `rag_get_document` can retrieve metadata, managed source information, and extracted document text for a search result.
+  - `rag_write_document_to_drive` can copy a RAG document directly into a configured project folder as either the original file or the extracted Markdown/text conversion, with path-safety checks and automatic creation of missing nested folders.
+  - `rag_ingest_generated_document` can write generated Markdown/text content into a write-enabled exposed RAG with provenance metadata.
+  - The model should be able to select RAG results into a per-chat working set so selected references remain available in later context until abandoned, expired, or compressed.
+  - A write-capable RAG should eventually allow project files or web-discovered documents/summaries to be ingested with provenance metadata.
+  - Project Settings includes a persisted **Tool** checkbox per RAG binding; active RAG tools are wired into chat execution.
 - **Not yet implemented**:
   - Automatic indexing of chat messages, condensed summaries, and chat attachments.
   - A production vector backend such as HNSWlib, FAISS, Qdrant, sqlite-vss, or ChromaDB.
   - Token-budget-aware RAG context trimming based on the selected model's `context_window`.
-  - Full per-project RAG binding editor for priority, max chunks, delete permission, and default ingest target.
-  - OCR for scanned PDFs, audio transcription, image ingestion, model reranking, and advanced metadata filters.
+  - Per-chat RAG working sets, project-file/web-document RAG ingestion tools, metadata-filtered RAG search, and reranking.
+  - OCR for scanned/image-only PDFs, audio transcription, production-hardening for GPU image ingestion, model reranking, and advanced metadata filters.
 - The long-term RAG pipeline remains a plugin/service boundary candidate. The current implementation runs in-process inside `agent.exe`, but the module boundary should remain clean enough to expose later as a plugin, DLL, sidecar service, or MCP server.
 
 ---
@@ -642,13 +814,14 @@ Enable models to be wrapped as tools so the orchestrating model can delegate to 
 
 Give the application intelligent context handling so it can manage long conversations and recall information efficiently.
 
-- Implement the **context condensation protocol** (§7.3): token counting, threshold detection, summarization via model call, summary versioning, message pinning. This remains pending.
+- Implement the **context condensation protocol** (§7.3): compression configs, manual compression, compression snapshots/history, truncate-top compression, and hierarchical structured compression are implemented. Message pinning UI, tokenizer-specific token counting, and production hardening remain pending.
 - Implement optional model `context_window` support. This is implemented as a preflight estimate and warning/blocking check; blank or zero values are ignored.
 - Implement the **RAG library system** (§7.4). The current proof-of-concept includes reusable libraries, project bindings, storage folders, SQLite metadata, FTS5, embedding storage, rich document extraction, ingest preview, rebuild, and query workflows.
 - Implement the **embedding pipeline**. Local Ollama and LM Studio embedding providers are implemented; remote OpenAI-compatible embedding providers and local ONNX/Python embeddings remain pending.
 - Implement **RAG integration with context construction**. Current chat requests can retrieve project RAG chunks and inject them into the system prompt as retrieved project knowledge.
-- Implement **RAG indexing**. Explicit file and folder ingestion are implemented; automatic indexing of messages, summaries, and chat attachments remains pending.
-- Build the **RAG configuration UI**. A RAG Service Manager and one-screen RAG library editor are implemented; the deeper project binding editor remains pending.
+- Implement **active RAG tool mode**. Current chat requests can expose built-in RAG tools for projects with tool-enabled RAG bindings: `rag_list_libraries`, `rag_search`, `rag_get_document`, `rag_write_document_to_drive`, and `rag_ingest_generated_document`.
+- Implement **RAG indexing**. Explicit file and folder ingestion are implemented, including rich document extraction and standalone image-file ingestion into extracted Markdown; automatic indexing of messages, summaries, MCP results, web documents, and chat attachments remains pending.
+- Build the **RAG configuration UI**. A RAG Service Manager, one-screen RAG library editor, system-wide Image Ingest Settings window, and full Project Settings RAG binding editor are implemented; retrieval mode policy, working-set diagnostics, project/web ingestion workflows, write/export audit history, persistent ingestion jobs, and advanced retrieval controls remain pending.
 - Implement message pinning UI in the chat view (pin/unpin individual messages to protect from condensation). This remains pending.
 
 ### Phase 6 — Multi-Modal Input & UI Polish
@@ -822,11 +995,11 @@ The following items were previously open questions and have been decided:
 
 - **Plugin/extension model**: The application supports three extension mechanisms: MCP tools (protocol-standard), Model Tools (custom model-as-tool), and Python plugins (for context processing, filters, and data transforms). MCP and Model Tools are not the only extension paths — Python plugins are a first-class system
 - **Agent workflows**: Yes — Agent Workflows (§5B) are a defined feature. They allow single-action triggers that execute predefined multi-step sequences of tool calls and model interactions
-- **Multi-modal input**: Yes — the application handles images, PDFs, documents, code files, and audio through a configurable file processing pipeline with preview-before-send (§6.6)
+- **Multi-modal input**: Yes as a product direction. The chat attachment pipeline with preview-before-send is still future work; the RAG subsystem now has standalone image-file ingestion for OCR/vision-derived Markdown, while audio remains future work (§6.6, §7.4)
 - **Model Tool chaining**: Yes — Model Tools can call other Model Tools with configurable depth limits (§5A.1)
 - **Model Tool access permissions**: Yes — each Model Tool declares an explicit access list of what tools and capabilities it can use, enforced by the host (§5A.2)
 - **Consent model**: Per-server. Consent is granted when an MCP server is first connected and applies to all tools on that server. This supports long-running autonomous agent tasks that may run for hours or days (§9)
-- **RAG support**: Yes - independent reusable local RAG libraries can be attached to projects with read-only or read/write bindings. Current implementation includes local ingestion, SQLite/FTS5 metadata, local embedding providers, rebuild, diagnostics, and chat context injection. A production vector backend and automatic chat/message indexing remain future work (§7.4)
+- **RAG support**: Yes - independent reusable local RAG libraries can be attached to projects with detailed binding permissions and retrieval defaults. Current implementation includes local ingestion, rich document extraction, standalone image-file OCR/vision extraction, SQLite/FTS5 metadata, local embedding providers, rebuild, diagnostics, passive chat context injection, Project Settings binding controls, and active built-in RAG tools for list/search/document-read/write-to-drive/generated-document-ingest. A production vector backend, RAG working set, token-budget-aware RAG context, project/web ingestion tools, and automatic chat/message indexing remain future work (§7.4)
 - **Conversation branching**: Future feature (Phase 9) — not needed initially but planned
 - **Python distribution**: Bundled. The application ships with an embedded CPython distribution for guaranteed compatibility (§12.1)
 - **Python MCP server execution**: Out-of-process only — via stdio or HTTP transport. In-process loading via the Python bridge is an optional optimization for later (§2.1)
