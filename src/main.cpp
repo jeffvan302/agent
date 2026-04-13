@@ -50,7 +50,7 @@ enum ControlId : int {
     kModelCombo = 3006,
     kProviders = 3007,
     kMcpServers = 3008,
-    kChatSettings = 3009,
+    kSetupSystem = 3009,
     kTranscript = 3010,
     kToolTrace = 3011,
     kInput = 3012,
@@ -83,6 +83,8 @@ struct ModelSelectionEntry {
 };
 
 struct ChatDeltaPayload {
+    std::string project_id;
+    std::string chat_id;
     std::string text;
 };
 
@@ -92,6 +94,7 @@ struct ChatFinishedPayload {
     std::string project_id;
     std::string chat_id;
     std::vector<MessageRecord> appended_messages;
+    std::vector<RagWorkingSetEntry> rag_working_set_additions; // chunks retrieved via rag_search this turn
 };
 
 struct ToolTraceEntry {
@@ -182,6 +185,36 @@ size_t EstimateRequestInputTokens(const ChatRequestOptions& request, const std::
 
 size_t EstimateRequestInputTokens(const ChatRequestOptions& request, const std::vector<McpExposedTool>& exposed_tools, bool include_tools) {
     return EstimateRequestInputTokens(request, exposed_tools, {}, include_tools);
+}
+
+// Build a "Previously Retrieved RAG Context" block from the per-chat working set.
+// max_token_budget == 0 means no limit; otherwise chunks are included until the budget is consumed.
+std::string BuildWorkingSetContextBlock(const std::vector<RagWorkingSetEntry>& entries, size_t max_token_budget = 0) {
+    if (entries.empty()) return {};
+    constexpr size_t kHeaderTokens = 30;
+    constexpr size_t kChunkHeaderTokens = 20;
+    const size_t budget = max_token_budget > 0 ? max_token_budget : SIZE_MAX;
+    size_t tokens_used = kHeaderTokens;
+
+    std::ostringstream stream;
+    stream << "Previously Retrieved RAG Context:\n";
+    stream << "The following excerpts were retrieved by earlier tool calls this session. They are provided for continuity; the assistant need not re-search for them.\n";
+
+    bool any = false;
+    for (const auto& entry : entries) {
+        // Estimate tokens: ~4 chars per token
+        const size_t chunk_tokens = kChunkHeaderTokens + entry.text.size() / 4 + 1;
+        if (tokens_used + chunk_tokens > budget) break;
+        tokens_used += chunk_tokens;
+        any = true;
+        stream << "\n[RAG: " << entry.rag_name
+               << " | Source: " << entry.document_title
+               << " | Chunk: " << entry.chunk_id
+               << " | Score: " << entry.score
+               << " | Query: \"" << entry.query << "\"]\n";
+        stream << entry.text << "\n";
+    }
+    return any ? stream.str() : std::string{};
 }
 
 bool CheckContextWindow(HWND owner, const ChatRequestOptions& request, const std::vector<McpExposedTool>& exposed_tools, const std::vector<ChatToolDefinition>& extra_tools, bool include_tools) {
@@ -491,6 +524,11 @@ std::vector<RagToolLibrary> GetProjectRagToolLibraries(RagService* rag_service, 
     const auto bindings = rag_service->LoadProjectBindings(project_id);
     for (const auto& binding : bindings) {
         if (!binding.enabled || !binding.expose_as_tool || !binding.can_read) {
+            continue;
+        }
+        // Skip bindings that are not configured for active tool exposure
+        if (binding.retrieval_mode == RagRetrievalMode::PassiveOnly ||
+            binding.retrieval_mode == RagRetrievalMode::Disabled) {
             continue;
         }
         if (require_write && !binding.can_write) {
@@ -907,7 +945,7 @@ bool IsRagToolName(const std::string& name) {
         name == kRagWriteDocumentToDriveToolName;
 }
 
-McpToolCallResult CallRagTool(RagService* rag_service, const McpManager* mcp_manager, const std::string& project_id, const std::string& tool_name, const std::string& arguments_json) {
+McpToolCallResult CallRagTool(RagService* rag_service, const McpManager* mcp_manager, const std::string& project_id, const std::string& tool_name, const std::string& arguments_json, std::vector<RagWorkingSetEntry>* working_set_out = nullptr) {
     if (!rag_service) {
         return MakeRagToolError("RAG service is not available.");
     }
@@ -1036,6 +1074,35 @@ McpToolCallResult CallRagTool(RagService* rag_service, const McpManager* mcp_man
         });
         if (hits.size() > static_cast<size_t>(max_results)) {
             hits.resize(static_cast<size_t>(max_results));
+        }
+
+        // Accumulate retrieved chunks into the per-chat working set
+        if (working_set_out) {
+            const std::string ts = [] {
+                std::time_t t = std::time(nullptr);
+                char buf[32]{};
+                std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", std::gmtime(&t));
+                return std::string(buf);
+            }();
+            for (const auto& hit : hits) {
+                if (!hit.result.text.empty()) {
+                    const bool already = std::any_of(working_set_out->begin(), working_set_out->end(),
+                        [&](const RagWorkingSetEntry& e) { return e.chunk_id == hit.result.chunk_id; });
+                    if (!already) {
+                        RagWorkingSetEntry ws;
+                        ws.chunk_id = hit.result.chunk_id;
+                        ws.rag_id = hit.result.rag_id;
+                        ws.rag_name = hit.result.rag_name;
+                        ws.document_id = hit.result.document_id;
+                        ws.document_title = hit.result.document_title;
+                        ws.text = hit.result.text;
+                        ws.score = hit.result.score;
+                        ws.query = query;
+                        ws.retrieved_at = ts;
+                        working_set_out->push_back(std::move(ws));
+                    }
+                }
+            }
         }
 
         nlohmann::json results = nlohmann::json::array();
@@ -1843,7 +1910,8 @@ private:
     void OpenRagServiceManager();
     void OpenCompressionManager();
     void EditProjectSettings();
-    void EditChatSettings();
+    void RunSetupSystem();
+    void SetupDefaultMcpServersIfEmpty();
     void ReloadProjects(const std::string& preferred_project_id, const std::string& preferred_chat_id);
     void RefreshTree();
     void LoadActiveMessages();
@@ -1860,7 +1928,11 @@ private:
     void RenderTranscript();
     void RenderToolTrace();
     void UpdateStatus(const std::wstring& text);
-    void SetRequestBusy(bool busy);
+    void SetChatBusy(const std::string& chat_id, bool busy);
+    void RefreshInputState();
+    bool IsChatInFlight(const std::string& chat_id) const;
+    int CountChatsInFlight() const;
+    void UpdateChatTreeLabel(const std::string& chat_id);
     ProjectRecord* FindProject(const std::string& project_id);
     ChatInfo* FindChat(const std::string& project_id, const std::string& chat_id);
 
@@ -1876,7 +1948,7 @@ private:
     HWND project_mcp_button_ = nullptr;
     HWND rag_service_button_ = nullptr;
     HWND context_window_button_ = nullptr;
-    HWND chat_settings_button_ = nullptr;
+    HWND setup_system_button_ = nullptr;
     HWND transcript_ = nullptr;
     HWND tool_trace_ = nullptr;
     HWND input_ = nullptr;
@@ -1903,9 +1975,11 @@ private:
     std::string active_project_id_;
     std::string active_chat_id_;
     std::vector<MessageRecord> active_messages_;
-    bool request_in_flight_ = false;
+    std::unordered_map<std::string, bool> chats_in_flight_;
+    std::unordered_map<std::string, std::wstring> streaming_previews_by_chat_;
+    std::unordered_map<std::string, HTREEITEM> chat_tree_items_;
+    std::unordered_map<std::string, std::vector<RagWorkingSetEntry>> rag_working_sets_by_chat_;
     bool refreshing_tree_ = false;
-    std::wstring streaming_preview_;
 };
 
 MainWindow::MainWindow() : storage_(DetermineAppRoot()), mcp_manager_(&storage_), rag_service_(&storage_), compression_service_(&storage_) {}
@@ -2019,7 +2093,7 @@ void MainWindow::OnCreate() {
     project_mcp_button_ = CreateWindowExW(0, L"BUTTON", L"Project Settings", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjectMcp), nullptr, nullptr);
     rag_service_button_ = CreateWindowExW(0, L"BUTTON", L"RAG Service", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagService), nullptr, nullptr);
     context_window_button_ = CreateWindowExW(0, L"BUTTON", L"Context Window", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextWindow), nullptr, nullptr);
-    chat_settings_button_ = CreateWindowExW(0, L"BUTTON", L"Chat Settings", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kChatSettings), nullptr, nullptr);
+    setup_system_button_ = CreateWindowExW(0, L"BUTTON", L"Setup System", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kSetupSystem), nullptr, nullptr);
     transcript_ = CreateWindowExW(WS_EX_CLIENTEDGE, MSFTEDIT_CLASS, nullptr, WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kTranscript), nullptr, nullptr);
     tool_trace_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, nullptr, WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kToolTrace), nullptr, nullptr);
     input_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInput), nullptr, nullptr);
@@ -2028,7 +2102,7 @@ void MainWindow::OnCreate() {
     context_messages_button_ = CreateWindowExW(0, L"BUTTON", L"Context Msgs", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextMessages), nullptr, nullptr);
     status_label_ = CreateWindowExW(0, L"STATIC", L"Initializing...", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
 
-    for (HWND control : {new_project_button_, new_chat_button_, rename_button_, delete_button_, tree_, model_combo_, providers_button_, mcp_servers_button_, project_mcp_button_, rag_service_button_, context_window_button_, chat_settings_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
+    for (HWND control : {new_project_button_, new_chat_button_, rename_button_, delete_button_, tree_, model_combo_, providers_button_, mcp_servers_button_, project_mcp_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
 
@@ -2112,7 +2186,7 @@ void MainWindow::LayoutControls(int width, int height) {
     MoveWindow(providers_button_, right_x + combo_width + gutter, margin, providers_width, top_row_height, TRUE);
     MoveWindow(mcp_servers_button_, right_x + combo_width + gutter + providers_width + gutter, margin, mcp_width, top_row_height, TRUE);
     MoveWindow(project_mcp_button_, right_x + combo_width + gutter + providers_width + gutter + mcp_width + gutter, margin, project_mcp_width, top_row_height, TRUE);
-    MoveWindow(chat_settings_button_, right_x + combo_width + gutter + providers_width + gutter + mcp_width + gutter + project_mcp_width + gutter, margin, settings_width, top_row_height, TRUE);
+    MoveWindow(setup_system_button_, right_x + combo_width + gutter + providers_width + gutter + mcp_width + gutter + project_mcp_width + gutter, margin, settings_width, top_row_height, TRUE);
 
     const int transcript_top = margin + top_row_height + gutter;
     const int transcript_height = height - transcript_top - tool_trace_height - input_height - status_height - margin * 2 - gutter * 3;
@@ -2162,8 +2236,8 @@ void MainWindow::OnCommand(int control_id, int notification_code) {
     case kContextWindow:
         OpenCompressionManager();
         break;
-    case kChatSettings:
-        EditChatSettings();
+    case kSetupSystem:
+        RunSetupSystem();
         break;
     case kSend:
         SendCurrentMessage();
@@ -2205,6 +2279,7 @@ void MainWindow::OnNotify(NMHDR* header) {
             active_chat_id_ = item->chat_id;
             LoadActiveMessages();
             RefreshModelCombo();
+            RefreshInputState();
             RenderTranscript();
             RenderToolTrace();
         } else {
@@ -2213,6 +2288,7 @@ void MainWindow::OnNotify(NMHDR* header) {
                 active_chat_id_ = project->chats.front().id;
                 LoadActiveMessages();
                 RefreshModelCombo();
+                RefreshInputState();
                 RenderTranscript();
                 RenderToolTrace();
             }
@@ -2465,54 +2541,232 @@ void MainWindow::EditProjectSettings() {
     UpdateStatus(L"Project settings saved.");
 }
 
-void MainWindow::EditChatSettings() {
-    ChatInfo* chat = FindChat(active_project_id_, active_chat_id_);
-    if (!chat) {
+// Returns true if a dedicated NVIDIA or AMD GPU adapter is present.
+static bool DetectDedicatedGpu() {
+    DISPLAY_DEVICEW adapter{};
+    adapter.cb = sizeof(adapter);
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &adapter, 0); ++i) {
+        if (adapter.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) {
+            continue;
+        }
+        std::wstring desc = adapter.DeviceString;
+        for (auto& c : desc) {
+            c = static_cast<wchar_t>(towupper(c));
+        }
+        if (desc.find(L"NVIDIA") != std::wstring::npos ||
+            desc.find(L"RADEON") != std::wstring::npos ||
+            (desc.find(L"AMD") != std::wstring::npos &&
+             desc.find(L"INTEL") == std::wstring::npos)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void MainWindow::SetupDefaultMcpServersIfEmpty() {
+    // Only write defaults when the server list is completely empty.
+    if (!storage_.LoadMcpServers().empty()) {
         return;
     }
 
-    auto system_prompt = ShowPromptDialog(hwnd_, PromptOptions{
-                                                     L"Chat System Prompt",
-                                                     L"System prompt for this chat",
-                                                     Utf8ToWide(chat->system_prompt),
-                                                     true,
-                                                     560,
-                                                     250,
-                                                 });
-    if (!system_prompt) {
+    // Build the six default MCP servers that match the shipped mcp_servers.json.
+    auto make_server = [](std::string name, std::string command,
+                          std::vector<std::string> args, std::string working_dir,
+                          McpServerScope scope) {
+        McpServerConfig s;
+        s.id = MakeId("mcp_server");
+        s.name = std::move(name);
+        s.command = std::move(command);
+        s.arguments = std::move(args);
+        s.working_directory = std::move(working_dir);
+        s.scope = scope;
+        s.enabled = true;
+        s.auto_connect = true;
+        return s;
+    };
+
+    std::vector<McpServerConfig> servers;
+    servers.push_back(make_server(
+        "duckduckgo", "uvx",
+        {"duckduckgo-mcp-server"}, "",
+        McpServerScope::Shared));
+    servers.push_back(make_server(
+        "file-system", "npx",
+        {"-y", "@modelcontextprotocol/server-filesystem", "$ProjectFolder$"},
+        "$ProjectFolder$",
+        McpServerScope::PerProject));
+    servers.push_back(make_server(
+        "sequential-thinking", "npx",
+        {"-y", "@modelcontextprotocol/server-sequential-thinking"}, "",
+        McpServerScope::PerProject));
+    servers.push_back(make_server(
+        "server-time", "uvx",
+        {"mcp-server-time"}, "",
+        McpServerScope::Shared));
+    servers.push_back(make_server(
+        "server-git", "uvx",
+        {"mcp-server-git"}, "",
+        McpServerScope::PerProject));
+    servers.push_back(make_server(
+        "desktop-commander", "npx",
+        {"-y", "@wonderwhy-er/desktop-commander@latest"},
+        "$ProjectFolder$",
+        McpServerScope::PerProject));
+
+    // Global variable: $ProjectFolder$ resolved per project.
+    McpServerVariable pf;
+    pf.name = "ProjectFolder";
+    pf.description = "Project folder where the project files are located.";
+    pf.kind = McpVariableKind::Folder;
+    pf.inject_into_context = true;
+
+    storage_.SaveMcpConfiguration(servers, {pf});
+}
+
+void MainWindow::RunSetupSystem() {
+    const bool has_gpu = DetectDedicatedGpu();
+
+    std::wstring confirm_msg =
+        L"Setup System will configure this installation in one step:\n\n"
+        L"- Write 6 default MCP servers (DuckDuckGo, file system, sequential\n"
+        L"  thinking, time, git, desktop commander) if none are configured.\n"
+        L"- Install Poppler pdftotext, Tesseract OCR, Pandoc, and LibreOffice\n"
+        L"  (document extraction tools for the RAG service).\n"
+        L"- Install Ollama (local AI runtime for embeddings).\n"
+        L"- Pull the nomic-embed-text embedding model.\n";
+    if (has_gpu) {
+        confirm_msg +=
+            L"- Pull llava:7b vision model (dedicated GPU detected --\n"
+            L"  enables GPU-accelerated image processing in the RAG service).\n";
+    }
+    confirm_msg +=
+        L"\nAll package installs run in a single visible terminal window.\n"
+        L"You can close the terminal at any time to skip remaining steps.\n\n"
+        L"If MCP servers are already configured they will not be overwritten.\n\n"
+        L"Proceed with system setup?";
+
+    if (MessageBoxW(hwnd_, confirm_msg.c_str(), L"Setup System",
+                    MB_YESNO | MB_ICONQUESTION) != IDYES) {
         return;
     }
 
-    auto temperature = ShowPromptDialog(hwnd_, PromptOptions{
-                                                 L"Temperature",
-                                                 L"Temperature (for example 0.2)",
-                                                 Utf8ToWide(std::to_string(chat->temperature)),
-                                             });
-    if (!temperature) {
+    // --- Step 1: MCP configuration (in-process, instant) ---
+    const bool had_servers = !storage_.LoadMcpServers().empty();
+    SetupDefaultMcpServersIfEmpty();
+    const bool wrote_servers = !had_servers && !storage_.LoadMcpServers().empty();
+
+    // --- Step 2: Build combined install script ---
+    // All winget and ollama commands run sequentially in one terminal window.
+    // Each step is prefixed with an echo so the user can track progress.
+    std::wostringstream script;
+    script << L"@echo off\r\n"
+           << L"echo.\r\n"
+           << L"echo ============================================================\r\n"
+           << L"echo  Agent System Setup\r\n"
+           << L"echo ============================================================\r\n"
+           << L"echo.\r\n"
+           // Poppler
+           << L"echo [1/6] Installing Poppler pdftotext (PDF extraction)...\r\n"
+           << L"winget install --id oschwartz10612.Poppler -e "
+              L"--accept-package-agreements --accept-source-agreements\r\n"
+           << L"echo.\r\n"
+           // Tesseract
+           << L"echo [2/6] Installing Tesseract OCR...\r\n"
+           << L"winget install --id tesseract-ocr.tesseract -e "
+              L"--accept-package-agreements --accept-source-agreements\r\n"
+           << L"echo.\r\n"
+           // Pandoc
+           << L"echo [3/6] Installing Pandoc...\r\n"
+           << L"winget install --id JohnMacFarlane.Pandoc -e "
+              L"--accept-package-agreements --accept-source-agreements\r\n"
+           << L"echo.\r\n"
+           // LibreOffice
+           << L"echo [4/6] Installing LibreOffice...\r\n"
+           << L"winget install --id TheDocumentFoundation.LibreOffice -e "
+              L"--accept-package-agreements --accept-source-agreements\r\n"
+           << L"echo.\r\n"
+           // Ollama
+           << L"echo [5/6] Installing Ollama (local AI runtime)...\r\n"
+           << L"winget install --id Ollama.Ollama -e "
+              L"--accept-package-agreements --accept-source-agreements\r\n"
+           << L"echo.\r\n"
+           // Pull embedding model (Ollama must be running after install)
+           << L"echo [6/6] Pulling nomic-embed-text embedding model...\r\n"
+           << L"echo (Ollama may need a moment to start after installation.)\r\n"
+           << L"timeout /t 8 /nobreak >nul\r\n"
+           << L"ollama pull nomic-embed-text\r\n"
+           << L"echo.\r\n";
+
+    // GPU-only: vision model for image-aware RAG
+    if (has_gpu) {
+        script
+           << L"echo [GPU] Pulling llava:7b vision model for image processing...\r\n"
+           << L"ollama pull llava:7b\r\n"
+           << L"echo.\r\n";
+    }
+
+    script << L"echo ============================================================\r\n"
+           << L"echo  Setup complete.\r\n"
+           << L"echo  You can now create a RAG library with Ollama as the\r\n"
+           << L"echo  embedding provider and nomic-embed-text as the model.\r\n";
+    if (has_gpu) {
+        script
+           << L"echo  Select 'vision_language_gpu' image ingest mode in the RAG\r\n"
+           << L"echo  library settings to use the llava:7b vision model.\r\n";
+    }
+    script << L"echo ============================================================\r\n"
+           << L"echo.\r\n"
+           << L"pause\r\n";
+
+    // Write the script as a narrow-character .bat file (pure ASCII content).
+    wchar_t temp_dir[MAX_PATH]{};
+    GetTempPathW(MAX_PATH, temp_dir);
+    const std::wstring script_path = std::wstring(temp_dir) + L"agent_setup.bat";
+    {
+        const std::wstring wscript = script.str();
+        const int narrow_len = WideCharToMultiByte(CP_ACP, 0, wscript.c_str(),
+            static_cast<int>(wscript.size()), nullptr, 0, nullptr, nullptr);
+        std::string narrow_script(static_cast<size_t>(narrow_len), '\0');
+        WideCharToMultiByte(CP_ACP, 0, wscript.c_str(), static_cast<int>(wscript.size()),
+            narrow_script.data(), narrow_len, nullptr, nullptr);
+        std::ofstream f(script_path, std::ios::binary | std::ios::trunc);
+        if (f.is_open()) {
+            f.write(narrow_script.data(), static_cast<std::streamsize>(narrow_script.size()));
+        }
+    }
+
+    const std::wstring cmd_args = L"/k \"" + script_path + L"\"";
+    const HINSTANCE launched = ShellExecuteW(
+        hwnd_, L"open", L"cmd.exe", cmd_args.c_str(), nullptr, SW_SHOWNORMAL);
+
+    if (reinterpret_cast<intptr_t>(launched) <= 32) {
+        MessageBoxW(hwnd_,
+            L"Failed to open the setup terminal window.\n"
+            L"Please run the following commands manually in a terminal:\n\n"
+            L"  winget install --id oschwartz10612.Poppler -e\n"
+            L"  winget install --id tesseract-ocr.tesseract -e\n"
+            L"  winget install --id Ollama.Ollama -e\n"
+            L"  ollama pull nomic-embed-text",
+            L"Setup System", MB_OK | MB_ICONWARNING);
         return;
     }
 
-    auto max_tokens = ShowPromptDialog(hwnd_, PromptOptions{
-                                               L"Max Tokens",
-                                               L"Maximum output tokens",
-                                               std::to_wstring(chat->max_tokens),
-                                           });
-    if (!max_tokens) {
-        return;
+    std::wstring done_msg =
+        L"Setup terminal launched.\n\n"
+        L"Follow the progress in the terminal window.\n";
+    if (wrote_servers) {
+        done_msg += L"\nDefault MCP servers have been configured. Open 'MCP Servers'\n"
+                    L"to review or customise them before connecting.\n";
+    } else if (had_servers) {
+        done_msg += L"\nYour existing MCP server configuration was not changed.\n";
     }
+    done_msg +=
+        L"\nOnce Ollama is installed and running, open the RAG Service,\n"
+        L"create a new library, set the embedding provider to Ollama,\n"
+        L"enter 'nomic-embed-text' as the model, and save.\n";
 
-    const auto parsed_temperature = ParseDouble(*temperature);
-    const auto parsed_max_tokens = ParseInt(*max_tokens);
-    if (!parsed_temperature || !parsed_max_tokens) {
-        MessageBoxW(hwnd_, L"Temperature must be a number and max tokens must be a whole number.", L"Invalid Settings", MB_OK | MB_ICONERROR);
-        return;
-    }
-
-    chat->system_prompt = WideToUtf8(*system_prompt);
-    chat->temperature = *parsed_temperature;
-    chat->max_tokens = *parsed_max_tokens;
-    storage_.SaveChat(active_project_id_, *chat);
-    UpdateStatus(L"Chat settings saved.");
+    MessageBoxW(hwnd_, done_msg.c_str(), L"Setup System", MB_OK | MB_ICONINFORMATION);
+    UpdateStatus(L"System setup launched.");
 }
 
 void MainWindow::ReloadProjects(const std::string& preferred_project_id, const std::string& preferred_chat_id) {
@@ -2537,6 +2791,7 @@ void MainWindow::RefreshTree() {
     refreshing_tree_ = true;
     TreeView_DeleteAllItems(tree_);
     tree_items_.clear();
+    chat_tree_items_.clear();
 
     HTREEITEM selected_item = nullptr;
     for (const auto& project : projects_) {
@@ -2568,10 +2823,15 @@ void MainWindow::RefreshTree() {
             child.hParent = project_item;
             child.hInsertAfter = TVI_LAST;
             child.item.mask = TVIF_TEXT | TVIF_PARAM;
+            // Append a streaming indicator if this chat is currently in flight.
             std::wstring chat_name = Utf8ToWide(chat.name);
+            if (IsChatInFlight(chat.id)) {
+                chat_name += L" \u25cf";  // ● U+25CF BLACK CIRCLE
+            }
             child.item.pszText = chat_name.data();
             child.item.lParam = reinterpret_cast<LPARAM>(chat_data.get());
             HTREEITEM chat_item = TreeView_InsertItem(tree_, &child);
+            chat_tree_items_[chat.id] = chat_item;
             tree_items_.push_back(std::move(chat_data));
 
             if (project.info.id == active_project_id_ && chat.id == active_chat_id_) {
@@ -2758,7 +3018,15 @@ std::string MainWindow::BuildMcpProjectContext() const {
 }
 
 void MainWindow::SendCurrentMessage() {
-    if (request_in_flight_) {
+    if (IsChatInFlight(active_chat_id_)) {
+        return;
+    }
+
+    constexpr int kMaxConcurrentChats = 8;
+    if (CountChatsInFlight() >= kMaxConcurrentChats) {
+        MessageBoxW(hwnd_,
+            L"The maximum number of concurrent chats are already in flight.\r\n\r\nWait for one to finish before sending another message.",
+            L"Too Many Active Chats", MB_OK | MB_ICONINFORMATION);
         return;
     }
 
@@ -2847,7 +3115,34 @@ void MainWindow::SendCurrentMessage() {
         }
         request.system_prompt += mcp_project_context;
     }
-    const std::string rag_context = rag_service_.BuildContextBlock(active_project_id_, user_message.content, 12);
+
+    // Lazy-load per-chat working set from disk if not already in memory.
+    auto ws_it = rag_working_sets_by_chat_.find(active_chat_id_);
+    if (ws_it == rag_working_sets_by_chat_.end()) {
+        rag_working_sets_by_chat_[active_chat_id_] = storage_.LoadChatRagWorkingSet(active_project_id_, active_chat_id_);
+        ws_it = rag_working_sets_by_chat_.find(active_chat_id_);
+    }
+    const std::vector<RagWorkingSetEntry>& current_working_set = ws_it->second;
+
+    // Compute token budgets for RAG context, reserving a portion of the context window.
+    // Passive context: up to 15% of context window; working set: up to 10%.
+    const int context_window = request.model.context_window;
+    const int rag_passive_budget  = context_window > 0 ? context_window * 15 / 100 : 0;
+    const int rag_working_budget  = context_window > 0 ? context_window * 10 / 100 : 0;
+
+    // Include the working set from prior turns first (closest to the user message)
+    const std::string working_set_context = BuildWorkingSetContextBlock(
+        current_working_set, static_cast<size_t>(rag_working_budget));
+    if (!working_set_context.empty()) {
+        if (!request.system_prompt.empty()) {
+            request.system_prompt += "\n\n";
+        }
+        request.system_prompt += working_set_context;
+    }
+
+    // Passive RAG context for this turn's query
+    const std::string rag_context = rag_service_.BuildContextBlock(
+        active_project_id_, user_message.content, 12, rag_passive_budget);
     if (!rag_context.empty()) {
         if (!request.system_prompt.empty()) {
             request.system_prompt += "\n\n";
@@ -2859,9 +3154,9 @@ void MainWindow::SendCurrentMessage() {
         // Emergency trigger: if the selected model context is near the configured threshold,
         // compress before the following turn.
         size_t estimated = EstimateRequestInputTokens(request, {}, false);
-        size_t context_window = static_cast<size_t>(request.model.context_window);
+        size_t ctx_win = static_cast<size_t>(request.model.context_window);
         int trigger_percent = selected_compression_config->context_window_trigger_percent;
-        if (trigger_percent > 0 && context_window > 0 && estimated > (context_window * static_cast<size_t>(trigger_percent) / 100)) {
+        if (trigger_percent > 0 && ctx_win > 0 && estimated > (ctx_win * static_cast<size_t>(trigger_percent) / 100)) {
             compression_service_.MarkCompressionScheduled(active_project_id_, active_chat_id_);
         }
     }
@@ -2879,6 +3174,21 @@ void MainWindow::SendCurrentMessage() {
     active_messages_ = full_messages;
     storage_.SaveMessages(active_project_id_, active_chat_id_, active_messages_);
 
+    // Build working set diagnostic JSON for the debug entry
+    nlohmann::json ws_diag = nlohmann::json::array();
+    for (const auto& ws_entry : current_working_set) {
+        ws_diag.push_back({
+            {"chunk_id", ws_entry.chunk_id},
+            {"rag_id", ws_entry.rag_id},
+            {"rag_name", ws_entry.rag_name},
+            {"document_id", ws_entry.document_id},
+            {"document_title", ws_entry.document_title},
+            {"score", ws_entry.score},
+            {"query", ws_entry.query},
+            {"retrieved_at", ws_entry.retrieved_at},
+        });
+    }
+
     ChatContextDebugEntry context_debug_entry;
     context_debug_entry.id = MakeId("ctxdbg");
     context_debug_entry.created_at = CurrentTimestampUtc();
@@ -2891,11 +3201,12 @@ void MainWindow::SendCurrentMessage() {
     context_debug_entry.compressed_context = compressed_context;
     context_debug_entry.mcp_context = mcp_project_context;
     context_debug_entry.rag_context = rag_context;
+    context_debug_entry.rag_working_set_json = ws_diag.dump(2);
     storage_.AppendChatContextDebugEntry(project_id, chat_id, context_debug_entry);
 
     SetWindowTextW(input_, L"");
-    streaming_preview_.clear();
-    SetRequestBusy(true);
+    streaming_previews_by_chat_[active_chat_id_].clear();
+    SetChatBusy(active_chat_id_, true);
     RenderTranscript();
     UpdateStatus(L"Sending request...");
 
@@ -2903,8 +3214,10 @@ void MainWindow::SendCurrentMessage() {
 
     if (!include_tools) {
         std::thread([hwnd = hwnd_, request, project_id, chat_id]() {
-            const auto result = OpenAIClient::StreamChat(request, [hwnd](const std::string& piece) {
+            const auto result = OpenAIClient::StreamChat(request, [hwnd, project_id, chat_id](const std::string& piece) {
                 auto* payload = new ChatDeltaPayload;
+                payload->project_id = project_id;
+                payload->chat_id = chat_id;
                 payload->text = piece;
                 PostMessageW(hwnd, kChatDeltaMessage, 0, reinterpret_cast<LPARAM>(payload));
             });
@@ -2928,6 +3241,7 @@ void MainWindow::SendCurrentMessage() {
 
     std::thread([hwnd = hwnd_, request, project_id, chat_id, existing_count, exposed_tools, rag_tool_definitions, mcp_manager = &mcp_manager_, rag_service = &rag_service_]() {
         constexpr int kMaxToolRounds = 8;
+        auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
         std::vector<ChatToolDefinition> tool_definitions;
         tool_definitions.reserve(exposed_tools.size() + rag_tool_definitions.size());
@@ -2952,8 +3266,10 @@ void MainWindow::SendCurrentMessage() {
             ChatRequestOptions loop_request = request;
             loop_request.messages = working_messages;
 
-            const auto completion = OpenAIClient::StreamToolAwareCompletion(loop_request, tool_definitions, [hwnd](const std::string& piece) {
+            const auto completion = OpenAIClient::StreamToolAwareCompletion(loop_request, tool_definitions, [hwnd, project_id, chat_id](const std::string& piece) {
                 auto* payload = new ChatDeltaPayload;
+                payload->project_id = project_id;
+                payload->chat_id = chat_id;
                 payload->text = piece;
                 PostMessageW(hwnd, kChatDeltaMessage, 0, reinterpret_cast<LPARAM>(payload));
             });
@@ -3025,7 +3341,7 @@ void MainWindow::SendCurrentMessage() {
                         }.dump(2);
                     } else {
                         if (IsRagToolName(tool_call.name)) {
-                            result = CallRagTool(rag_service, mcp_manager, project_id, tool_call.name, tool_call.arguments_json);
+                            result = CallRagTool(rag_service, mcp_manager, project_id, tool_call.name, tool_call.arguments_json, working_set_additions.get());
                         } else {
                             result = mcp_manager->CallExposedTool(project_id, tool_call.name, tool_call.arguments_json);
                         }
@@ -3081,6 +3397,7 @@ void MainWindow::SendCurrentMessage() {
         for (size_t i = existing_count; i < working_messages.size(); ++i) {
             final_payload->appended_messages.push_back(working_messages[i]);
         }
+        final_payload->rag_working_set_additions = std::move(*working_set_additions);
         PostMessageW(hwnd, kChatFinishedMessage, 0, reinterpret_cast<LPARAM>(final_payload));
     }).detach();
 }
@@ -3088,6 +3405,11 @@ void MainWindow::SendCurrentMessage() {
 void MainWindow::CompressCurrentContext() {
     if (active_project_id_.empty() || active_chat_id_.empty()) {
         MessageBoxW(hwnd_, L"Select a chat first.", L"No Chat Selected", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    if (IsChatInFlight(active_chat_id_)) {
+        MessageBoxW(hwnd_, L"Cannot compress context while a request is in progress for this chat.", L"Chat Busy", MB_OK | MB_ICONINFORMATION);
         return;
     }
 
@@ -3207,13 +3529,18 @@ void MainWindow::ShowCurrentContextMessages() {
 
 void MainWindow::OnChatDelta(ChatDeltaPayload* payload) {
     std::unique_ptr<ChatDeltaPayload> guard(payload);
-    streaming_preview_ += Utf8ToWide(payload->text);
-    RenderTranscript();
+    streaming_previews_by_chat_[payload->chat_id] += Utf8ToWide(payload->text);
+    if (payload->chat_id == active_chat_id_) {
+        RenderTranscript();
+    }
 }
 
 void MainWindow::OnChatFinished(ChatFinishedPayload* payload) {
     std::unique_ptr<ChatFinishedPayload> guard(payload);
-    SetRequestBusy(false);
+
+    // Clear per-chat state regardless of which chat finished.
+    SetChatBusy(payload->chat_id, false);
+    streaming_previews_by_chat_.erase(payload->chat_id);
 
     if (!payload->appended_messages.empty()) {
         if (payload->project_id == active_project_id_ && payload->chat_id == active_chat_id_) {
@@ -3226,15 +3553,43 @@ void MainWindow::OnChatFinished(ChatFinishedPayload* payload) {
         }
     }
 
-    streaming_preview_.clear();
-    RenderTranscript();
-    RenderToolTrace();
+    // Merge RAG working set additions (dedup by chunk_id, cap at 60 entries per chat)
+    if (!payload->rag_working_set_additions.empty()) {
+        auto& ws = rag_working_sets_by_chat_[payload->chat_id];
+        for (auto& entry : payload->rag_working_set_additions) {
+            const bool already = std::any_of(ws.begin(), ws.end(),
+                [&](const RagWorkingSetEntry& e) { return e.chunk_id == entry.chunk_id; });
+            if (!already) {
+                ws.push_back(std::move(entry));
+            }
+        }
+        constexpr size_t kMaxWorkingSetSize = 60;
+        if (ws.size() > kMaxWorkingSetSize) {
+            ws.erase(ws.begin(), ws.begin() + static_cast<ptrdiff_t>(ws.size() - kMaxWorkingSetSize));
+        }
+        storage_.SaveChatRagWorkingSet(payload->project_id, payload->chat_id, ws);
+    }
 
-    if (payload->success) {
-        UpdateStatus(L"Response complete.");
+    if (payload->chat_id == active_chat_id_) {
+        // The visible chat finished — update transcript and show status.
+        RenderTranscript();
+        RenderToolTrace();
+        if (payload->success) {
+            UpdateStatus(L"Response complete.");
+        } else {
+            UpdateStatus(Utf8ToWide("Request failed: " + payload->error));
+            MessageBoxW(hwnd_, Utf8ToWide(payload->error).c_str(), L"Request Failed", MB_OK | MB_ICONERROR);
+        }
     } else {
-        UpdateStatus(Utf8ToWide("Request failed: " + payload->error));
-        MessageBoxW(hwnd_, Utf8ToWide(payload->error).c_str(), L"Request Failed", MB_OK | MB_ICONERROR);
+        // A background chat finished — tree label was already cleared by SetChatBusy.
+        // Update status bar only if nothing else is running for the active chat.
+        if (!IsChatInFlight(active_chat_id_)) {
+            if (!payload->success) {
+                UpdateStatus(Utf8ToWide("Background chat \"" + payload->chat_id + "\" failed: " + payload->error));
+            } else {
+                UpdateStatus(L"Background chat response complete.");
+            }
+        }
     }
 }
 
@@ -3248,7 +3603,7 @@ void MainWindow::OnToolTrace(ToolTracePayload* payload) {
 
 void MainWindow::OnMcpStateChanged() {
     const auto tools = mcp_manager_.GetExposedToolsForProject(active_project_id_);
-    if (!request_in_flight_) {
+    if (!IsChatInFlight(active_chat_id_)) {
         if (tools.empty()) {
             UpdateStatus(L"No connected MCP tools available for this project.");
         } else {
@@ -3277,9 +3632,12 @@ void MainWindow::RenderTranscript() {
             transcript += L"\r\n\r\n";
         }
 
-        if (request_in_flight_) {
+        if (IsChatInFlight(active_chat_id_)) {
             transcript += L"Assistant:\r\n";
-            transcript += streaming_preview_;
+            auto preview_it = streaming_previews_by_chat_.find(active_chat_id_);
+            if (preview_it != streaming_previews_by_chat_.end()) {
+                transcript += preview_it->second;
+            }
         }
     }
 
@@ -3399,24 +3757,84 @@ void MainWindow::UpdateStatus(const std::wstring& text) {
     SetWindowTextW(status_label_, text.c_str());
 }
 
-void MainWindow::SetRequestBusy(bool busy) {
-    request_in_flight_ = busy;
+bool MainWindow::IsChatInFlight(const std::string& chat_id) const {
+    if (chat_id.empty()) {
+        return false;
+    }
+    auto it = chats_in_flight_.find(chat_id);
+    return it != chats_in_flight_.end() && it->second;
+}
+
+int MainWindow::CountChatsInFlight() const {
+    int count = 0;
+    for (const auto& [id, busy] : chats_in_flight_) {
+        if (busy) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+void MainWindow::RefreshInputState() {
+    // Called after switching active chat so controls reflect the new chat's status.
+    const bool busy = IsChatInFlight(active_chat_id_);
     EnableWindow(send_button_, !busy);
     EnableWindow(input_, !busy);
-    EnableWindow(tree_, !busy);
-    EnableWindow(new_project_button_, !busy);
-    EnableWindow(new_chat_button_, !busy);
-    EnableWindow(rename_button_, !busy);
-    EnableWindow(delete_button_, !busy);
-    EnableWindow(model_combo_, !busy && !model_entries_.empty());
-    EnableWindow(providers_button_, !busy);
-    EnableWindow(mcp_servers_button_, !busy);
-    EnableWindow(project_mcp_button_, !busy);
-    EnableWindow(rag_service_button_, !busy);
-    EnableWindow(context_window_button_, !busy);
     EnableWindow(compress_button_, !busy);
-    EnableWindow(context_messages_button_, !busy);
-    EnableWindow(chat_settings_button_, !busy);
+    EnableWindow(model_combo_, !busy && !model_entries_.empty());
+    EnableWindow(setup_system_button_, TRUE);  // Always enabled; does not require an active chat.
+    // Tree, navigation, and manager buttons are NEVER locked by per-chat state.
+}
+
+void MainWindow::SetChatBusy(const std::string& chat_id, bool busy) {
+    if (busy) {
+        chats_in_flight_[chat_id] = true;
+    } else {
+        chats_in_flight_.erase(chat_id);
+    }
+
+    // Update input controls only when the affected chat is the one currently visible.
+    if (chat_id == active_chat_id_) {
+        RefreshInputState();
+    }
+
+    // Update the tree label to add or remove the streaming indicator (●).
+    UpdateChatTreeLabel(chat_id);
+}
+
+void MainWindow::UpdateChatTreeLabel(const std::string& chat_id) {
+    auto tree_it = chat_tree_items_.find(chat_id);
+    if (tree_it == chat_tree_items_.end() || !tree_it->second) {
+        return;
+    }
+
+    // Find the chat name in the loaded project list.
+    const ChatInfo* chat_info = nullptr;
+    for (const auto& project : projects_) {
+        for (const auto& chat : project.chats) {
+            if (chat.id == chat_id) {
+                chat_info = &chat;
+                break;
+            }
+        }
+        if (chat_info) {
+            break;
+        }
+    }
+    if (!chat_info) {
+        return;
+    }
+
+    std::wstring label = Utf8ToWide(chat_info->name);
+    if (IsChatInFlight(chat_id)) {
+        label += L" \u25cf";  // ● U+25CF BLACK CIRCLE
+    }
+
+    TVITEMW item{};
+    item.mask = TVIF_TEXT;
+    item.hItem = tree_it->second;
+    item.pszText = label.data();
+    TreeView_SetItem(tree_, &item);
 }
 
 ProjectRecord* MainWindow::FindProject(const std::string& project_id) {

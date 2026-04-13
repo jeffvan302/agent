@@ -1273,7 +1273,7 @@ The current `RagService` API supports:
 - Passive injection uses a fixed global result limit in the chat send path and per-binding max chunks in project querying.
 - Passive injection filters results through each binding's default minimum/maximum confidence thresholds.
 - Passive injection does not yet use the selected model's `context_window` for token-budget-aware trimming.
-- There is no per-project or per-RAG switch yet to disable passive injection while leaving active RAG tools enabled.
+- ~~There is no per-project or per-RAG switch yet to disable passive injection while leaving active RAG tools enabled.~~ **Implemented via per-binding `retrieval_mode` (Both / PassiveOnly / ActiveToolOnly / Disabled).**
 
 #### Active RAG Tool Mode
 
@@ -1789,7 +1789,7 @@ The following gaps are current as of April 13, 2026. Items are grouped by risk r
 
 ### 18.12 Recommended Next Implementation Order
 
-1. Add a per-binding retrieval mode policy so each RAG can be passive-only, active-tool-only, both, or disabled for retrieval.
+1. ~~Add a per-binding retrieval mode policy so each RAG can be passive-only, active-tool-only, both, or disabled for retrieval.~~ **Implemented.**
 2. Add a per-chat RAG working set with selected-reference context pinning, abandonment, expiry, and diagnostics.
 3. Add token-budget-aware RAG context construction using the selected model's optional `context_window` value.
 4. Add "injected context" and "RAG working set" diagnostics so the user can see exactly which chunks were sent to the model for a chat turn and which references were selected by the model.
@@ -1832,10 +1832,10 @@ This section is the actionable implementation roadmap from the current proof-of-
 
 These are the most important items to implement next because they affect correctness, model behavior, diagnostics, and the ability to trust RAG output.
 
-1. Implement per-binding retrieval mode policy.
-   - Add project/RAG binding settings for passive-only, active-tool-only, both, or disabled.
-   - Use this policy when building passive context and active tool definitions.
-   - This prevents duplicate retrieval behavior and lets projects decide whether RAG should be automatic background context or model-controlled search.
+1. ~~Implement per-binding retrieval mode policy.~~ **Implemented.**
+   - ~~Add project/RAG binding settings for passive-only, active-tool-only, both, or disabled.~~
+   - ~~Use this policy when building passive context and active tool definitions.~~
+   - ~~This prevents duplicate retrieval behavior and lets projects decide whether RAG should be automatic background context or model-controlled search.~~
 
 2. Implement a per-chat RAG working set.
    - Allow selected RAG search results or document references to be retained across later prompts.
@@ -1956,10 +1956,22 @@ These items prepare the RAG engine to become reusable outside the current app pr
 
 The next implementation sprint should focus on these items in order:
 
-1. Per-binding retrieval mode policy.
-2. Per-chat RAG working set.
-3. RAG injected-context and working-set diagnostics.
-4. Token-budget-aware RAG context trimming.
-5. Persistent ingestion job records.
+1. ~~Per-binding retrieval mode policy.~~ **Implemented.**
+2. ~~Per-chat RAG working set.~~ **Implemented.**
+3. ~~RAG injected-context and working-set diagnostics.~~ **Implemented.**
+4. ~~Token-budget-aware RAG context trimming.~~ **Implemented.**
+5. ~~Persistent ingestion job records.~~ **Implemented.**
 
 These five items are more critical than adding more file types because they determine whether RAG behavior is understandable, controllable, and safe during real project chats.
+
+### 20.7 Production Vector Backend (HNSWlib)
+
+~~Replace the SQLite cosine full-scan with an HNSWlib approximate nearest-neighbor index.~~ **Implemented.**
+
+- A custom header-only HNSW implementation (`third_party/hnswlib/hnswlib.h`) replaces the raw cosine scan for libraries with `vector_backend = "hnswlib"`.
+- The default remains `"sqlite_vector_scan"` for backward compatibility; new libraries should be created with `"hnswlib"`.
+- Index state is persisted per-library as `hnsw.bin` (graph) and `hnsw_labels.bin` (label ↔ chunk-id map).
+- An in-process `hnsw_cache_` keeps the loaded index warm across queries within a session.
+- `SyncHnswIndex` is called after every ingest path (`IngestFiles`, `IngestFolder`, `IngestGeneratedDocument`, `ReindexDocument`, `RebuildLibrary`) to add new embeddings and mark deleted ones.
+- `DeleteDocument` marks individual chunk labels deleted immediately in the cached index and saves to disk.
+- Query scoring: `score = (1 - inner_product_distance) * 0.70`, consistent with the hybrid vector + FTS merging weights.

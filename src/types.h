@@ -43,6 +43,7 @@ struct ChatContextDebugEntry {
     std::string compressed_context;
     std::string mcp_context;
     std::string rag_context;
+    std::string rag_working_set_json; // JSON array of RagWorkingSetEntry records injected this turn
 };
 
 struct ChatInfo {
@@ -138,6 +139,13 @@ struct RagLibraryConfig {
     std::string updated_at;
 };
 
+enum class RagRetrievalMode {
+    Both,           // passive context injection AND active tool (default)
+    PassiveOnly,    // passive context injection only; not exposed as active tool
+    ActiveToolOnly, // exposed as active tool only; not used for passive injection
+    Disabled,       // neither passive injection nor active tool
+};
+
 struct ProjectRagBinding {
     std::string rag_id;
     bool enabled = true;
@@ -152,6 +160,7 @@ struct ProjectRagBinding {
     int max_chunks = 8;
     double default_min_confidence = 0.0;
     double default_max_confidence = 1.0;
+    RagRetrievalMode retrieval_mode = RagRetrievalMode::Both;
 };
 
 struct RagDocumentRecord {
@@ -219,6 +228,8 @@ struct RagIngestionResult {
     int files_skipped = 0;
     int chunks_added = 0;
     std::vector<std::string> errors;
+    // Non-fatal notices (e.g. a chunk truncated to fit the model context window).
+    std::vector<std::string> warnings;
 };
 
 struct RagProgressUpdate {
@@ -308,6 +319,40 @@ struct RagQueryResult {
     std::string metadata_json;
     std::string last_indexed_at;
     double score = 0.0;
+};
+
+// Entry in a per-chat RAG working set: a chunk retrieved via rag_search tool call.
+struct RagWorkingSetEntry {
+    std::string chunk_id;
+    std::string rag_id;
+    std::string rag_name;
+    std::string document_id;
+    std::string document_title;
+    std::string text;
+    double score = 0.0;
+    std::string query;       // the rag_search query that retrieved this chunk
+    std::string retrieved_at;
+};
+
+enum class IngestionJobStatus {
+    Running,
+    Completed,
+    Failed,
+};
+
+struct IngestionJobRecord {
+    std::string id;
+    std::string rag_id;
+    std::string rag_name;
+    std::string kind;             // "files", "folder", "rebuild", "reindex", "generated"
+    std::string source_description;
+    IngestionJobStatus status = IngestionJobStatus::Running;
+    int files_ingested = 0;
+    int files_skipped = 0;
+    int chunks_added = 0;
+    std::vector<std::string> errors;
+    std::string started_at;
+    std::string finished_at;
 };
 
 // ===== Context Compression Types =====

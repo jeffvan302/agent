@@ -47,6 +47,7 @@ enum ControlId : int {
     kDeleteDocument = 6119,
     kInstallTools = 6120,
     kImageIngestSettings = 6121,
+    kViewJobs = 6122,
     kCloseButton = IDCANCEL,
 };
 
@@ -132,6 +133,7 @@ enum ImageIngestSettingsControlId : int {
 struct IngestionPayload {
     RagIngestionResult result;
     bool rebuild = false;
+    std::string job_id; // for persistent job tracking
 };
 
 struct ProgressPayload {
@@ -171,6 +173,12 @@ std::wstring IngestionSummary(const RagIngestionResult& result, bool rebuild) {
     text += rebuild ? L"Documents skipped: " : L"Files skipped: ";
     text += std::to_wstring(result.files_skipped) + L"\r\n";
     text += L"Chunks added: " + std::to_wstring(result.chunks_added) + L"\r\n";
+    if (!result.warnings.empty()) {
+        text += L"\r\nWarnings:\r\n";
+        for (const auto& warning : result.warnings) {
+            text += L"- " + Utf8ToWide(warning) + L"\r\n";
+        }
+    }
     if (!result.errors.empty()) {
         text += L"\r\nErrors:\r\n";
         for (const auto& error : result.errors) {
@@ -584,6 +592,7 @@ private:
     void DeleteDocument();
     void ShowExtractionTools();
     void ShowImageIngestSettings();
+    void ShowJobs();
     void OnRebuildProgress(ProgressPayload* payload);
     void OnIngestionFinished(IngestionPayload* payload);
     void Search();
@@ -610,6 +619,7 @@ private:
     HWND detach_button_ = nullptr;
     HWND install_tools_button_ = nullptr;
     HWND image_ingest_settings_button_ = nullptr;
+    HWND view_jobs_button_ = nullptr;
     HWND ingest_button_ = nullptr;
     HWND ingest_folder_button_ = nullptr;
     HWND rebuild_button_ = nullptr;
@@ -1656,6 +1666,7 @@ void RagServiceManagerWindow::OnCreate() {
     detach_button_ = CreateWindowExW(0, L"BUTTON", L"Detach", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kDetachProject), nullptr, nullptr);
     install_tools_button_ = CreateWindowExW(0, L"BUTTON", L"Install Tools", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstallTools), nullptr, nullptr);
     image_ingest_settings_button_ = CreateWindowExW(0, L"BUTTON", L"Image Ingest Settings", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageIngestSettings), nullptr, nullptr);
+    view_jobs_button_ = CreateWindowExW(0, L"BUTTON", L"View Jobs", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kViewJobs), nullptr, nullptr);
     ingest_button_ = CreateWindowExW(0, L"BUTTON", L"Ingest Files", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kIngestFiles), nullptr, nullptr);
     ingest_folder_button_ = CreateWindowExW(0, L"BUTTON", L"Ingest Folder", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kIngestFolder), nullptr, nullptr);
     rebuild_button_ = CreateWindowExW(0, L"BUTTON", L"Rebuild DB", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRebuildLibrary), nullptr, nullptr);
@@ -1669,7 +1680,7 @@ void RagServiceManagerWindow::OnCreate() {
     status_label_ = CreateWindowExW(0, L"STATIC", L"Manage reusable RAG libraries and attach them to the active project.", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatusLabel), nullptr, nullptr);
     close_button_ = CreateWindowExW(0, L"BUTTON", L"Close", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCloseButton), nullptr, nullptr);
 
-    for (HWND control : {libraries_list_, details_edit_, add_button_, edit_button_, remove_button_, attach_read_button_, attach_write_button_, detach_button_, install_tools_button_, image_ingest_settings_button_, ingest_button_, ingest_folder_button_, rebuild_button_, documents_button_, reindex_document_button_, delete_document_button_, search_edit_, search_button_, results_edit_, status_label_, close_button_}) {
+    for (HWND control : {libraries_list_, details_edit_, add_button_, edit_button_, remove_button_, attach_read_button_, attach_write_button_, detach_button_, install_tools_button_, image_ingest_settings_button_, view_jobs_button_, ingest_button_, ingest_folder_button_, rebuild_button_, documents_button_, reindex_document_button_, delete_document_button_, search_edit_, search_button_, results_edit_, status_label_, close_button_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
     SendMessageW(progress_bar_, PBM_SETRANGE32, 0, 100);
@@ -1701,11 +1712,12 @@ void RagServiceManagerWindow::LayoutControls(int width, int height) const {
     MoveWindow(detach_button_, margin + (project_row_width + gutter) * 2, y, project_row_width, button_height, TRUE);
     y += button_height + gutter;
 
-    const int tools_y = footer_y - button_height - gutter;
+    const int tools_y = footer_y - (button_height + gutter) * 2;
     MoveWindow(libraries_list_, margin, y, left_width, tools_y - y - gutter, TRUE);
     const int install_width = (left_width - gutter) / 2;
     MoveWindow(install_tools_button_, margin, tools_y, install_width, button_height, TRUE);
     MoveWindow(image_ingest_settings_button_, margin + install_width + gutter, tools_y, left_width - install_width - gutter, button_height, TRUE);
+    MoveWindow(view_jobs_button_, margin, tools_y + button_height + gutter, left_width, button_height, TRUE);
 
     const int right_x = margin + left_width + gutter;
     const int right_width = width - right_x - margin;
@@ -1991,6 +2003,13 @@ void RagServiceManagerWindow::IngestFiles() {
     }
 
     const std::string rag_id = selected->id;
+    std::string source_desc;
+    for (size_t i = 0; i < files.size() && i < 3; ++i) {
+        if (i > 0) source_desc += ", ";
+        source_desc += files[i].filename().string();
+    }
+    if (files.size() > 3) source_desc += " (+" + std::to_string(files.size() - 3) + " more)";
+    const IngestionJobRecord job = rag_service_->CreateIngestionJob(rag_id, "files", source_desc);
     EnableWindow(ingest_button_, FALSE);
     EnableWindow(ingest_folder_button_, FALSE);
     EnableWindow(rebuild_button_, FALSE);
@@ -2000,8 +2019,9 @@ void RagServiceManagerWindow::IngestFiles() {
     SendMessageW(progress_bar_, PBM_SETRANGE32, 0, 100);
     SendMessageW(progress_bar_, PBM_SETPOS, 0, 0);
     UpdateStatus(L"Ingesting files...");
-    std::thread([hwnd = hwnd_, service = rag_service_, rag_id, files]() {
+    std::thread([hwnd = hwnd_, service = rag_service_, rag_id, files, job_id = job.id]() {
         auto* payload = new IngestionPayload;
+        payload->job_id = job_id;
         payload->result = service->IngestFiles(rag_id, files);
         if (!PostMessageW(hwnd, kIngestionFinishedMessage, 0, reinterpret_cast<LPARAM>(payload))) {
             delete payload;
@@ -2044,6 +2064,8 @@ void RagServiceManagerWindow::IngestFolder() {
     }
 
     const std::string rag_id = selected->id;
+    const std::string source_desc = folder->filename().string() + (recursive ? " (recursive)" : "");
+    const IngestionJobRecord job = rag_service_->CreateIngestionJob(rag_id, "folder", source_desc);
     EnableWindow(ingest_button_, FALSE);
     EnableWindow(ingest_folder_button_, FALSE);
     EnableWindow(rebuild_button_, FALSE);
@@ -2053,8 +2075,9 @@ void RagServiceManagerWindow::IngestFolder() {
     SendMessageW(progress_bar_, PBM_SETRANGE32, 0, 100);
     SendMessageW(progress_bar_, PBM_SETPOS, 0, 0);
     UpdateStatus(recursive ? L"Ingesting folder recursively..." : L"Ingesting folder...");
-    std::thread([hwnd = hwnd_, service = rag_service_, rag_id, folder = *folder, recursive]() {
+    std::thread([hwnd = hwnd_, service = rag_service_, rag_id, folder = *folder, recursive, job_id = job.id]() {
         auto* payload = new IngestionPayload;
+        payload->job_id = job_id;
         payload->result = service->IngestFolder(rag_id, folder, recursive);
         if (!PostMessageW(hwnd, kIngestionFinishedMessage, 0, reinterpret_cast<LPARAM>(payload))) {
             delete payload;
@@ -2078,6 +2101,7 @@ void RagServiceManagerWindow::RebuildSelected() {
     }
 
     const std::string rag_id = selected->id;
+    const IngestionJobRecord job = rag_service_->CreateIngestionJob(rag_id, "rebuild", selected->name);
     EnableWindow(ingest_button_, FALSE);
     EnableWindow(ingest_folder_button_, FALSE);
     EnableWindow(rebuild_button_, FALSE);
@@ -2088,9 +2112,10 @@ void RagServiceManagerWindow::RebuildSelected() {
     SendMessageW(progress_bar_, PBM_SETPOS, 0, 0);
     UpdateStatus(L"Rebuilding RAG index...");
 
-    std::thread([hwnd = hwnd_, service = rag_service_, rag_id]() {
+    std::thread([hwnd = hwnd_, service = rag_service_, rag_id, job_id = job.id]() {
         auto* payload = new IngestionPayload;
         payload->rebuild = true;
+        payload->job_id = job_id;
         payload->result = service->RebuildLibrary(rag_id, [hwnd](const RagProgressUpdate& progress) {
             auto* progress_payload = new ProgressPayload;
             progress_payload->progress = progress;
@@ -2139,6 +2164,7 @@ void RagServiceManagerWindow::ReindexDocument() {
 
     const std::string rag_id = selected->id;
     const std::string doc_id = WideToUtf8(TrimWide(*document_id));
+    const IngestionJobRecord job = rag_service_->CreateIngestionJob(rag_id, "reindex", doc_id);
     EnableWindow(ingest_button_, FALSE);
     EnableWindow(ingest_folder_button_, FALSE);
     EnableWindow(rebuild_button_, FALSE);
@@ -2149,8 +2175,9 @@ void RagServiceManagerWindow::ReindexDocument() {
     SendMessageW(progress_bar_, PBM_SETPOS, 0, 0);
     UpdateStatus(L"Reindexing document...");
 
-    std::thread([hwnd = hwnd_, service = rag_service_, rag_id, doc_id]() {
+    std::thread([hwnd = hwnd_, service = rag_service_, rag_id, doc_id, job_id = job.id]() {
         auto* payload = new IngestionPayload;
+        payload->job_id = job_id;
         payload->result = service->ReindexDocument(rag_id, doc_id);
         if (!PostMessageW(hwnd, kIngestionFinishedMessage, 0, reinterpret_cast<LPARAM>(payload))) {
             delete payload;
@@ -2245,6 +2272,53 @@ void RagServiceManagerWindow::ShowImageIngestSettings() {
     }
 }
 
+void RagServiceManagerWindow::ShowJobs() {
+    const std::vector<IngestionJobRecord> jobs = rag_service_->ListIngestionJobs(100);
+    if (jobs.empty()) {
+        SetWindowTextW(results_edit_, L"No ingestion jobs recorded yet.");
+        UpdateStatus(L"No ingestion jobs found.");
+        return;
+    }
+
+    std::wstring text;
+    text += L"Ingestion Job History (" + std::to_wstring(jobs.size()) + L" most recent)\r\n";
+    text += L"========================================\r\n\r\n";
+
+    for (const auto& job : jobs) {
+        text += L"[" + Utf8ToWide(job.started_at) + L"]  ";
+        if (job.status == IngestionJobStatus::Running) {
+            text += L"RUNNING";
+        } else if (job.status == IngestionJobStatus::Completed) {
+            text += L"OK";
+        } else {
+            text += L"FAILED";
+        }
+        text += L"  " + Utf8ToWide(job.kind) + L"  ";
+        if (!job.rag_name.empty()) text += Utf8ToWide(job.rag_name) + L"  ";
+        if (!job.source_description.empty()) text += L"\"" + Utf8ToWide(job.source_description) + L"\"";
+        text += L"\r\n";
+
+        if (!job.finished_at.empty()) {
+            text += L"  Finished: " + Utf8ToWide(job.finished_at) + L"\r\n";
+        }
+        text += L"  Files ingested: " + std::to_wstring(job.files_ingested);
+        text += L"  Skipped: " + std::to_wstring(job.files_skipped);
+        text += L"  Chunks added: " + std::to_wstring(job.chunks_added) + L"\r\n";
+        if (!job.errors.empty()) {
+            text += L"  Errors (" + std::to_wstring(job.errors.size()) + L"):\r\n";
+            for (const auto& err : job.errors) {
+                text += L"    - " + Utf8ToWide(err) + L"\r\n";
+            }
+        }
+        text += L"\r\n";
+    }
+
+    SetWindowTextW(results_edit_, text.c_str());
+    SendMessageW(results_edit_, EM_SETSEL, 0, 0);
+    SendMessageW(results_edit_, WM_VSCROLL, SB_TOP, 0);
+    UpdateStatus(L"Showing " + std::to_wstring(jobs.size()) + L" ingestion job(s).");
+}
+
 void RagServiceManagerWindow::OnRebuildProgress(ProgressPayload* payload) {
     std::unique_ptr<ProgressPayload> guard(payload);
     const int total = std::max(1, payload->progress.total_items);
@@ -2263,6 +2337,9 @@ void RagServiceManagerWindow::OnRebuildProgress(ProgressPayload* payload) {
 
 void RagServiceManagerWindow::OnIngestionFinished(IngestionPayload* payload) {
     std::unique_ptr<IngestionPayload> guard(payload);
+    if (!payload->job_id.empty()) {
+        rag_service_->CompleteIngestionJob(payload->job_id, payload->result);
+    }
     EnableWindow(ingest_button_, TRUE);
     EnableWindow(ingest_folder_button_, TRUE);
     EnableWindow(rebuild_button_, TRUE);
@@ -2274,9 +2351,19 @@ void RagServiceManagerWindow::OnIngestionFinished(IngestionPayload* payload) {
     SetWindowTextW(results_edit_, IngestionSummary(payload->result, payload->rebuild).c_str());
     RefreshLibraries();
     if (payload->rebuild) {
-        UpdateStatus(payload->result.errors.empty() ? L"Rebuild complete." : L"Rebuild finished with warnings.");
+        if (!payload->result.errors.empty())
+            UpdateStatus(L"Rebuild finished with errors.");
+        else if (!payload->result.warnings.empty())
+            UpdateStatus(L"Rebuild complete (with warnings).");
+        else
+            UpdateStatus(L"Rebuild complete.");
     } else {
-        UpdateStatus(payload->result.errors.empty() ? L"Ingestion complete." : L"Ingestion finished with warnings.");
+        if (!payload->result.errors.empty())
+            UpdateStatus(L"Ingestion finished with errors.");
+        else if (!payload->result.warnings.empty())
+            UpdateStatus(L"Ingestion complete (with warnings).");
+        else
+            UpdateStatus(L"Ingestion complete.");
     }
 }
 
@@ -2353,6 +2440,9 @@ void RagServiceManagerWindow::OnCommand(int control_id, int notification_code) {
         break;
     case kImageIngestSettings:
         ShowImageIngestSettings();
+        break;
+    case kViewJobs:
+        ShowJobs();
         break;
     case kIngestFiles:
         IngestFiles();

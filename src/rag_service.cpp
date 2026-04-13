@@ -2,6 +2,12 @@
 
 #include "util.h"
 
+// Suppress MSVC warnings inside the hnswlib header.
+#pragma warning(push)
+#pragma warning(disable: 4267 4305 4244)
+#include "../third_party/hnswlib/hnswlib.h"
+#pragma warning(pop)
+
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 #include <shellapi.h>
@@ -1189,35 +1195,136 @@ bool FileLooksLikeText(const std::filesystem::path& path) {
     return LooksLikeText(sample);
 }
 
+// Returns true if the exception message looks like a model context-length overflow.
+bool IsContextLengthError(const std::string& msg) {
+    return msg.find("context length") != std::string::npos
+        || msg.find("context window") != std::string::npos
+        || msg.find("input length") != std::string::npos
+        || msg.find("max_seq_len") != std::string::npos
+        || msg.find("sequence length") != std::string::npos
+        || msg.find("token limit") != std::string::npos;
+}
+
+// Tries to embed a single text through the provider.  If it fails with a
+// context-length error, truncates the text by half and retries once.
+// Returns the resulting vector, or an empty vector if the embedding failed.
+// On failure, appends a *warning* (not an error) to result.
+std::vector<float> EmbedOneWithFallback(
+        const std::string& text,
+        IRagEmbeddingProvider* provider,
+        const std::string& display_name,
+        int chunk_index,
+        RagIngestionResult& result) {
+    // First attempt with original text.
+    try {
+        auto vecs = provider->Embed({text});
+        if (!vecs.empty() && !vecs.front().empty()) {
+            return vecs.front();
+        }
+    } catch (const std::exception& ex) {
+        if (!IsContextLengthError(ex.what())) {
+            // Not a context-length issue — surface as real error.
+            result.errors.push_back(display_name + " (chunk " + std::to_string(chunk_index) + "): embedding failed: " + ex.what());
+            return {};
+        }
+        // Context overflow: fall through to truncated retry.
+    } catch (...) {
+        result.errors.push_back(display_name + " (chunk " + std::to_string(chunk_index) + "): embedding failed unexpectedly.");
+        return {};
+    }
+
+    // Truncated retry: take the first half of the text (at a UTF-8 boundary).
+    const size_t truncated_len = text.size() / 2;
+    std::string truncated = text.substr(0, truncated_len);
+    // Walk back to a clean UTF-8 boundary.
+    while (!truncated.empty() && (static_cast<unsigned char>(truncated.back()) & 0xC0) == 0x80) {
+        truncated.pop_back();
+    }
+    try {
+        auto vecs = provider->Embed({truncated});
+        if (!vecs.empty() && !vecs.front().empty()) {
+            result.warnings.push_back(display_name + " (chunk " + std::to_string(chunk_index)
+                + "): text truncated to fit model context window ("
+                + std::to_string(truncated.size()) + " of " + std::to_string(text.size()) + " chars).");
+            return vecs.front();
+        }
+    } catch (...) {}
+
+    // If even the truncated text fails, skip this chunk silently.
+    result.warnings.push_back(display_name + " (chunk " + std::to_string(chunk_index)
+        + "): skipped — text too long for embedding model ("
+        + std::to_string(text.size()) + " chars).");
+    return {};
+}
+
 void InsertEmbeddingBatch(sqlite3* db, const RagLibraryConfig& library, const RagDocumentRecord& document, IRagEmbeddingProvider* embedding_provider, std::vector<RagChunkRecord>& embedding_batch, RagIngestionResult& result) {
     if (!embedding_provider || embedding_batch.empty()) {
         embedding_batch.clear();
         return;
     }
+
+    // Build the text list for a batch attempt.
+    std::vector<std::string> texts;
+    texts.reserve(embedding_batch.size());
+    for (const auto& chunk : embedding_batch) {
+        texts.push_back(chunk.text);
+    }
+
+    // --- Fast path: attempt the whole batch at once ---
+    bool batch_succeeded = false;
+    std::vector<std::vector<float>> vectors;
     try {
-        std::vector<std::string> texts;
-        texts.reserve(embedding_batch.size());
-        for (const auto& chunk : embedding_batch) {
-            texts.push_back(chunk.text);
+        vectors = embedding_provider->Embed(texts);
+        if (vectors.size() == embedding_batch.size()) {
+            batch_succeeded = true;
         }
-        const auto vectors = embedding_provider->Embed(texts);
-        if (vectors.size() != embedding_batch.size()) {
-            throw std::runtime_error("Embedding provider returned the wrong number of vectors.");
-        }
-        for (size_t i = 0; i < embedding_batch.size(); ++i) {
-            if (library.embedding_dimensions > 0 && vectors[i].size() != static_cast<size_t>(library.embedding_dimensions)) {
-                std::ostringstream message;
-                message << "Embedding dimension mismatch for " << document.display_name
-                        << ": expected " << library.embedding_dimensions
-                        << ", got " << vectors[i].size() << ".";
-                throw std::runtime_error(message.str());
-            }
-            InsertEmbedding(db, embedding_batch[i], *embedding_provider, vectors[i]);
-        }
-    } catch (const std::exception& ex) {
-        result.errors.push_back(document.display_name + ": embedding failed: " + ex.what());
     } catch (...) {
-        result.errors.push_back(document.display_name + ": embedding failed unexpectedly.");
+        // Batch failed — fall through to per-chunk path.
+    }
+
+    if (batch_succeeded) {
+        // Validate dimensions and insert.
+        try {
+            for (size_t i = 0; i < embedding_batch.size(); ++i) {
+                if (library.embedding_dimensions > 0 && vectors[i].size() != static_cast<size_t>(library.embedding_dimensions)) {
+                    std::ostringstream message;
+                    message << "Embedding dimension mismatch for " << document.display_name
+                            << ": expected " << library.embedding_dimensions
+                            << ", got " << vectors[i].size() << ".";
+                    throw std::runtime_error(message.str());
+                }
+                InsertEmbedding(db, embedding_batch[i], *embedding_provider, vectors[i]);
+            }
+        } catch (const std::exception& ex) {
+            result.errors.push_back(document.display_name + ": embedding failed: " + ex.what());
+        } catch (...) {
+            result.errors.push_back(document.display_name + ": embedding failed unexpectedly.");
+        }
+        embedding_batch.clear();
+        return;
+    }
+
+    // --- Slow path: embed one chunk at a time with truncation fallback ---
+    for (size_t i = 0; i < embedding_batch.size(); ++i) {
+        const auto vec = EmbedOneWithFallback(
+            embedding_batch[i].text, embedding_provider,
+            document.display_name, embedding_batch[i].chunk_index, result);
+        if (vec.empty()) {
+            continue;  // already warned/errored inside EmbedOneWithFallback
+        }
+        if (library.embedding_dimensions > 0 && vec.size() != static_cast<size_t>(library.embedding_dimensions)) {
+            std::ostringstream message;
+            message << "Embedding dimension mismatch for " << document.display_name
+                    << ": expected " << library.embedding_dimensions
+                    << ", got " << vec.size() << ".";
+            result.errors.push_back(message.str());
+            continue;
+        }
+        try {
+            InsertEmbedding(db, embedding_batch[i], *embedding_provider, vec);
+        } catch (const std::exception& ex) {
+            result.errors.push_back(document.display_name + ": could not save embedding: " + ex.what());
+        }
     }
     embedding_batch.clear();
 }
@@ -3329,6 +3436,21 @@ bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const s
 }
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// HNSW handle — one per RAG library, cached in hnsw_cache_.
+// ---------------------------------------------------------------------------
+struct HnswHandle {
+    std::unique_ptr<hnswlib::InnerProductSpace>      space;
+    std::unique_ptr<hnswlib::HierarchicalNSW<float>> index;
+    // label (hnswlib integer) <-> chunk_id (string) maps.
+    std::unordered_map<hnswlib::labeltype, std::string> label_to_chunk;
+    std::unordered_map<std::string, hnswlib::labeltype> chunk_to_label;
+    hnswlib::labeltype next_label = 0;
+    size_t             dims       = 0;
+};
+
+// ---------------------------------------------------------------------------
+
 RagService::RagService(AppStorage* storage) : storage_(storage) {}
 
 RagService::~RagService() {
@@ -4466,6 +4588,9 @@ RagIngestionResult RagService::ReindexDocument(const std::string& rag_id, const 
     source.display_name = document->display_name;
     source.metadata_json = document->metadata_json;
     IngestOneSourceNoLock(db.get(), library, library_path, source, false, image_settings, embedding_provider.get(), result);
+    if (library.vector_backend == "hnswlib") {
+        SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
+    }
     result.success = result.errors.empty();
     return result;
 }
@@ -4480,6 +4605,7 @@ bool RagService::DeleteDocument(const std::string& rag_id, const std::string& do
         return false;
     }
 
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
     const std::filesystem::path library_path = LibraryPath(rag_id);
     auto db = OpenDatabase(library_path / "rag.sqlite");
     EnsureRagDatabase(db.get());
@@ -4489,6 +4615,20 @@ bool RagService::DeleteDocument(const std::string& rag_id, const std::string& do
             *error = "Document not found.";
         }
         return false;
+    }
+
+    // Collect chunk IDs before deletion so we can update the HNSW index.
+    std::vector<std::string> deleted_chunk_ids;
+    if (library.vector_backend == "hnswlib" && hnsw_cache_.count(rag_id)) {
+        try {
+            auto stmt = PrepareSql(db.get(), "SELECT id FROM chunks WHERE document_id = ?;");
+            BindText(stmt.get(), 1, document_id);
+            while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+                deleted_chunk_ids.emplace_back(reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 0)));
+            }
+        } catch (...) {
+            // Non-fatal — HNSW will self-correct on next SyncHnswIndex.
+        }
     }
 
     try {
@@ -4518,6 +4658,33 @@ bool RagService::DeleteDocument(const std::string& rag_id, const std::string& do
             *error = "Unexpected document delete error.";
         }
         return false;
+    }
+
+    // Update the cached HNSW index to mark deleted chunks.
+    if (!deleted_chunk_ids.empty()) {
+        auto it = hnsw_cache_.find(rag_id);
+        if (it != hnsw_cache_.end() && it->second) {
+            HnswHandle* handle = it->second.get();
+            bool modified = false;
+            for (const auto& cid : deleted_chunk_ids) {
+                auto label_it = handle->chunk_to_label.find(cid);
+                if (label_it != handle->chunk_to_label.end()) {
+                    try {
+                        handle->index->markDelete(label_it->second);
+                    } catch (...) {
+                    }
+                    handle->label_to_chunk.erase(label_it->second);
+                    handle->chunk_to_label.erase(label_it);
+                    modified = true;
+                }
+            }
+            if (modified) {
+                try {
+                    SaveHnswHandle(rag_id);
+                } catch (...) {
+                }
+            }
+        }
     }
 
     if (delete_managed_files) {
@@ -4661,6 +4828,7 @@ RagIngestionResult RagService::IngestFiles(const std::string& rag_id, const std:
         IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, embedding_provider.get(), result);
     }
 
+    SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
     result.success = result.errors.empty();
     return result;
 }
@@ -4738,6 +4906,7 @@ RagIngestionResult RagService::IngestFolder(const std::string& rag_id, const std
     for (const auto& source : sources) {
         IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, embedding_provider.get(), result);
     }
+    SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
     result.success = result.errors.empty();
     return result;
 }
@@ -4811,6 +4980,9 @@ RagIngestionResult RagService::IngestGeneratedDocument(const std::string& rag_id
     source.display_name = display_name;
     source.metadata_json = metadata.dump();
     IngestOneSourceNoLock(db.get(), library, library_path, source, false, LoadImageIngestSettingsNoLock(), embedding_provider.get(), result);
+    if (library.vector_backend == "hnswlib") {
+        SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
+    }
     result.success = result.errors.empty();
     return result;
 }
@@ -4862,6 +5034,11 @@ RagIngestionResult RagService::RebuildLibrary(const std::string& rag_id, std::fu
         progress(update);
     };
 
+    // Invalidate the HNSW cache so a full rebuild starts fresh.
+    if (library.vector_backend == "hnswlib") {
+        InvalidateHnswHandle(rag_id);
+    }
+
     publish(0, "Clearing database", "");
     try {
         ClearRagDatabaseForRebuild(db.get());
@@ -4893,6 +5070,10 @@ RagIngestionResult RagService::RebuildLibrary(const std::string& rag_id, std::fu
         rebuilt.rebuild_reason.clear();
         rebuilt.updated_at = CurrentTimestampUtc();
         SaveJsonFile(library_path / "rag.json", RagLibraryToJson(rebuilt));
+    }
+
+    if (library.vector_backend == "hnswlib") {
+        SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
     }
 
     publish(processed, "Rebuild complete", "");
@@ -4940,50 +5121,104 @@ std::vector<RagQueryResult> RagService::QueryRag(const std::string& rag_id, cons
                 if (!query_embeddings.empty() && !query_embeddings.front().empty()) {
                     const std::vector<float>& query_vector = query_embeddings.front();
                     const int dimensions = static_cast<int>(query_vector.size());
-                    auto statement = PrepareSql(db.get(),
-                        "SELECT c.id, c.document_id, c.text, "
-                        "COALESCE(d.display_name, c.document_id), COALESCE(d.original_source_uri, ''), "
-                        "COALESCE(d.metadata_json, ''), COALESCE(d.last_indexed_at, ''), "
-                        "e.vector_blob "
-                        "FROM embeddings e "
-                        "JOIN chunks c ON c.id = e.chunk_id "
-                        "LEFT JOIN documents d ON d.id = c.document_id AND d.deleted = 0 "
-                        "WHERE e.provider = ? AND e.model = ? AND e.dimensions = ?;");
-                    BindText(statement.get(), 1, embedding_provider->ProviderId());
-                    BindText(statement.get(), 2, embedding_provider->ModelId());
-                    sqlite3_bind_int(statement.get(), 3, dimensions);
-
                     std::vector<RagQueryResult> vector_results;
-                    int rc = SQLITE_OK;
-                    while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
-                        const void* blob = sqlite3_column_blob(statement.get(), 7);
-                        const int blob_bytes = sqlite3_column_bytes(statement.get(), 7);
-                        const std::vector<float> chunk_vector = DeserializeVector(blob, blob_bytes);
-                        const double similarity = CosineSimilarity(query_vector, chunk_vector);
-                        if (similarity <= 0.0) {
-                            continue;
-                        }
 
-                        RagQueryResult result;
-                        result.rag_id = rag_id;
-                        result.rag_name = library.name;
-                        result.chunk_id = ColumnText(statement.get(), 0);
-                        result.document_id = ColumnText(statement.get(), 1);
-                        result.text = ColumnText(statement.get(), 2);
-                        result.document_title = ColumnText(statement.get(), 3);
-                        result.source_path = ColumnText(statement.get(), 4);
-                        result.metadata_json = ColumnText(statement.get(), 5);
-                        result.last_indexed_at = ColumnText(statement.get(), 6);
-                        result.retrieval_method = "vector";
-                        result.score = similarity * 0.70;
-                        vector_results.push_back(std::move(result));
+                    if (library.vector_backend == "hnswlib") {
+                        // ---- HNSW path ----
+                        HnswHandle* hnsw = GetOrCreateHnswHandle(rag_id, static_cast<size_t>(dimensions));
+                        if (hnsw && hnsw->index && hnsw->index->getCurrentElementCount() > 0) {
+                            const size_t k = static_cast<size_t>(limit * 3);
+                            hnsw->index->setEf(std::max(size_t(50), k));
+                            auto knn = hnsw->index->searchKnn(query_vector.data(), k);
+
+                            // Collect chunk_ids and distances from the knn result (max-heap).
+                            std::vector<std::pair<float, std::string>> hits;
+                            hits.reserve(knn.size());
+                            while (!knn.empty()) {
+                                const auto [dist, lbl] = knn.top(); knn.pop();
+                                const auto it = hnsw->label_to_chunk.find(lbl);
+                                if (it != hnsw->label_to_chunk.end()) {
+                                    hits.push_back({dist, it->second});
+                                }
+                            }
+                            // Sort ascending by distance (nearest first).
+                            std::sort(hits.begin(), hits.end());
+
+                            // Batch-fetch metadata from SQLite for each matched chunk.
+                            for (const auto& [dist, chunk_id] : hits) {
+                                auto stmt = PrepareSql(db.get(),
+                                    "SELECT c.id, c.document_id, c.text, "
+                                    "COALESCE(d.display_name, c.document_id), "
+                                    "COALESCE(d.original_source_uri, ''), "
+                                    "COALESCE(d.metadata_json, ''), "
+                                    "COALESCE(d.last_indexed_at, '') "
+                                    "FROM chunks c "
+                                    "LEFT JOIN documents d ON d.id = c.document_id AND d.deleted = 0 "
+                                    "WHERE c.id = ?;");
+                                BindText(stmt.get(), 1, chunk_id);
+                                if (sqlite3_step(stmt.get()) != SQLITE_ROW) continue;
+                                const float cosine = 1.0f - dist;  // InnerProduct dist = 1 - cosine
+                                if (cosine <= 0.0f) continue;
+                                RagQueryResult result;
+                                result.rag_id         = rag_id;
+                                result.rag_name       = library.name;
+                                result.chunk_id       = ColumnText(stmt.get(), 0);
+                                result.document_id    = ColumnText(stmt.get(), 1);
+                                result.text           = ColumnText(stmt.get(), 2);
+                                result.document_title = ColumnText(stmt.get(), 3);
+                                result.source_path    = ColumnText(stmt.get(), 4);
+                                result.metadata_json  = ColumnText(stmt.get(), 5);
+                                result.last_indexed_at = ColumnText(stmt.get(), 6);
+                                result.retrieval_method = "vector";
+                                result.score          = static_cast<double>(cosine) * 0.70;
+                                vector_results.push_back(std::move(result));
+                            }
+                        }
+                    } else {
+                        // ---- SQLite full-scan path (default: sqlite_vector_scan) ----
+                        auto statement = PrepareSql(db.get(),
+                            "SELECT c.id, c.document_id, c.text, "
+                            "COALESCE(d.display_name, c.document_id), COALESCE(d.original_source_uri, ''), "
+                            "COALESCE(d.metadata_json, ''), COALESCE(d.last_indexed_at, ''), "
+                            "e.vector_blob "
+                            "FROM embeddings e "
+                            "JOIN chunks c ON c.id = e.chunk_id "
+                            "LEFT JOIN documents d ON d.id = c.document_id AND d.deleted = 0 "
+                            "WHERE e.provider = ? AND e.model = ? AND e.dimensions = ?;");
+                        BindText(statement.get(), 1, embedding_provider->ProviderId());
+                        BindText(statement.get(), 2, embedding_provider->ModelId());
+                        sqlite3_bind_int(statement.get(), 3, dimensions);
+
+                        int rc = SQLITE_OK;
+                        while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+                            const void* blob       = sqlite3_column_blob(statement.get(), 7);
+                            const int   blob_bytes = sqlite3_column_bytes(statement.get(), 7);
+                            const std::vector<float> chunk_vector = DeserializeVector(blob, blob_bytes);
+                            const double similarity = CosineSimilarity(query_vector, chunk_vector);
+                            if (similarity <= 0.0) continue;
+                            RagQueryResult result;
+                            result.rag_id         = rag_id;
+                            result.rag_name       = library.name;
+                            result.chunk_id       = ColumnText(statement.get(), 0);
+                            result.document_id    = ColumnText(statement.get(), 1);
+                            result.text           = ColumnText(statement.get(), 2);
+                            result.document_title = ColumnText(statement.get(), 3);
+                            result.source_path    = ColumnText(statement.get(), 4);
+                            result.metadata_json  = ColumnText(statement.get(), 5);
+                            result.last_indexed_at = ColumnText(statement.get(), 6);
+                            result.retrieval_method = "vector";
+                            result.score          = similarity * 0.70;
+                            vector_results.push_back(std::move(result));
+                        }
+                        if (rc != SQLITE_DONE) {
+                            ThrowSqlite(db.get(), "Could not query RAG vectors");
+                        }
                     }
-                    if (rc != SQLITE_DONE) {
-                        ThrowSqlite(db.get(), "Could not query RAG vectors");
-                    }
-                    std::sort(vector_results.begin(), vector_results.end(), [](const RagQueryResult& left, const RagQueryResult& right) {
-                        return left.score > right.score;
-                    });
+
+                    std::sort(vector_results.begin(), vector_results.end(),
+                        [](const RagQueryResult& l, const RagQueryResult& r) {
+                            return l.score > r.score;
+                        });
                     if (vector_results.size() > static_cast<size_t>(limit * 3)) {
                         vector_results.resize(static_cast<size_t>(limit * 3));
                     }
@@ -5105,6 +5340,11 @@ std::vector<RagQueryResult> RagService::QueryProject(const std::string& project_
         if (!binding.enabled || !binding.can_read) {
             continue;
         }
+        // Skip bindings that are not configured for passive context injection
+        if (binding.retrieval_mode == RagRetrievalMode::ActiveToolOnly ||
+            binding.retrieval_mode == RagRetrievalMode::Disabled) {
+            continue;
+        }
         double min_confidence = std::clamp(binding.default_min_confidence, 0.0, 1.0);
         double max_confidence = std::clamp(binding.default_max_confidence, 0.0, 1.0);
         if (min_confidence > max_confidence) {
@@ -5128,7 +5368,12 @@ std::vector<RagQueryResult> RagService::QueryProject(const std::string& project_
     return all_results;
 }
 
-std::string RagService::BuildContextBlock(const std::string& project_id, const std::string& query, int global_max_results) const {
+// Rough token estimator: ~4 chars per token for English text.
+static size_t EstimateTokensRag(const std::string& text) {
+    return text.size() / 4 + 1;
+}
+
+std::string RagService::BuildContextBlock(const std::string& project_id, const std::string& query, int global_max_results, int max_token_budget) const {
     if (project_id.empty() || Trim(query).empty()) {
         return {};
     }
@@ -5138,10 +5383,26 @@ std::string RagService::BuildContextBlock(const std::string& project_id, const s
         return {};
     }
 
+    // Header tokens (~30 tokens)
+    constexpr size_t kHeaderTokens = 30;
+    // Per-chunk header (~20 tokens)
+    constexpr size_t kChunkHeaderTokens = 20;
+
+    size_t tokens_used = kHeaderTokens;
+    const size_t budget = max_token_budget > 0 ? static_cast<size_t>(max_token_budget) : SIZE_MAX;
+
     std::ostringstream stream;
     stream << "Retrieved Project Knowledge:\n";
     stream << "The following excerpts were retrieved from RAG libraries attached to this project. Use them when relevant and preserve their source labels when helpful.\n";
+
+    bool any_chunks = false;
     for (const auto& result : results) {
+        const size_t chunk_tokens = kChunkHeaderTokens + EstimateTokensRag(result.text);
+        if (tokens_used + chunk_tokens > budget) {
+            break;
+        }
+        tokens_used += chunk_tokens;
+        any_chunks = true;
         stream << "\n[RAG: " << result.rag_name
                << " | Source: " << result.document_title
                << " | Chunk: " << result.chunk_id
@@ -5155,5 +5416,365 @@ std::string RagService::BuildContextBlock(const std::string& project_id, const s
         }
         stream << result.text << "\n";
     }
-    return stream.str();
+    return any_chunks ? stream.str() : std::string{};
+}
+
+// ===== Ingestion Job Persistence =====
+
+std::filesystem::path RagService::IngestionJobsPath() const {
+    return RagRoot() / "ingestion_jobs.json";
+}
+
+static std::string IngestionJobStatusToString(IngestionJobStatus status) {
+    switch (status) {
+        case IngestionJobStatus::Completed: return "completed";
+        case IngestionJobStatus::Failed:    return "failed";
+        default:                            return "running";
+    }
+}
+
+static IngestionJobStatus IngestionJobStatusFromString(const std::string& s) {
+    if (s == "completed") return IngestionJobStatus::Completed;
+    if (s == "failed")    return IngestionJobStatus::Failed;
+    return IngestionJobStatus::Running;
+}
+
+static json IngestionJobToJson(const IngestionJobRecord& job) {
+    json errors = json::array();
+    for (const auto& e : job.errors) { errors.push_back(e); }
+    return json{
+        {"id", job.id},
+        {"rag_id", job.rag_id},
+        {"rag_name", job.rag_name},
+        {"kind", job.kind},
+        {"source_description", job.source_description},
+        {"status", IngestionJobStatusToString(job.status)},
+        {"files_ingested", job.files_ingested},
+        {"files_skipped", job.files_skipped},
+        {"chunks_added", job.chunks_added},
+        {"errors", std::move(errors)},
+        {"started_at", job.started_at},
+        {"finished_at", job.finished_at},
+    };
+}
+
+static IngestionJobRecord IngestionJobFromJson(const json& item) {
+    IngestionJobRecord job;
+    job.id = item.value("id", "");
+    job.rag_id = item.value("rag_id", "");
+    job.rag_name = item.value("rag_name", "");
+    job.kind = item.value("kind", "");
+    job.source_description = item.value("source_description", "");
+    job.status = IngestionJobStatusFromString(item.value("status", "running"));
+    job.files_ingested = item.value("files_ingested", 0);
+    job.files_skipped = item.value("files_skipped", 0);
+    job.chunks_added = item.value("chunks_added", 0);
+    job.started_at = item.value("started_at", "");
+    job.finished_at = item.value("finished_at", "");
+    if (item.contains("errors") && item["errors"].is_array()) {
+        for (const auto& e : item["errors"]) {
+            if (e.is_string()) job.errors.push_back(e.get<std::string>());
+        }
+    }
+    return job;
+}
+
+IngestionJobRecord RagService::CreateIngestionJob(const std::string& rag_id, const std::string& kind, const std::string& source_description) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Resolve library name
+    std::string rag_name = rag_id;
+    try {
+        const auto registry = LoadRegistryNoLock();
+        for (const auto& [rid, path] : registry) {
+            if (rid == rag_id) {
+                // Attempt to get name from config
+                const auto config_path = path / "config.json";
+                std::ifstream f(config_path);
+                if (f.is_open()) {
+                    json cfg;
+                    f >> cfg;
+                    if (cfg.contains("name")) {
+                        rag_name = cfg["name"].get<std::string>();
+                    }
+                }
+                break;
+            }
+        }
+    } catch (...) {}
+
+    IngestionJobRecord job;
+    job.id = "job_" + rag_id.substr(0, 8) + "_" + std::to_string(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    job.rag_id = rag_id;
+    job.rag_name = rag_name;
+    job.kind = kind;
+    job.source_description = source_description;
+    job.status = IngestionJobStatus::Running;
+    job.started_at = [] {
+        std::time_t t = std::time(nullptr);
+        char buf[32]{};
+        std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", std::gmtime(&t));
+        return std::string(buf);
+    }();
+
+    // Append to jobs file
+    const auto path = IngestionJobsPath();
+    json data;
+    try {
+        std::ifstream f(path);
+        if (f.is_open()) f >> data;
+    } catch (...) {}
+    if (!data.contains("jobs") || !data["jobs"].is_array()) {
+        data["jobs"] = json::array();
+    }
+    data["jobs"].push_back(IngestionJobToJson(job));
+    std::filesystem::create_directories(RagRoot());
+    std::ofstream out(path);
+    out << data.dump(2);
+
+    return job;
+}
+
+void RagService::CompleteIngestionJob(const std::string& job_id, const RagIngestionResult& result) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const auto path = IngestionJobsPath();
+    json data;
+    try {
+        std::ifstream f(path);
+        if (f.is_open()) f >> data;
+    } catch (...) { return; }
+
+    if (!data.contains("jobs") || !data["jobs"].is_array()) return;
+
+    const std::string now = [] {
+        std::time_t t = std::time(nullptr);
+        char buf[32]{};
+        std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", std::gmtime(&t));
+        return std::string(buf);
+    }();
+
+    for (auto& item : data["jobs"]) {
+        if (item.value("id", "") == job_id) {
+            item["status"] = result.success ? "completed" : "failed";
+            item["files_ingested"] = result.files_ingested;
+            item["files_skipped"] = result.files_skipped;
+            item["chunks_added"] = result.chunks_added;
+            item["finished_at"] = now;
+            json errors = json::array();
+            for (const auto& e : result.errors) { errors.push_back(e); }
+            item["errors"] = std::move(errors);
+            break;
+        }
+    }
+
+    // Keep only the most recent 500 jobs
+    constexpr size_t kMaxJobs = 500;
+    if (data["jobs"].size() > kMaxJobs) {
+        data["jobs"].erase(data["jobs"].begin(), data["jobs"].begin() + (data["jobs"].size() - kMaxJobs));
+    }
+
+    std::ofstream out(path);
+    out << data.dump(2);
+}
+
+std::vector<IngestionJobRecord> RagService::ListIngestionJobs(int max_jobs) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto path = IngestionJobsPath();
+    json data;
+    try {
+        std::ifstream f(path);
+        if (!f.is_open()) return {};
+        f >> data;
+    } catch (...) { return {}; }
+
+    std::vector<IngestionJobRecord> jobs;
+    if (!data.contains("jobs") || !data["jobs"].is_array()) return {};
+    for (const auto& item : data["jobs"]) {
+        jobs.push_back(IngestionJobFromJson(item));
+    }
+    // Return most-recent first
+    std::reverse(jobs.begin(), jobs.end());
+    if (max_jobs > 0 && static_cast<int>(jobs.size()) > max_jobs) {
+        jobs.resize(static_cast<size_t>(max_jobs));
+    }
+    return jobs;
+}
+
+// ===========================================================================
+// HNSW backend — path helpers, cache management, sync, and chunk lookup
+// ===========================================================================
+
+std::filesystem::path RagService::HnswIndexPath(const std::string& rag_id) const {
+    return LibraryPath(rag_id) / "hnsw.bin";
+}
+
+std::filesystem::path RagService::HnswLabelsPath(const std::string& rag_id) const {
+    return LibraryPath(rag_id) / "hnsw_labels.bin";
+}
+
+// Load or create the HNSW handle for a library.  Must be called under mutex_.
+HnswHandle* RagService::GetOrCreateHnswHandle(const std::string& rag_id, size_t dims) const {
+    auto it = hnsw_cache_.find(rag_id);
+    if (it != hnsw_cache_.end()) {
+        return it->second.get();
+    }
+
+    auto state        = std::make_unique<HnswHandle>();
+    state->dims       = dims;
+    state->space      = std::make_unique<hnswlib::InnerProductSpace>(dims);
+    const auto idx_p  = HnswIndexPath(rag_id);
+    const auto lbl_p  = HnswLabelsPath(rag_id);
+
+    if (std::filesystem::exists(idx_p)) {
+        try {
+            state->index = std::make_unique<hnswlib::HierarchicalNSW<float>>(
+                state->space.get(), idx_p.string());
+        } catch (...) {
+            // Corrupted — start fresh.
+            state->index = std::make_unique<hnswlib::HierarchicalNSW<float>>(
+                state->space.get(), /*max_elements=*/50000u);
+        }
+        // Load label map from binary file.
+        if (std::filesystem::exists(lbl_p)) {
+            try {
+                std::ifstream lf(lbl_p, std::ios::binary);
+                if (lf.is_open()) {
+                    auto r32 = [&]() -> uint32_t {
+                        uint32_t v = 0; lf.read(reinterpret_cast<char*>(&v), 4); return v;
+                    };
+                    auto r64 = [&]() -> uint64_t {
+                        uint64_t v = 0; lf.read(reinterpret_cast<char*>(&v), 8); return v;
+                    };
+                    constexpr uint32_t kLblMagic = 0x484C424Cu;
+                    if (r32() == kLblMagic) {
+                        state->next_label = static_cast<hnswlib::labeltype>(r64());
+                        const uint64_t cnt = r64();
+                        for (uint64_t i = 0; i < cnt; ++i) {
+                            const hnswlib::labeltype lbl = static_cast<hnswlib::labeltype>(r64());
+                            const uint32_t len = r32();
+                            std::string chunk_id(len, '\0');
+                            lf.read(chunk_id.data(), static_cast<std::streamsize>(len));
+                            state->label_to_chunk[lbl]      = chunk_id;
+                            state->chunk_to_label[chunk_id] = lbl;
+                        }
+                    }
+                }
+            } catch (...) {}
+        }
+    } else {
+        state->index = std::make_unique<hnswlib::HierarchicalNSW<float>>(
+            state->space.get(), /*max_elements=*/50000u);
+    }
+
+    HnswHandle* ptr   = state.get();
+    hnsw_cache_[rag_id] = std::move(state);
+    return ptr;
+}
+
+// Save the HNSW index and label map to disk.  Must be called under mutex_.
+void RagService::SaveHnswHandle(const std::string& rag_id) const {
+    auto it = hnsw_cache_.find(rag_id);
+    if (it == hnsw_cache_.end()) return;
+    const HnswHandle* state = it->second.get();
+    if (!state || !state->index) return;
+
+    try {
+        state->index->saveIndex(HnswIndexPath(rag_id).string());
+    } catch (...) {}
+
+    try {
+        constexpr uint32_t kLblMagic = 0x484C424Cu;
+        std::ofstream lf(HnswLabelsPath(rag_id), std::ios::binary | std::ios::trunc);
+        if (!lf.is_open()) return;
+        auto w32 = [&](uint32_t v){ lf.write(reinterpret_cast<const char*>(&v), 4); };
+        auto w64 = [&](uint64_t v){ lf.write(reinterpret_cast<const char*>(&v), 8); };
+        w32(kLblMagic);
+        w64(static_cast<uint64_t>(state->next_label));
+        w64(static_cast<uint64_t>(state->label_to_chunk.size()));
+        for (const auto& [lbl, cid] : state->label_to_chunk) {
+            w64(static_cast<uint64_t>(lbl));
+            w32(static_cast<uint32_t>(cid.size()));
+            lf.write(cid.data(), static_cast<std::streamsize>(cid.size()));
+        }
+    } catch (...) {}
+}
+
+// Remove the cached handle and delete the on-disk files.  Must be called under mutex_.
+void RagService::InvalidateHnswHandle(const std::string& rag_id) const {
+    hnsw_cache_.erase(rag_id);
+    std::error_code ec;
+    std::filesystem::remove(HnswIndexPath(rag_id), ec);
+    std::filesystem::remove(HnswLabelsPath(rag_id), ec);
+}
+
+// Incrementally sync the HNSW index from SQLite: add new chunks and mark deleted
+// chunks.  Called after every ingest operation and after rebuild.
+// db must be a valid sqlite3* cast through void*.
+void RagService::SyncHnswIndex(const std::string& rag_id, void* raw_db,
+                                const RagLibraryConfig& library,
+                                void* raw_provider) const {
+    if (library.vector_backend != "hnswlib") return;
+    if (!raw_provider) return;
+    const IRagEmbeddingProvider* provider = static_cast<const IRagEmbeddingProvider*>(raw_provider);
+    const int dims_int = library.embedding_dimensions;
+    if (dims_int <= 0) return;
+    const size_t dims = static_cast<size_t>(dims_int);
+    sqlite3* db = static_cast<sqlite3*>(raw_db);
+
+    HnswHandle* state = GetOrCreateHnswHandle(rag_id, dims);
+    if (!state || !state->index) return;
+
+    // Collect all chunk IDs currently in SQLite for this library.
+    std::unordered_set<std::string> live_chunk_ids;
+    {
+        auto stmt = PrepareSql(db, "SELECT id FROM chunks WHERE rag_id = ?;");
+        BindText(stmt.get(), 1, rag_id);
+        while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+            live_chunk_ids.insert(ColumnText(stmt.get(), 0));
+        }
+    }
+
+    // Mark deleted: chunks in label map that are no longer in SQLite.
+    for (const auto& [cid, lbl] : state->chunk_to_label) {
+        if (!live_chunk_ids.count(cid)) {
+            state->index->markDelete(lbl);
+        }
+    }
+
+    // Add new chunks: embeddings in SQLite not yet in the label map.
+    try {
+        auto stmt = PrepareSql(db,
+            "SELECT e.chunk_id, e.vector_blob FROM embeddings e "
+            "WHERE e.provider = ? AND e.model = ? AND e.dimensions = ?;");
+        BindText(stmt.get(), 1, provider->ProviderId());
+        BindText(stmt.get(), 2, provider->ModelId());
+        sqlite3_bind_int(stmt.get(), 3, dims_int);
+
+        while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+            const std::string chunk_id = ColumnText(stmt.get(), 0);
+            if (state->chunk_to_label.count(chunk_id)) continue;  // already indexed
+
+            const void* blob      = sqlite3_column_blob(stmt.get(), 1);
+            const int   blob_bytes = sqlite3_column_bytes(stmt.get(), 1);
+            if (!blob || blob_bytes <= 0) continue;
+            const std::vector<float> vec = DeserializeVector(blob, blob_bytes);
+            if (vec.size() != dims) continue;
+
+            // Auto-resize index if needed.
+            if (state->index->getCurrentElementCount() + 1 >
+                state->index->getMaxElements()) {
+                state->index->resizeIndex(state->index->getMaxElements() * 2 + 1024);
+            }
+
+            const hnswlib::labeltype lbl = state->next_label++;
+            state->chunk_to_label[chunk_id] = lbl;
+            state->label_to_chunk[lbl]      = chunk_id;
+            state->index->addPoint(vec.data(), lbl);
+        }
+    } catch (...) {}
+
+    SaveHnswHandle(rag_id);
 }

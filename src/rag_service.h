@@ -5,11 +5,15 @@
 
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
+
+struct HnswHandle;  // defined in rag_service.cpp
 
 class RagService {
 public:
@@ -43,7 +47,14 @@ public:
     RagIngestionResult RebuildLibrary(const std::string& rag_id, std::function<void(const RagProgressUpdate&)> progress = {});
     std::vector<RagQueryResult> QueryRag(const std::string& rag_id, const std::string& query, int max_results) const;
     std::vector<RagQueryResult> QueryProject(const std::string& project_id, const std::string& query, int global_max_results) const;
-    std::string BuildContextBlock(const std::string& project_id, const std::string& query, int global_max_results) const;
+    // Builds a passive context block. max_token_budget > 0 trims chunks to fit the budget;
+    // 0 means no budget (use global_max_results as the only limit).
+    std::string BuildContextBlock(const std::string& project_id, const std::string& query, int global_max_results, int max_token_budget = 0) const;
+
+    // Ingestion job tracking (persisted to rag root)
+    IngestionJobRecord CreateIngestionJob(const std::string& rag_id, const std::string& kind, const std::string& source_description);
+    void CompleteIngestionJob(const std::string& job_id, const RagIngestionResult& result);
+    std::vector<IngestionJobRecord> ListIngestionJobs(int max_jobs = 200) const;
     RagEmbeddingRuntimeStatus GetEmbeddingRuntimeStatus(const RagLibraryConfig& library) const;
     RagEmbeddingRuntimeStatus StartEmbeddingRuntime(const RagLibraryConfig& library) const;
     RagEmbeddingRuntimeStatus StopEmbeddingRuntime(const RagLibraryConfig& library) const;
@@ -74,6 +85,16 @@ private:
     std::filesystem::path EmbeddingRuntimeLogPath() const;
     std::filesystem::path ImageIngestSettingsPath() const;
     std::filesystem::path ImageIngestLogPath() const;
+    std::filesystem::path IngestionJobsPath() const;
+    std::filesystem::path HnswIndexPath(const std::string& rag_id) const;
+    std::filesystem::path HnswLabelsPath(const std::string& rag_id) const;
+
+    HnswHandle* GetOrCreateHnswHandle(const std::string& rag_id, size_t dims) const;
+    void        SaveHnswHandle(const std::string& rag_id) const;
+    void        InvalidateHnswHandle(const std::string& rag_id) const;
+    void        SyncHnswIndex(const std::string& rag_id, void* db,
+                              const RagLibraryConfig& library,
+                              void* provider) const;
 
     RagEmbeddingRuntimeStatus GetEmbeddingRuntimeStatusNoLock(const RagLibraryConfig& library) const;
     void EnsureEmbeddingRuntimeNoLock(const RagLibraryConfig& library) const;
@@ -96,4 +117,7 @@ private:
     mutable std::mutex mutex_;
     mutable void* started_ollama_process_ = nullptr;
     mutable unsigned long started_ollama_process_id_ = 0;
+    // Per-library HNSW index cache (rag_id -> handle).  Lives only for the
+    // duration of the process; saved to disk after each mutation.
+    mutable std::unordered_map<std::string, std::unique_ptr<HnswHandle>> hnsw_cache_;
 };

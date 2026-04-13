@@ -158,6 +158,23 @@ ProjectMcpServerBinding ProjectMcpServerBindingFromJson(const json& item) {
     return binding;
 }
 
+static std::string RagRetrievalModeToString(RagRetrievalMode mode) {
+    switch (mode) {
+        case RagRetrievalMode::PassiveOnly:    return "passive_only";
+        case RagRetrievalMode::ActiveToolOnly: return "active_tool_only";
+        case RagRetrievalMode::Disabled:       return "disabled";
+        case RagRetrievalMode::Both:           // fallthrough
+        default:                               return "both";
+    }
+}
+
+static RagRetrievalMode RagRetrievalModeFromString(const std::string& s) {
+    if (s == "passive_only")    return RagRetrievalMode::PassiveOnly;
+    if (s == "active_tool_only") return RagRetrievalMode::ActiveToolOnly;
+    if (s == "disabled")        return RagRetrievalMode::Disabled;
+    return RagRetrievalMode::Both;
+}
+
 json ProjectRagBindingToJson(const ProjectRagBinding& binding) {
     return json{
         {"rag_id", binding.rag_id},
@@ -173,6 +190,7 @@ json ProjectRagBindingToJson(const ProjectRagBinding& binding) {
         {"max_chunks", binding.max_chunks},
         {"default_min_confidence", binding.default_min_confidence},
         {"default_max_confidence", binding.default_max_confidence},
+        {"retrieval_mode", RagRetrievalModeToString(binding.retrieval_mode)},
     };
 }
 
@@ -195,6 +213,7 @@ ProjectRagBinding ProjectRagBindingFromJson(const json& item) {
         binding.default_min_confidence = 0.0;
         binding.default_max_confidence = 1.0;
     }
+    binding.retrieval_mode = RagRetrievalModeFromString(item.value("retrieval_mode", "both"));
     return binding;
 }
 
@@ -342,6 +361,7 @@ json ChatContextDebugEntryToJson(const ChatContextDebugEntry& entry) {
         {"compressed_context", entry.compressed_context},
         {"mcp_context", entry.mcp_context},
         {"rag_context", entry.rag_context},
+        {"rag_working_set_json", entry.rag_working_set_json},
     };
 }
 
@@ -357,11 +377,40 @@ ChatContextDebugEntry ChatContextDebugEntryFromJson(const json& item) {
     entry.compressed_context = item.value("compressed_context", "");
     entry.mcp_context = item.value("mcp_context", "");
     entry.rag_context = item.value("rag_context", "");
+    entry.rag_working_set_json = item.value("rag_working_set_json", "");
     if (item.contains("request_messages") && item["request_messages"].is_array()) {
         for (const auto& message_item : item["request_messages"]) {
             entry.request_messages.push_back(MessageFromJson(message_item));
         }
     }
+    return entry;
+}
+
+json RagWorkingSetEntryToJson(const RagWorkingSetEntry& entry) {
+    return json{
+        {"chunk_id", entry.chunk_id},
+        {"rag_id", entry.rag_id},
+        {"rag_name", entry.rag_name},
+        {"document_id", entry.document_id},
+        {"document_title", entry.document_title},
+        {"text", entry.text},
+        {"score", entry.score},
+        {"query", entry.query},
+        {"retrieved_at", entry.retrieved_at},
+    };
+}
+
+RagWorkingSetEntry RagWorkingSetEntryFromJson(const json& item) {
+    RagWorkingSetEntry entry;
+    entry.chunk_id = item.value("chunk_id", "");
+    entry.rag_id = item.value("rag_id", "");
+    entry.rag_name = item.value("rag_name", "");
+    entry.document_id = item.value("document_id", "");
+    entry.document_title = item.value("document_title", "");
+    entry.text = item.value("text", "");
+    entry.score = item.value("score", 0.0);
+    entry.query = item.value("query", "");
+    entry.retrieved_at = item.value("retrieved_at", "");
     return entry;
 }
 
@@ -747,6 +796,10 @@ std::filesystem::path AppStorage::ChatCompressionStatePath(const std::string& pr
 
 std::filesystem::path AppStorage::ChatCompressionHistoryPath(const std::string& project_id, const std::string& chat_id) const {
     return ChatPath(project_id, chat_id) / "compression_history.json";
+}
+
+std::filesystem::path AppStorage::ChatRagWorkingSetPath(const std::string& project_id, const std::string& chat_id) const {
+    return ChatPath(project_id, chat_id) / "rag_working_set.json";
 }
 
 std::filesystem::path AppStorage::ProjectSettingsPath(const std::string& project_id) const {
@@ -1198,4 +1251,25 @@ void AppStorage::AppendChatCompressionSnapshot(const std::string& project_id, co
     auto snapshots = LoadChatCompressionHistory(project_id, chat_id);
     snapshots.push_back(snapshot);
     SaveChatCompressionHistory(project_id, chat_id, snapshots);
+}
+
+std::vector<RagWorkingSetEntry> AppStorage::LoadChatRagWorkingSet(const std::string& project_id, const std::string& chat_id) const {
+    const json data = LoadJsonFile(ChatRagWorkingSetPath(project_id, chat_id), json{{"entries", json::array()}});
+    std::vector<RagWorkingSetEntry> entries;
+    if (data.contains("entries") && data["entries"].is_array()) {
+        for (const auto& item : data["entries"]) {
+            entries.push_back(RagWorkingSetEntryFromJson(item));
+        }
+    }
+    return entries;
+}
+
+void AppStorage::SaveChatRagWorkingSet(const std::string& project_id, const std::string& chat_id, const std::vector<RagWorkingSetEntry>& entries) const {
+    json payload;
+    payload["entries"] = json::array();
+    for (const auto& entry : entries) {
+        payload["entries"].push_back(RagWorkingSetEntryToJson(entry));
+    }
+    std::filesystem::create_directories(ChatPath(project_id, chat_id));
+    SaveJsonFile(ChatRagWorkingSetPath(project_id, chat_id), payload);
 }

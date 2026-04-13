@@ -52,6 +52,9 @@ public:
     ProjectSettings LoadProjectSettings(const std::string& project_id) const;
     void SaveProjectSettings(const std::string& project_id, const ProjectSettings& settings) const;
 
+    std::vector<RagWorkingSetEntry> LoadChatRagWorkingSet(const std::string& project_id, const std::string& chat_id) const;
+    void SaveChatRagWorkingSet(const std::string& project_id, const std::string& chat_id, const std::vector<RagWorkingSetEntry>& entries) const;
+
     void RenameProject(const std::string& project_id, const std::string& new_name) const;
     void RenameChat(const std::string& project_id, const std::string& chat_id, const std::string& new_name) const;
 
@@ -78,6 +81,7 @@ private:
     std::filesystem::path ProjectCompressionPath(const std::string& project_id) const;
     std::filesystem::path ChatCompressionStatePath(const std::string& project_id, const std::string& chat_id) const;
     std::filesystem::path ChatCompressionHistoryPath(const std::string& project_id, const std::string& chat_id) const;
+    std::filesystem::path ChatRagWorkingSetPath(const std::string& project_id, const std::string& chat_id) const;
 
     std::filesystem::path root_path_;
 };

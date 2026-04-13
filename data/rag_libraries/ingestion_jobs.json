@@ -1,0 +1,34 @@
+{
+  "jobs": [
+    {
+      "chunks_added": 147,
+      "errors": [
+        "RasingRules.pdf: embedding failed: Embedding provider HTTP 500: {\"error\":\"the input length exceeds the context length\"}"
+      ],
+      "files_ingested": 6,
+      "files_skipped": 0,
+      "finished_at": "2026-04-13T03:31:21Z",
+      "id": "job_rag_1775_1776051013978",
+      "kind": "rebuild",
+      "rag_id": "rag_1775918532220_8",
+      "rag_name": "rag_1775918532220_8",
+      "source_description": "Test RAG",
+      "started_at": "2026-04-13T03:30:13Z",
+      "status": "failed"
+    },
+    {
+      "chunks_added": 147,
+      "errors": [],
+      "files_ingested": 6,
+      "files_skipped": 0,
+      "finished_at": "2026-04-13T03:40:13Z",
+      "id": "job_rag_1775_1776051542388",
+      "kind": "rebuild",
+      "rag_id": "rag_1775918532220_8",
+      "rag_name": "rag_1775918532220_8",
+      "source_description": "Test RAG",
+      "started_at": "2026-04-13T03:39:02Z",
+      "status": "completed"
+    }
+  ]
+}

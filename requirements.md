@@ -186,6 +186,7 @@ This section is the current source-of-truth implementation checkpoint. It captur
 - No local llama.cpp provider yet.
 - No automated test suite or structured regression harness.
 - Build artifacts and runtime data are currently present in the working tree during development and should be separated or ignored before release packaging.
+- Concurrent chat execution is implemented (April 2026). The single global `request_in_flight_` lock has been replaced with a per-chat `chats_in_flight_` map. Each chat runs on its own worker thread. Only the active chat's input controls lock while it is in flight; the tree, all navigation, and all manager buttons remain fully interactive at all times. Background chats stream and complete independently, tree labels show a live ● indicator for in-flight chats, and a configurable concurrency limit (default 8) prevents resource exhaustion. See §2.2 for the full design.
 - RAG-specific gaps are tracked in detail in `rag_service_requirements.md`, with the current highest priorities being retrieval mode policy, RAG working set, token-budget-aware RAG context, ingestion job persistence, and production vector indexing.
 
 ### 1.2 Why C++
@@ -211,7 +212,7 @@ C++ was chosen as the implementation language for two strategic reasons:
   - **Python Bridge Layer** (future) — Embedded Python interpreter for in-process Python execution
 - All networking must be asynchronous and non-blocking to keep the UI responsive
 - The application must be fully self-contained on Windows with no dependency on WSL or Linux subsystems
-- Thread architecture: the UI runs on the main thread; API calls, MCP communication, and tool execution each run on dedicated worker threads or a thread pool, communicating with the UI via message queues or callbacks
+- Thread architecture: the UI runs on the main thread; API calls, MCP communication, and tool execution each run on dedicated worker threads or a thread pool, communicating with the UI via message queues or callbacks; each active chat request runs on its own isolated worker thread so that multiple chats can be in flight simultaneously without blocking one another or the UI (see §2.2)
 
 ### 2.1 Future Python Integration Architecture
 
@@ -220,6 +221,91 @@ C++ was chosen as the implementation language for two strategic reasons:
 - The Python bridge will use pybind11 or the CPython C API to expose C++ objects to Python and call Python functions from C++
 - Python execution will run on dedicated threads with the GIL managed appropriately to avoid blocking the UI
 - This is a **future phase** item — the initial implementation uses subprocess-based stdio for all Python MCP servers, with the in-process bridge added later as an optimization
+
+### 2.2 Concurrent Chat Execution
+
+Multiple chats must be able to run simultaneously. A chat that is waiting for an API response, streaming tokens, or executing a tool-call loop must not prevent the user from interacting with any other chat, managing projects, or using any manager dialog.
+
+#### 2.2.1 Design Intent
+
+- The application is intended to support heavy multi-chat workloads — for example, running several long-context or tool-heavy agent sessions in parallel, or dispatching research tasks to multiple chats while monitoring them from a single window.
+- When the user has sufficient API capacity and local resources, the limiting factor should be the API and the model, not the application itself.
+- This is a deliberate step toward making the application act as a true multi-agent desktop host rather than a single serial chat window.
+
+#### 2.2.2 Per-Chat Execution State
+
+- Each chat maintains its own independent `in_flight` flag rather than a single global flag.
+- A chat's `in_flight` flag is set when a request is dispatched for that chat and cleared when that request's full tool-call loop completes or fails.
+- No global application-wide "busy" state exists. The application remains fully interactive while any number of chats are active.
+
+#### 2.2.3 UI Locking Scope
+
+- When a chat is in flight, only that chat's own input controls are locked — its text input field, its send button, its compress button, and its stop button becomes the active cancel action.
+- All other UI remains fully interactive while that chat is running:
+  - The project/chat tree is navigable — the user can switch to any other chat at any time.
+  - Other chats can receive new user messages and start their own requests independently.
+  - All manager dialogs (Providers, MCP Servers, Project Settings, RAG Service, Context Window Manager) remain openable and usable.
+  - The model selector remains changeable for the currently viewed chat, as long as that chat is not itself in flight.
+- A chat that is currently selected/visible and in flight shows its input area as locked and displays a stop button for that specific chat.
+- A chat that is in flight but not currently visible continues to run in the background; its input area will appear locked if the user navigates to it while the request is still running.
+
+#### 2.2.4 Per-Chat Worker Thread Isolation
+
+- Each chat request is dispatched on its own dedicated worker thread.
+- Worker threads are not shared across chats. A slow or blocked request on one chat does not delay or starve another chat's thread.
+- Each worker thread owns its entire request lifecycle for that send event: context building, API streaming, tool-call loop (up to the configured round limit), tool result ingestion, and final message persistence.
+- Worker threads communicate with the UI thread exclusively via `PostMessage` (or equivalent message-queue dispatch), carrying the `project_id` and `chat_id` in each message payload so the UI can route delta and completion events to the correct chat.
+- Delta and completion messages from a chat that is not currently selected/visible are buffered or applied to that chat's in-memory state and persisted to disk; the transcript for that chat refreshes the next time the user navigates to it.
+
+#### 2.2.5 Visual Status Indicators
+
+- The project/chat tree should indicate per-chat execution state so the user can see at a glance which chats are active:
+  - **Idle** — no decoration or a neutral icon.
+  - **Streaming** — a pulsing or animated indicator (e.g., a spinner icon or animated dot next to the chat name).
+  - **Waiting / tool-call** — a distinct indicator showing the model is executing tools.
+  - **Error** — a warning icon with the last error accessible on hover or in the transcript.
+- The currently visible chat shows its status in the existing status label at the bottom of the main window.
+- Background chats' streaming indicators in the tree update in real time as their worker threads post progress events.
+
+#### 2.2.6 Stopping A Running Chat
+
+- A stop button is available for the currently visible chat when it is in flight.
+- The stop action cancels the in-flight HTTP request for that chat, records an interrupted-response message in the chat history, clears that chat's `in_flight` flag, and re-enables that chat's input controls.
+- Stopping one chat has no effect on any other chat currently in flight.
+- A background chat that is in flight can also be stopped via a right-click context menu on its entry in the project/chat tree, or by navigating to it and using the stop button.
+
+#### 2.2.7 Concurrency Limit
+
+- A configurable maximum number of simultaneously in-flight chats is supported to prevent resource exhaustion on resource-constrained machines or when using rate-limited API providers.
+- The default limit should be reasonable for a desktop workstation — a suggested default is 4–8 concurrent chats.
+- When the limit is reached and the user attempts to send from another chat, the application displays an informative message rather than silently queuing or failing.
+- The limit is configurable in global settings and can be set to unlimited if the user prefers.
+
+#### 2.2.8 Shared Resource Thread Safety
+
+The following shared resources are accessed by multiple concurrent chat worker threads and must be protected accordingly:
+
+- **Chat message history files** — each chat's file path is unique, so file-level locking is sufficient; in-memory message lists must be protected with per-chat mutexes.
+- **MCP server connections** — shared `McpManager` and individual `McpClient` instances must be safe for concurrent `tools/call` requests from different chat threads. If a server connection is inherently single-threaded, calls to it must be serialized through a per-connection queue rather than blocking the calling chat thread.
+- **RAG service** — the `RagService` class already uses a global mutex; this remains correct for concurrent queries and ingestion from multiple chat threads.
+- **Context compression state** — per-chat compression state files are unique per chat; in-memory compression state access must be guarded by per-chat mutexes.
+- **Provider and model config** — read-only during a request; no additional locking required beyond the existing load-on-start model.
+- **Project settings and variable resolution** — read-mostly during a request; accessed under a read lock if any write path exists.
+
+#### 2.2.9 Implementation Approach
+
+The refactor from the current global lock to per-chat locks involves these primary changes:
+
+1. Replace the single `request_in_flight_` bool in `MainWindow` with a `std::unordered_map<std::string, bool>` keyed by `chat_id`, or an equivalent per-chat state structure.
+2. Replace `SetRequestBusy(bool)` — which currently disables the entire app — with `SetChatBusy(chat_id, bool)`, which locks/unlocks only that chat's input controls and updates that chat's tree indicator.
+3. Update all `PostMessage` dispatch paths in worker threads to include `project_id` and `chat_id` in the message payload so the UI routes updates to the correct chat's transcript rather than always updating the visible transcript.
+4. Update the UI's `kChatDeltaMessage` and `kChatFinishedMessage` handlers to apply updates only if the posted `chat_id` matches the currently selected chat, and to persist/buffer updates otherwise.
+5. Add per-chat status icon rendering in the project/chat tree.
+6. Add the concurrency limit check before dispatching a new worker thread.
+
+#### 2.2.10 Current Implementation Gap
+
+The current proof-of-concept (as of April 2026) uses a single global `request_in_flight_` bool and a `SetRequestBusy` function that disables the entire application UI when any chat is active. This is the correct behavior for a single-chat proof-of-concept but must be replaced before the application is used for serious multi-agent or parallel research workflows. The refactor is straightforward in principle — the worker thread architecture is already correct — and primarily involves scoping the busy state and UI update routing to individual chats rather than the whole window.
 
 ---
 
@@ -253,6 +339,7 @@ C++ was chosen as the implementation language for two strategic reasons:
 - Responses must be parsed for: assistant content, tool call requests, finish reason, and usage statistics
 - HTTP communication should use a robust library (e.g., libcurl, cpp-httplib, or WinHTTP) with TLS support
 - Connection errors, rate limits (HTTP 429), and API errors must be handled gracefully with retry logic and user-visible feedback
+- Each chat's API request executes on its own worker thread and is completely independent of any other chat's in-flight request — see §2.2 for the full concurrency model
 
 ### 3.3 Model Selection at Runtime
 
@@ -511,7 +598,8 @@ The GUI is the **sole interface** for this application. Every configurable aspec
   - A "New Chat" button within each project to create a fresh conversation
   - A "New Project" button to create a new project (prompts for name and folder location)
 - Clicking a chat loads it into the center panel
-- Right-click context menus on projects and chats for: rename, delete, move, export, duplicate
+- Right-click context menus on projects and chats for: rename, delete, move, export, duplicate, and stop (when a chat is currently in flight)
+- Each chat entry in the tree shows a per-chat execution status indicator: idle, streaming, waiting-for-tool, or error — updated in real time as concurrent chats run in the background (see §2.2.5)
 
 ### 6.3 Center Panel — Chat Interface
 
@@ -527,7 +615,7 @@ The GUI is the **sole interface** for this application. Every configurable aspec
   - A send button
   - An **attachment button** for multi-modal input (see §6.6)
   - The **model selector** — a dropdown showing the currently selected model, grouped by provider, allowing switching at any time
-- A stop button that appears during streaming to cancel the current generation (sends cancellation to the API and to any active MCP tool calls)
+- A stop button that appears during streaming to cancel the current generation for the currently visible chat (sends cancellation to that chat's in-flight API request and any active MCP tool calls for that chat); stopping this chat has no effect on any other chat currently running in the background — see §2.2.6
 
 ### 6.4 Settings & Management Dialogs (GUI-Managed)
 

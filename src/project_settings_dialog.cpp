@@ -62,9 +62,11 @@ enum ControlId : int {
     kRagMaxConfidenceEdit = 6436,
     kRagExportPathLabel = 6437,
     kRagExportPathEdit = 6438,
-    kInstructionsLabel = 6440,
-    kInstructionsEdit = 6441,
-    kImportInstructions = 6442,
+    kRagRetrievalModeLabel = 6439,
+    kRagRetrievalModeCombo = 6440,
+    kInstructionsLabel = 6443,
+    kInstructionsEdit = 6444,
+    kImportInstructions = 6445,
 
     // Footer
     kSaveButton = IDOK,
@@ -101,6 +103,7 @@ struct RagRow {
     int max_chunks = 8;
     double default_min_confidence = 0.0;
     double default_max_confidence = 1.0;
+    RagRetrievalMode retrieval_mode = RagRetrievalMode::Both;
 };
 
 int Scale(HWND hwnd, int value) {
@@ -251,6 +254,7 @@ private:
                 row.max_chunks = binding_it->max_chunks;
                 row.default_min_confidence = binding_it->default_min_confidence;
                 row.default_max_confidence = binding_it->default_max_confidence;
+                row.retrieval_mode = binding_it->retrieval_mode;
             }
             rag_rows_.push_back(row);
         }
@@ -355,6 +359,12 @@ private:
         rag_max_confidence_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagMaxConfidenceEdit), nullptr, nullptr);
         rag_export_path_label_ = CreateWindowExW(0, L"STATIC", L"Write file folder:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagExportPathLabel), nullptr, nullptr);
         rag_export_path_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagExportPathEdit), nullptr, nullptr);
+        rag_retrieval_mode_label_ = CreateWindowExW(0, L"STATIC", L"Retrieval mode:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagRetrievalModeLabel), nullptr, nullptr);
+        rag_retrieval_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagRetrievalModeCombo), nullptr, nullptr);
+        ComboBox_AddString(rag_retrieval_mode_combo_, L"Both (passive + tool)");
+        ComboBox_AddString(rag_retrieval_mode_combo_, L"Passive only");
+        ComboBox_AddString(rag_retrieval_mode_combo_, L"Active tool only");
+        ComboBox_AddString(rag_retrieval_mode_combo_, L"Disabled");
         instructions_label_ = CreateWindowExW(0, L"STATIC", L"Project Instructions:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstructionsLabel), nullptr, nullptr);
         import_instructions_button_ = CreateWindowExW(0, L"BUTTON", L"Import Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImportInstructions), nullptr, nullptr);
         instructions_edit_ = CreateWindowExW(
@@ -386,6 +396,7 @@ private:
             rag_priority_label_, rag_priority_edit_, rag_max_chunks_label_, rag_max_chunks_edit_,
             rag_min_confidence_label_, rag_min_confidence_edit_, rag_max_confidence_label_, rag_max_confidence_edit_,
             rag_export_path_label_, rag_export_path_edit_,
+            rag_retrieval_mode_label_, rag_retrieval_mode_combo_,
             instructions_label_, import_instructions_button_, instructions_edit_,
             save_button_, cancel_button_
         };
@@ -487,7 +498,10 @@ private:
         MoveWindow(rag_min_confidence_edit_, right_x + numeric_label_width, y, numeric_edit_width, Scale(hwnd_, 22), TRUE);
         MoveWindow(rag_max_confidence_label_, right_x + numeric_pair_width, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
         MoveWindow(rag_max_confidence_edit_, right_x + numeric_pair_width + numeric_label_width, y, numeric_edit_width, Scale(hwnd_, 22), TRUE);
-        y += numeric_row_height + gutter * 2;
+        y += numeric_row_height + gutter;
+        MoveWindow(rag_retrieval_mode_label_, right_x, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
+        MoveWindow(rag_retrieval_mode_combo_, right_x + numeric_label_width, y, Scale(hwnd_, 180), Scale(hwnd_, 200), TRUE);
+        y += numeric_row_height + gutter;
 
         const int import_width = Scale(hwnd_, 130);
         MoveWindow(instructions_label_, right_x, y + Scale(hwnd_, 5), right_width - import_width - gutter, label_height, TRUE);
@@ -543,6 +557,11 @@ private:
         case kRagExportCheck:
         case kRagDefaultIngestCheck:
             OnRagBindingControlsChanged();
+            break;
+        case kRagRetrievalModeCombo:
+            if (notification_code == CBN_SELCHANGE) {
+                OnRagBindingControlsChanged();
+            }
             break;
         case kImportInstructions:
             ImportInstructions();
@@ -802,11 +821,30 @@ private:
         }
     }
 
+    static int RagRetrievalModeToComboIndex(RagRetrievalMode mode) {
+        switch (mode) {
+            case RagRetrievalMode::PassiveOnly:    return 1;
+            case RagRetrievalMode::ActiveToolOnly: return 2;
+            case RagRetrievalMode::Disabled:       return 3;
+            case RagRetrievalMode::Both:           // fallthrough
+            default:                               return 0;
+        }
+    }
+
+    static RagRetrievalMode ComboIndexToRagRetrievalMode(int index) {
+        switch (index) {
+            case 1:  return RagRetrievalMode::PassiveOnly;
+            case 2:  return RagRetrievalMode::ActiveToolOnly;
+            case 3:  return RagRetrievalMode::Disabled;
+            default: return RagRetrievalMode::Both;
+        }
+    }
+
     void SetRagControlsEnabled(bool enabled) {
         HWND controls[] = {
             rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_, rag_delete_check_, rag_export_check_,
             rag_default_ingest_check_, rag_priority_edit_, rag_max_chunks_edit_, rag_min_confidence_edit_, rag_max_confidence_edit_,
-            rag_export_path_edit_
+            rag_export_path_edit_, rag_retrieval_mode_combo_
         };
         for (HWND control : controls) {
             EnableWindow(control, enabled ? TRUE : FALSE);
@@ -829,6 +867,7 @@ private:
             SetWindowTextW(rag_min_confidence_edit_, L"");
             SetWindowTextW(rag_max_confidence_edit_, L"");
             SetWindowTextW(rag_export_path_edit_, L"");
+            ComboBox_SetCurSel(rag_retrieval_mode_combo_, 0);
             return;
         }
 
@@ -847,6 +886,7 @@ private:
         SetWindowTextW(rag_min_confidence_edit_, FormatConfidence(row.default_min_confidence).c_str());
         SetWindowTextW(rag_max_confidence_edit_, FormatConfidence(row.default_max_confidence).c_str());
         SetWindowTextW(rag_export_path_edit_, Utf8ToWide(row.export_path_template).c_str());
+        ComboBox_SetCurSel(rag_retrieval_mode_combo_, RagRetrievalModeToComboIndex(row.retrieval_mode));
     }
 
     void SaveSelectedRagControls() {
@@ -876,6 +916,8 @@ private:
         if (const auto max_confidence = ParseDouble(GetWindowTextString(rag_max_confidence_edit_))) {
             row.default_max_confidence = *max_confidence;
         }
+
+        row.retrieval_mode = ComboIndexToRagRetrievalMode(ComboBox_GetCurSel(rag_retrieval_mode_combo_));
 
         NormalizeRagPermissionDependencies(row);
         EnsureSingleDefaultIngestTarget(selected_rag_index_);
@@ -934,6 +976,7 @@ private:
                 binding.max_chunks = row.max_chunks;
                 binding.default_min_confidence = row.default_min_confidence;
                 binding.default_max_confidence = row.default_max_confidence;
+                binding.retrieval_mode = row.retrieval_mode;
                 rag_bindings.push_back(binding);
             }
         }
@@ -998,6 +1041,8 @@ private:
     HWND rag_max_confidence_edit_ = nullptr;
     HWND rag_export_path_label_ = nullptr;
     HWND rag_export_path_edit_ = nullptr;
+    HWND rag_retrieval_mode_label_ = nullptr;
+    HWND rag_retrieval_mode_combo_ = nullptr;
     HWND instructions_label_ = nullptr;
     HWND instructions_edit_ = nullptr;
     HWND import_instructions_button_ = nullptr;
