@@ -35,12 +35,22 @@ enum ControlId : int {
     kServerScopeLabel = 6407,
     kVariablesHeader = 6408,
 
-    // Right panel top - context window
+    // Right panel top - model selection
+    kModelLabel = 6415,
+    kModelCombo = 6416,
+
+    // Right panel - context window
     kContextWindowLabel = 6410,
     kContextWindowCombo = 6411,
     kAddCompressionConfig = 6412,
     kDeleteCompressionConfig = 6413,
     kEditCompressionConfig = 6414,
+
+    // Left panel bottom - Model tools
+    kModelToolsHeader = 6446,
+    kModelToolsList   = 6447,
+    // Browse buttons for MCP variables: IDs kBrowseVarBase..kBrowseVarBase+99
+    kBrowseVarBase    = 7000,
 
     // Right panel middle - RAG services
     kRagServicesHeader = 6420,
@@ -67,6 +77,16 @@ enum ControlId : int {
     kInstructionsLabel = 6443,
     kInstructionsEdit = 6444,
     kImportInstructions = 6445,
+
+    // Right panel - project variables
+    kProjVarsHeader     = 6450,
+    kProjVarsList       = 6451,
+    kProjVarsAdd        = 6452,
+    kProjVarsRemove     = 6453,
+    kProjVarsNameLabel  = 6454,
+    kProjVarsNameEdit   = 6455,
+    kProjVarsValueLabel = 6456,
+    kProjVarsValueEdit  = 6457,
 
     // Footer
     kSaveButton = IDOK,
@@ -233,6 +253,26 @@ private:
             states_.push_back(std::move(state));
         }
 
+        // Populate global_values_ from the initial bindings.
+        // Global variable values are stored inside each server binding's variable list;
+        // the dialog's global_values_ is the single source of truth shown to the user.
+        // If we don't seed it here, global variables (e.g. ProjectFolder) appear blank on open.
+        for (const auto& state : states_) {
+            for (const auto& var_val : state.variables) {
+                const bool is_global = std::find_if(
+                    options_.global_variables.begin(), options_.global_variables.end(),
+                    [&](const McpServerVariable& v) { return v.name == var_val.name; }
+                ) != options_.global_variables.end();
+                if (!is_global) continue;
+                // Only insert the first occurrence (all servers should agree on the value).
+                auto existing = std::find_if(global_values_.begin(), global_values_.end(),
+                    [&](const ProjectMcpVariableValue& v) { return v.name == var_val.name; });
+                if (existing == global_values_.end()) {
+                    global_values_.push_back(var_val);
+                }
+            }
+        }
+
         // RAG bindings
         for (const auto& rag : options_.available_rags) {
             RagRow row;
@@ -261,6 +301,9 @@ private:
 
         // Selected compression config (loaded from global configs via options)
         selected_compression_config_id_ = options_.selected_compression_config_id;
+
+        // Project-level variables
+        project_variables_ = options_.initial_project_variables;
     }
 
     static int Scale(HWND hwnd, int value) {
@@ -299,6 +342,7 @@ private:
             return 0;
         case WM_SIZE:
             self->LayoutControls(LOWORD(l_param), HIWORD(l_param));
+            self->LayoutVariableControls();
             return 0;
         case WM_COMMAND:
             self->OnCommand(LOWORD(w_param), HIWORD(w_param));
@@ -323,8 +367,8 @@ private:
         server_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
             0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kServerList), nullptr, nullptr);
-        add_server_button_ = CreateWindowExW(0, L"BUTTON", L"+", WS_CHILD | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAddServer), nullptr, nullptr);
-        remove_server_button_ = CreateWindowExW(0, L"BUTTON", L"-", WS_CHILD | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRemoveServer), nullptr, nullptr);
+        add_server_button_ = CreateWindowExW(0, L"BUTTON", L"+", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAddServer), nullptr, nullptr);
+        remove_server_button_ = CreateWindowExW(0, L"BUTTON", L"-", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRemoveServer), nullptr, nullptr);
 
         // Server details panel
         server_details_panel_ = CreateWindowExW(0, L"BUTTON", nullptr, WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kServerDetailsPanel), nullptr, nullptr);
@@ -332,6 +376,16 @@ private:
         server_name_label_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kServerNameLabel), nullptr, nullptr);
         server_scope_label_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kServerScopeLabel), nullptr, nullptr);
         variables_header_ = CreateWindowExW(0, L"STATIC", L"Variables:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kVariablesHeader), nullptr, nullptr);
+
+        // Left panel – model tools section
+        model_tools_header_ = CreateWindowExW(0, L"STATIC", L"Model Tools:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelToolsHeader), nullptr, nullptr);
+        model_tools_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelToolsList), nullptr, nullptr);
+
+        // Model selection section
+        model_label_ = CreateWindowExW(0, L"STATIC", L"AI Model:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelLabel), nullptr, nullptr);
+        model_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelCombo), nullptr, nullptr);
 
         // Context window section
         context_window_label_ = CreateWindowExW(0, L"STATIC", L"Context Window Compression:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextWindowLabel), nullptr, nullptr);
@@ -365,6 +419,18 @@ private:
         ComboBox_AddString(rag_retrieval_mode_combo_, L"Passive only");
         ComboBox_AddString(rag_retrieval_mode_combo_, L"Active tool only");
         ComboBox_AddString(rag_retrieval_mode_combo_, L"Disabled");
+        // Project variables section
+        proj_vars_header_ = CreateWindowExW(0, L"STATIC", L"Project Variables:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsHeader), nullptr, nullptr);
+        proj_vars_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsList), nullptr, nullptr);
+        proj_vars_add_btn_    = CreateWindowExW(0, L"BUTTON", L"+", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsAdd),    nullptr, nullptr);
+        proj_vars_remove_btn_ = CreateWindowExW(0, L"BUTTON", L"-", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsRemove), nullptr, nullptr);
+        proj_vars_name_label_  = CreateWindowExW(0, L"STATIC", L"Name:",  WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsNameLabel),  nullptr, nullptr);
+        proj_vars_name_edit_   = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsNameEdit),   nullptr, nullptr);
+        proj_vars_value_label_ = CreateWindowExW(0, L"STATIC", L"Value:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsValueLabel), nullptr, nullptr);
+        proj_vars_value_edit_  = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsValueEdit),  nullptr, nullptr);
+
         instructions_label_ = CreateWindowExW(0, L"STATIC", L"Project Instructions:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstructionsLabel), nullptr, nullptr);
         import_instructions_button_ = CreateWindowExW(0, L"BUTTON", L"Import Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImportInstructions), nullptr, nullptr);
         instructions_edit_ = CreateWindowExW(
@@ -389,7 +455,9 @@ private:
         HWND all_controls[] = {
             server_list_, add_server_button_, remove_server_button_,
             server_details_panel_, server_enabled_check_, server_name_label_, server_scope_label_,
+            model_tools_header_, model_tools_list_,
             variables_header_,
+            model_label_, model_combo_,
             context_window_label_, context_window_combo_,
             rag_services_header_, rag_services_list_, rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_check_,
@@ -397,6 +465,8 @@ private:
             rag_min_confidence_label_, rag_min_confidence_edit_, rag_max_confidence_label_, rag_max_confidence_edit_,
             rag_export_path_label_, rag_export_path_edit_,
             rag_retrieval_mode_label_, rag_retrieval_mode_combo_,
+            proj_vars_header_, proj_vars_list_, proj_vars_add_btn_, proj_vars_remove_btn_,
+            proj_vars_name_label_, proj_vars_name_edit_, proj_vars_value_label_, proj_vars_value_edit_,
             instructions_label_, import_instructions_button_, instructions_edit_,
             save_button_, cancel_button_
         };
@@ -404,9 +474,16 @@ private:
             SendMessageW(ctrl, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
         }
 
+        // Initial layout pass so the server details panel is positioned before SelectServer
+        // tries to position variable controls relative to it.
+        LayoutControls(1050, 750);
+
         // Populate server list
         RefreshServerList();
         SelectServer(0);
+
+        // Populate model combo
+        PopulateModelCombo();
 
         // Populate compression config dropdown
         RefreshCompressionCombo();
@@ -418,10 +495,25 @@ private:
             OnRagSelectionChanged();
         }
 
-        LayoutControls(1050, 750);
+        // Populate project variables list
+        RefreshProjVarsList();
+        EnableWindow(proj_vars_name_edit_,   FALSE);
+        EnableWindow(proj_vars_value_edit_,  FALSE);
+        EnableWindow(proj_vars_remove_btn_,  FALSE);
+
+        // Populate model tools checklist
+        model_tool_enabled_.clear();
+        for (const auto& mt : options_.model_tools) {
+            bool enabled = std::find(options_.initial_model_tool_ids.begin(),
+                options_.initial_model_tool_ids.end(), mt.id) != options_.initial_model_tool_ids.end();
+            model_tool_enabled_.push_back(enabled);
+            std::wstring label = (enabled ? L"[✓] " : L"[ ] ") +
+                Utf8ToWide(mt.name.empty() ? "(unnamed)" : mt.name);
+            ListBox_AddString(model_tools_list_, label.c_str());
+        }
     }
 
-    void LayoutControls(int width, int height) const {
+    void LayoutControls(int width, int height) {
         const int margin = Scale(hwnd_, 12);
         const int gutter = Scale(hwnd_, 8);
         const int label_height = Scale(hwnd_, 18);
@@ -438,11 +530,12 @@ private:
         MoveWindow(add_server_button_, margin, y, server_btn_width, button_height, TRUE);
         MoveWindow(remove_server_button_, margin + server_btn_width + gutter, y, server_btn_width, button_height, TRUE);
         y += button_height + gutter;
-        MoveWindow(server_list_, margin, y, left_width, Scale(hwnd_, 200), TRUE);
+        MoveWindow(server_list_, margin, y, left_width, Scale(hwnd_, 160), TRUE);
 
-        // Server details panel
-        y += Scale(hwnd_, 205);
-        MoveWindow(server_details_panel_, margin, y, left_width, height - y - margin - button_height - gutter, TRUE);
+        // Server details panel - fixed height to leave room for model tools below
+        y += Scale(hwnd_, 165);
+        const int details_height = Scale(hwnd_, 280);
+        MoveWindow(server_details_panel_, margin, y, left_width, details_height, TRUE);
         const int detail_x = margin + gutter;
         const int detail_w = left_width - gutter * 2;
         MoveWindow(server_enabled_check_, detail_x, y + Scale(hwnd_, 18), detail_w, Scale(hwnd_, 22), TRUE);
@@ -450,12 +543,28 @@ private:
         MoveWindow(server_scope_label_, detail_x, y + Scale(hwnd_, 65), detail_w, label_height, TRUE);
         MoveWindow(variables_header_, detail_x, y + Scale(hwnd_, 90), detail_w, label_height, TRUE);
 
+        // Model tools section below server details
+        y += details_height + gutter;
+        MoveWindow(model_tools_header_, margin, y, left_width, label_height, TRUE);
+        y += label_height + gutter;
+        const int mt_list_height = std::max(Scale(hwnd_, 60), buttons_y - y - gutter);
+        MoveWindow(model_tools_list_, margin, y, left_width, mt_list_height, TRUE);
+
+        // Reposition any active variable controls
+        LayoutVariableControls();
+
         // Right panel
         const int right_x = margin + left_width + gutter * 2;
         const int right_width = width - right_x - margin;
 
-        // Context window section
+        // Model selection section (top of right panel)
         y = margin;
+        MoveWindow(model_label_, right_x, y, right_width, label_height, TRUE);
+        y += label_height + gutter;
+        MoveWindow(model_combo_, right_x, y, right_width, Scale(hwnd_, 250), TRUE);
+        y += Scale(hwnd_, 28) + gutter * 2;
+
+        // Context window section
         MoveWindow(context_window_label_, right_x, y, right_width, label_height, TRUE);
         y += label_height + gutter;
         MoveWindow(context_window_combo_, right_x, y, right_width, Scale(hwnd_, 200), TRUE);
@@ -503,6 +612,32 @@ private:
         MoveWindow(rag_retrieval_mode_combo_, right_x + numeric_label_width, y, Scale(hwnd_, 180), Scale(hwnd_, 200), TRUE);
         y += numeric_row_height + gutter;
 
+        // Project variables section
+        {
+            const int pv_btn_w   = Scale(hwnd_, 30);
+            const int pv_list_h  = Scale(hwnd_, 70);
+            const int pv_lbl_w   = Scale(hwnd_, 50);
+            const int pv_edit_h  = Scale(hwnd_, 22);
+            const int pv_row_h   = pv_edit_h + Scale(hwnd_, 4);
+            const int list_w     = right_width - pv_btn_w - gutter;
+
+            MoveWindow(proj_vars_header_, right_x, y, right_width, label_height, TRUE);
+            y += label_height + gutter;
+
+            MoveWindow(proj_vars_list_,       right_x,                y,                  list_w,         pv_list_h,  TRUE);
+            MoveWindow(proj_vars_add_btn_,    right_x + list_w + gutter, y,               pv_btn_w,       button_height, TRUE);
+            MoveWindow(proj_vars_remove_btn_, right_x + list_w + gutter, y + button_height + gutter, pv_btn_w, button_height, TRUE);
+            y += pv_list_h + gutter;
+
+            MoveWindow(proj_vars_name_label_,  right_x,            y + Scale(hwnd_, 3), pv_lbl_w,              label_height, TRUE);
+            MoveWindow(proj_vars_name_edit_,   right_x + pv_lbl_w, y,                  right_width - pv_lbl_w, pv_edit_h,    TRUE);
+            y += pv_row_h + gutter;
+
+            MoveWindow(proj_vars_value_label_, right_x,            y + Scale(hwnd_, 3), pv_lbl_w,              label_height, TRUE);
+            MoveWindow(proj_vars_value_edit_,  right_x + pv_lbl_w, y,                  right_width - pv_lbl_w, pv_edit_h,    TRUE);
+            y += pv_row_h + gutter;
+        }
+
         const int import_width = Scale(hwnd_, 130);
         MoveWindow(instructions_label_, right_x, y + Scale(hwnd_, 5), right_width - import_width - gutter, label_height, TRUE);
         MoveWindow(import_instructions_button_, right_x + right_width - import_width, y, import_width, button_height, TRUE);
@@ -512,6 +647,27 @@ private:
         // Footer buttons
         MoveWindow(cancel_button_, width - margin - button_width, buttons_y, button_width, button_height, TRUE);
         MoveWindow(save_button_, width - margin - button_width * 2 - gutter, buttons_y, button_width, button_height, TRUE);
+    }
+
+    // Reposition dynamically-created variable controls to track the server details panel.
+    // Must be called after LayoutControls (or after SelectServer) so the panel has been sized.
+    void LayoutVariableControls() {
+        if (variable_controls_.empty()) return;
+        RECT panel_rc;
+        GetWindowRect(server_details_panel_, &panel_rc);
+        POINT pt = {panel_rc.left, panel_rc.top};
+        ScreenToClient(hwnd_, &pt);
+        const int base_x = pt.x + Scale(hwnd_, 6);
+        int base_y = pt.y + Scale(hwnd_, 115);
+        const int panel_w = (panel_rc.right - panel_rc.left) - Scale(hwnd_, 12);
+        for (const auto& vc : variable_controls_) {
+            const bool has_browse = (vc.browse != nullptr);
+            const int edit_w = panel_w - (has_browse ? Scale(hwnd_, 32) : 0);
+            if (vc.label)  MoveWindow(vc.label,  base_x, base_y, panel_w, Scale(hwnd_, 18), TRUE);
+            if (vc.edit)   MoveWindow(vc.edit,   base_x, base_y + Scale(hwnd_, 20), edit_w, Scale(hwnd_, 22), TRUE);
+            if (vc.browse) MoveWindow(vc.browse, base_x + edit_w + Scale(hwnd_, 2), base_y + Scale(hwnd_, 20), Scale(hwnd_, 28), Scale(hwnd_, 22), TRUE);
+            base_y += Scale(hwnd_, 48);
+        }
     }
 
     void OnCommand(int control_id, int notification_code) {
@@ -563,6 +719,45 @@ private:
                 OnRagBindingControlsChanged();
             }
             break;
+        case kModelToolsList:
+            if (notification_code == LBN_SELCHANGE && !toggling_model_tool_) {
+                // Toggle enabled state for the selected model tool.
+                const int sel = ListBox_GetCurSel(model_tools_list_);
+                if (sel >= 0 && sel < static_cast<int>(model_tool_enabled_.size())) {
+                    toggling_model_tool_ = true;
+                    model_tool_enabled_[sel] = !model_tool_enabled_[sel];
+                    // Update label prefix: delete + re-insert to update the string in place.
+                    const auto& mt = options_.model_tools[sel];
+                    std::wstring label = (model_tool_enabled_[sel] ? L"[✓] " : L"[ ] ") +
+                        Utf8ToWide(mt.name.empty() ? "(unnamed)" : mt.name);
+                    ListBox_DeleteString(model_tools_list_, sel);
+                    ListBox_InsertString(model_tools_list_, sel, label.c_str());
+                    ListBox_SetCurSel(model_tools_list_, sel);
+                    toggling_model_tool_ = false;
+                }
+            }
+            break;
+        case kProjVarsList:
+            if (notification_code == LBN_SELCHANGE) {
+                OnProjVarsSelChange();
+            }
+            break;
+        case kProjVarsAdd:
+            OnProjVarsAdd();
+            break;
+        case kProjVarsRemove:
+            OnProjVarsRemove();
+            break;
+        case kProjVarsNameEdit:
+            if (notification_code == EN_CHANGE && !updating_proj_var_) {
+                OnProjVarEditChanged();
+            }
+            break;
+        case kProjVarsValueEdit:
+            if (notification_code == EN_CHANGE && !updating_proj_var_) {
+                OnProjVarEditChanged();
+            }
+            break;
         case kImportInstructions:
             ImportInstructions();
             break;
@@ -571,6 +766,12 @@ private:
             break;
         case kCancelButton:
             DestroyWindow(hwnd_);
+            break;
+        default:
+            // Handle browse buttons for MCP variable edits (IDs kBrowseVarBase..kBrowseVarBase+99)
+            if (control_id >= kBrowseVarBase && control_id < kBrowseVarBase + 100) {
+                OnBrowseVariable(control_id - kBrowseVarBase);
+            }
             break;
         }
     }
@@ -591,6 +792,9 @@ private:
     }
 
     void SelectServer(int index) {
+        // Save edits from the currently displayed server before switching.
+        SaveCurrentVariableValues();
+
         selected_server_index_ = index;
         bool has_selection = (index >= 0 && index < static_cast<int>(states_.size()));
 
@@ -599,6 +803,14 @@ private:
         ShowWindow(server_name_label_, has_selection ? SW_SHOW : SW_HIDE);
         ShowWindow(server_scope_label_, has_selection ? SW_SHOW : SW_HIDE);
         ShowWindow(variables_header_, has_selection ? SW_SHOW : SW_HIDE);
+
+        // Destroy existing dynamic variable controls.
+        for (auto& vc : variable_controls_) {
+            if (vc.label)  DestroyWindow(vc.label);
+            if (vc.edit)   DestroyWindow(vc.edit);
+            if (vc.browse) DestroyWindow(vc.browse);
+        }
+        variable_controls_.clear();
 
         if (!has_selection) {
             return;
@@ -612,33 +824,22 @@ private:
         std::wstring scope = (server.scope == McpServerScope::Shared) ? L"Scope: Shared process" : L"Scope: Per-project process";
         SetWindowTextW(server_scope_label_, scope.c_str());
 
-        // Clear existing variable controls
-        for (auto& vc : variable_controls_) {
-            if (vc.label) DestroyWindow(vc.label);
-            if (vc.edit) DestroyWindow(vc.edit);
-            if (vc.browse) DestroyWindow(vc.browse);
-        }
-        variable_controls_.clear();
-
-        // Create variable controls
-        RECT panel_rect;
-        GetWindowRect(server_details_panel_, &panel_rect);
-        int panel_x = Scale(hwnd_, 18);
-        int panel_y = Scale(hwnd_, 115);
-        int panel_w = Scale(hwnd_, 280) - Scale(hwnd_, 36);
-
+        // Create variable controls.  Positions are set by LayoutVariableControls(); use
+        // placeholder positions (0,0) here and let the layout pass fix them up.
+        int var_index = 0;
         for (const auto& variable : server.variables) {
             bool is_global = std::find_if(options_.global_variables.begin(), options_.global_variables.end(),
                 [&](const McpServerVariable& v) { return v.name == variable.name; }) != options_.global_variables.end();
 
             HWND lbl = CreateWindowExW(0, L"STATIC", Utf8ToWide(variable.name).c_str(),
-                WS_CHILD | WS_VISIBLE, panel_x, panel_y, panel_w, Scale(hwnd_, 18), hwnd_, nullptr, nullptr, nullptr);
+                WS_CHILD | WS_VISIBLE, 0, 0, 10, 10, hwnd_, nullptr, nullptr, nullptr);
             SendMessageW(lbl, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
 
             HWND edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP, panel_x, panel_y + Scale(hwnd_, 20), panel_w - (variable.kind != McpVariableKind::None ? Scale(hwnd_, 30) : 0), Scale(hwnd_, 22), hwnd_, nullptr, nullptr, nullptr);
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 10, 10, hwnd_, nullptr, nullptr, nullptr);
             SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
 
+            // Load current value
             std::string current_value;
             if (is_global) {
                 auto it = std::find_if(global_values_.begin(), global_values_.end(),
@@ -651,16 +852,21 @@ private:
             }
             SetWindowTextW(edit, Utf8ToWide(current_value).c_str());
 
+            // Browse button: assign a WM_COMMAND-routable ID (kBrowseVarBase + varIndex)
             HWND browse = nullptr;
             if (variable.kind != McpVariableKind::None) {
+                const int btn_id = kBrowseVarBase + var_index;
                 browse = CreateWindowExW(0, L"BUTTON", L"...", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                    panel_x + panel_w - Scale(hwnd_, 30), panel_y + Scale(hwnd_, 20), Scale(hwnd_, 28), Scale(hwnd_, 22), hwnd_, nullptr, nullptr, nullptr);
+                    0, 0, 10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(btn_id)), nullptr, nullptr);
                 SendMessageW(browse, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
             }
 
             variable_controls_.push_back({variable.name, variable.kind, is_global, lbl, edit, browse});
-            panel_y += Scale(hwnd_, 48);
+            ++var_index;
         }
+
+        // Position the new controls to match the current panel location.
+        LayoutVariableControls();
     }
 
     void OnServerEnabledChanged() {
@@ -671,12 +877,109 @@ private:
         ListBox_SetCurSel(server_list_, selected_server_index_);
     }
 
+    // Read the current variable edit controls back into states_[selected_server_index_].variables
+    // so the values survive a server switch or a Save.
+    void SaveCurrentVariableValues() {
+        if (selected_server_index_ < 0 || selected_server_index_ >= static_cast<int>(states_.size())) return;
+        auto& state = states_[selected_server_index_];
+        for (const auto& vc : variable_controls_) {
+            const std::string value = WideToUtf8(GetWindowTextString(vc.edit));
+            if (vc.global) {
+                // Also persist into global_values_ so other servers sharing the variable see the edit.
+                auto it = std::find_if(global_values_.begin(), global_values_.end(),
+                    [&](const ProjectMcpVariableValue& v) { return v.name == vc.name; });
+                if (it != global_values_.end()) {
+                    it->value = value;
+                } else {
+                    global_values_.push_back({vc.name, value});
+                }
+            } else {
+                auto it = std::find_if(state.variables.begin(), state.variables.end(),
+                    [&](const ProjectMcpVariableValue& v) { return v.name == vc.name; });
+                if (it != state.variables.end()) {
+                    it->value = value;
+                } else {
+                    state.variables.push_back({vc.name, value});
+                }
+            }
+        }
+    }
+
+    // Called when a browse ("...") button for a variable is clicked.
+    void OnBrowseVariable(int var_index) {
+        if (var_index < 0 || var_index >= static_cast<int>(variable_controls_.size())) return;
+        auto& vc = variable_controls_[var_index];
+
+        if (vc.kind == McpVariableKind::Folder) {
+            BROWSEINFOW bi{};
+            bi.hwndOwner = hwnd_;
+            bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+            bi.lpszTitle = L"Select Folder";
+            PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
+            if (pidl) {
+                wchar_t path[MAX_PATH]{};
+                if (SHGetPathFromIDListW(pidl, path)) {
+                    SetWindowTextW(vc.edit, path);
+                }
+                CoTaskMemFree(pidl);
+            }
+        } else if (vc.kind == McpVariableKind::File) {
+            wchar_t path[MAX_PATH]{};
+            OPENFILENAMEW ofn{};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner   = hwnd_;
+            ofn.lpstrFile   = path;
+            ofn.nMaxFile    = static_cast<DWORD>(std::size(path));
+            ofn.lpstrFilter = L"All Files\0*.*\0";
+            ofn.nFilterIndex = 1;
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+            if (GetOpenFileNameW(&ofn)) {
+                SetWindowTextW(vc.edit, path);
+            }
+        }
+    }
+
     void AddServer() {
         // Not implemented for now - servers are managed via MCP Servers button
     }
 
     void RemoveServer() {
         // Not implemented for now
+    }
+
+    void PopulateModelCombo() {
+        ComboBox_ResetContent(model_combo_);
+        model_entries_.clear();
+
+        // First entry: "(No preference)"
+        ComboBox_AddString(model_combo_, L"(No preference — use first available)");
+        model_entries_.push_back({"", ""});
+
+        int preferred = 0;  // default to "No preference"
+        for (const auto& provider : options_.providers) {
+            for (const auto& model : provider.models) {
+                ModelEntry entry;
+                entry.provider_id = provider.id;
+                entry.model_id = model.id;
+
+                std::wstring label = Utf8ToWide(provider.name + " / " + model.display_name);
+                if (model.context_window > 0) {
+                    label += L"  " + std::to_wstring(model.context_window) + L" ctx";
+                }
+                if (model.supports_streaming) label += L"  [stream]";
+                if (model.supports_tools)     label += L" [tools]";
+                if (model.supports_vision)    label += L" [vision]";
+
+                if (entry.provider_id == options_.preferred_provider_id &&
+                    entry.model_id == options_.preferred_model_id) {
+                    preferred = static_cast<int>(model_entries_.size());
+                }
+                model_entries_.push_back(entry);
+                ComboBox_AddString(model_combo_, label.c_str());
+            }
+        }
+        ComboBox_SetCurSel(model_combo_, preferred);
+        EnableWindow(model_combo_, model_entries_.size() > 1);
     }
 
     void RefreshCompressionCombo() {
@@ -923,6 +1226,94 @@ private:
         EnsureSingleDefaultIngestTarget(selected_rag_index_);
     }
 
+    void RefreshProjVarsList() {
+        ListBox_ResetContent(proj_vars_list_);
+        for (const auto& pv : project_variables_) {
+            std::wstring text = Utf8ToWide(pv.name.empty() ? std::string("(unnamed)") : pv.name);
+            text += L" = ";
+            text += Utf8ToWide(pv.value);
+            ListBox_AddString(proj_vars_list_, text.c_str());
+        }
+    }
+
+    void SelectProjVar(int index) {
+        selected_proj_var_index_ = index;
+        const bool has_sel = (index >= 0 && index < static_cast<int>(project_variables_.size()));
+        updating_proj_var_ = true;
+        if (has_sel) {
+            SetWindowTextW(proj_vars_name_edit_,  Utf8ToWide(project_variables_[index].name).c_str());
+            SetWindowTextW(proj_vars_value_edit_, Utf8ToWide(project_variables_[index].value).c_str());
+        } else {
+            SetWindowTextW(proj_vars_name_edit_,  L"");
+            SetWindowTextW(proj_vars_value_edit_, L"");
+        }
+        updating_proj_var_ = false;
+        EnableWindow(proj_vars_name_edit_,  has_sel ? TRUE : FALSE);
+        EnableWindow(proj_vars_value_edit_, has_sel ? TRUE : FALSE);
+        EnableWindow(proj_vars_remove_btn_, has_sel ? TRUE : FALSE);
+    }
+
+    // Flush current name/value edits back into project_variables_[selected_proj_var_index_].
+    void SaveCurrentProjVar() {
+        if (selected_proj_var_index_ < 0 ||
+            selected_proj_var_index_ >= static_cast<int>(project_variables_.size())) return;
+        auto& pv = project_variables_[selected_proj_var_index_];
+        pv.name  = WideToUtf8(GetWindowTextString(proj_vars_name_edit_));
+        pv.value = WideToUtf8(GetWindowTextString(proj_vars_value_edit_));
+    }
+
+    void OnProjVarsSelChange() {
+        // Capture the new selection BEFORE RefreshProjVarsList(), because
+        // ListBox_ResetContent inside that function clears the selection and
+        // a subsequent GetCurSel would return -1.
+        const int sel = ListBox_GetCurSel(proj_vars_list_);
+        SaveCurrentProjVar();
+        RefreshProjVarsList();
+        if (sel >= 0) ListBox_SetCurSel(proj_vars_list_, sel);
+        SelectProjVar((sel >= 0 && sel < static_cast<int>(project_variables_.size())) ? sel : -1);
+    }
+
+    void OnProjVarsAdd() {
+        SaveCurrentProjVar();
+        ProjectMcpVariableValue pv;
+        pv.name  = "";
+        pv.value = "";
+        project_variables_.push_back(pv);
+        RefreshProjVarsList();
+        const int new_idx = static_cast<int>(project_variables_.size()) - 1;
+        ListBox_SetCurSel(proj_vars_list_, new_idx);
+        SelectProjVar(new_idx);
+        SetFocus(proj_vars_name_edit_);
+    }
+
+    void OnProjVarsRemove() {
+        if (selected_proj_var_index_ < 0 ||
+            selected_proj_var_index_ >= static_cast<int>(project_variables_.size())) return;
+        project_variables_.erase(project_variables_.begin() + selected_proj_var_index_);
+        RefreshProjVarsList();
+        const int new_idx = std::min(selected_proj_var_index_, static_cast<int>(project_variables_.size()) - 1);
+        ListBox_SetCurSel(proj_vars_list_, new_idx);
+        SelectProjVar((new_idx >= 0 && new_idx < static_cast<int>(project_variables_.size())) ? new_idx : -1);
+    }
+
+    // Called when the name or value edit box changes — live-update the list entry label.
+    void OnProjVarEditChanged() {
+        if (selected_proj_var_index_ < 0 ||
+            selected_proj_var_index_ >= static_cast<int>(project_variables_.size())) return;
+        auto& pv = project_variables_[selected_proj_var_index_];
+        pv.name  = WideToUtf8(GetWindowTextString(proj_vars_name_edit_));
+        pv.value = WideToUtf8(GetWindowTextString(proj_vars_value_edit_));
+        // Refresh label in-place (delete+reinsert keeps selection).
+        updating_proj_var_ = true;
+        std::wstring text = Utf8ToWide(pv.name.empty() ? std::string("(unnamed)") : pv.name);
+        text += L" = ";
+        text += Utf8ToWide(pv.value);
+        ListBox_DeleteString(proj_vars_list_, selected_proj_var_index_);
+        ListBox_InsertString(proj_vars_list_, selected_proj_var_index_, text.c_str());
+        ListBox_SetCurSel(proj_vars_list_, selected_proj_var_index_);
+        updating_proj_var_ = false;
+    }
+
     void ImportInstructions() {
         const auto path = PickMarkdownFile(hwnd_);
         if (!path) {
@@ -937,6 +1328,12 @@ private:
     }
 
     void SaveAndClose() {
+        // Flush any unsaved variable edits from the currently-visible server.
+        SaveCurrentVariableValues();
+
+        // Flush any in-progress project variable edits.
+        SaveCurrentProjVar();
+
         SaveSelectedRagControls();
 
         // Ensure selected_compression_config_id is current from combo
@@ -945,6 +1342,34 @@ private:
             selected_compression_config_id_.clear();
         } else if ((sel - 1) < static_cast<int>(options_.compression_configs.size())) {
             selected_compression_config_id_ = options_.compression_configs[sel - 1].id;
+        }
+
+        // Flush global variable values back into each server state.
+        // During editing, global variable changes are kept in global_values_.
+        // Server bindings store values per-variable in their own list, so we must
+        // update (or insert) the global entries in each state before persisting.
+        for (auto& state : states_) {
+            // Find the server config so we know which variables it declares.
+            const auto server_it = std::find_if(options_.servers.begin(), options_.servers.end(),
+                [&](const McpServerConfig& s) { return s.id == state.server_id; });
+            if (server_it == options_.servers.end()) continue;
+
+            for (const auto& global_val : global_values_) {
+                // Only inject if this server actually declares the variable.
+                const bool server_uses = std::find_if(
+                    server_it->variables.begin(), server_it->variables.end(),
+                    [&](const McpServerVariable& v) { return v.name == global_val.name; }
+                ) != server_it->variables.end();
+                if (!server_uses) continue;
+
+                auto it = std::find_if(state.variables.begin(), state.variables.end(),
+                    [&](const ProjectMcpVariableValue& v) { return v.name == global_val.name; });
+                if (it != state.variables.end()) {
+                    it->value = global_val.value;
+                } else {
+                    state.variables.push_back(global_val);
+                }
+            }
         }
 
         // Build MCP bindings
@@ -981,12 +1406,36 @@ private:
             }
         }
 
+        // Collect selected model
+        std::string preferred_provider_id;
+        std::string preferred_model_id;
+        {
+            const int model_sel = ComboBox_GetCurSel(model_combo_);
+            if (model_sel > 0 && static_cast<size_t>(model_sel) < model_entries_.size()) {
+                preferred_provider_id = model_entries_[static_cast<size_t>(model_sel)].provider_id;
+                preferred_model_id = model_entries_[static_cast<size_t>(model_sel)].model_id;
+            }
+            // sel == 0 means "No preference" — leave both empty
+        }
+
+        // Collect enabled model tool IDs
+        std::vector<std::string> model_tool_ids;
+        for (size_t i = 0; i < model_tool_enabled_.size(); ++i) {
+            if (model_tool_enabled_[i] && i < options_.model_tools.size()) {
+                model_tool_ids.push_back(options_.model_tools[i].id);
+            }
+        }
+
         result_ = ProjectSettingsResult{};
         result_->project_name = WideToUtf8(options_.project_name);
         result_->project_instructions = WideToUtf8(GetWindowTextString(instructions_edit_));
         result_->mcp_bindings = std::move(mcp_bindings);
         result_->selected_compression_config_id = selected_compression_config_id_;
         result_->rag_bindings = std::move(rag_bindings);
+        result_->preferred_provider_id = preferred_provider_id;
+        result_->preferred_model_id = preferred_model_id;
+        result_->model_tool_ids = std::move(model_tool_ids);
+        result_->project_variables = project_variables_;
 
         DestroyWindow(hwnd_);
     }
@@ -1013,6 +1462,13 @@ private:
     HWND server_scope_label_ = nullptr;
     HWND variables_header_ = nullptr;
 
+    // Model selection entries (mirrors provider list)
+    struct ModelEntry {
+        std::string provider_id;
+        std::string model_id;
+    };
+    std::vector<ModelEntry> model_entries_;
+
     // Compression configs
     std::string selected_compression_config_id_;
 
@@ -1020,6 +1476,8 @@ private:
     std::vector<RagRow> rag_rows_;
     int selected_rag_index_ = -1;
 
+    HWND model_label_ = nullptr;
+    HWND model_combo_ = nullptr;
     HWND context_window_label_ = nullptr;
     HWND context_window_combo_ = nullptr;
     HWND rag_services_header_ = nullptr;
@@ -1043,11 +1501,28 @@ private:
     HWND rag_export_path_edit_ = nullptr;
     HWND rag_retrieval_mode_label_ = nullptr;
     HWND rag_retrieval_mode_combo_ = nullptr;
+    HWND model_tools_header_ = nullptr;
+    HWND model_tools_list_ = nullptr;
+    std::vector<bool> model_tool_enabled_;
+    bool toggling_model_tool_ = false;  // re-entrancy guard for checkbox toggle
     HWND instructions_label_ = nullptr;
     HWND instructions_edit_ = nullptr;
     HWND import_instructions_button_ = nullptr;
     HWND save_button_ = nullptr;
     HWND cancel_button_ = nullptr;
+
+    // Project variables
+    std::vector<ProjectMcpVariableValue> project_variables_;
+    int selected_proj_var_index_ = -1;
+    bool updating_proj_var_ = false;  // re-entrancy guard for EN_CHANGE
+    HWND proj_vars_header_     = nullptr;
+    HWND proj_vars_list_       = nullptr;
+    HWND proj_vars_add_btn_    = nullptr;
+    HWND proj_vars_remove_btn_ = nullptr;
+    HWND proj_vars_name_label_  = nullptr;
+    HWND proj_vars_name_edit_   = nullptr;
+    HWND proj_vars_value_label_ = nullptr;
+    HWND proj_vars_value_edit_  = nullptr;
 };
 
 }  // namespace

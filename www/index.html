@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Chat</title>
+  <link rel="stylesheet" href="/css/base.css">
+  <link rel="stylesheet" href="{{THEME_PATH}}/style.css">
+  <!-- Syntax highlighting for code blocks -->
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css">
+</head>
+<body>
+<div id="app">
+  <!-- Header -->
+  <header id="header">
+    <span id="header-title">Agent Chat</span>
+    <div id="header-user">
+      <span id="header-username"></span>
+      <a id="logout-link" href="/logout">Sign out</a>
+    </div>
+  </header>
+
+  <!-- Body row -->
+  <div id="body-row">
+    <!-- Sidebar -->
+    <nav id="sidebar">
+      <div id="sidebar-header">Projects</div>
+      <div id="project-list">
+        <!-- Populated by app.js -->
+      </div>
+      <button id="new-chat-btn" disabled>+ New Chat</button>
+    </nav>
+
+    <!-- Main chat area -->
+    <main id="main">
+      <div id="chat-title">Select or create a chat</div>
+      <div id="messages">
+        <div id="empty-state">
+          <div class="empty-icon">💬</div>
+          <p>Select a chat from the sidebar or create a new one to get started.</p>
+        </div>
+      </div>
+      <div id="attach-bar" style="display:none">
+        <div id="attach-list"></div>
+      </div>
+      <div id="compose">
+        <button id="attach-btn" title="Attach file" disabled>📎</button>
+        <input id="file-input" type="file" multiple style="display:none">
+        <textarea id="message-input" placeholder="Type a message…"
+                  rows="1" disabled></textarea>
+        <button id="send-btn" disabled>Send</button>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Libraries loaded from CDN for Phase 0; bundle locally in Phase 1 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/11.2.0/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

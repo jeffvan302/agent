@@ -445,6 +445,28 @@ std::string ApplyBindingVariables(std::string text, const ProjectMcpServerBindin
     return text;
 }
 
+// Substitute $<VarName> tokens (no trailing '$') from project-level variables.
+// Deliberately skips any match that is immediately followed by '$', which would
+// indicate an MCP binding placeholder ($<Name>$) that was not resolved — we
+// leave those in place rather than producing partially-replaced garbage.
+std::string ApplyProjectVariables(std::string text, const std::vector<ProjectMcpVariableValue>& project_vars) {
+    for (const auto& pv : project_vars) {
+        if (pv.name.empty()) continue;
+        const std::string ph = "$<" + pv.name + ">";
+        std::string::size_type pos = 0;
+        while ((pos = text.find(ph, pos)) != std::string::npos) {
+            const size_t after = pos + ph.size();
+            if (after < text.size() && text[after] == '$') {
+                ++pos;  // skip — this is a $<Name>$ binding placeholder
+                continue;
+            }
+            text.replace(pos, ph.size(), pv.value);
+            pos += pv.value.size();
+        }
+    }
+    return text;
+}
+
 bool TextUsesVariable(const std::string& text, const std::string& name) {
     return text.find("$" + name + "$") != std::string::npos ||
            text.find("$<" + name + ">$") != std::string::npos;
@@ -1502,6 +1524,24 @@ std::optional<McpServerConfig> McpManager::ResolveConfigForProject(const McpServ
     for (auto& entry : resolved.env_entries) {
         entry = ApplyBindingVariables(entry, *binding);
     }
+
+    // Apply project-level variables ($<VarName> syntax, no trailing '$').
+    // These are loaded once per server resolution; server launches are infrequent
+    // so the extra storage read is acceptable.
+    if (storage_) {
+        const auto proj_settings = storage_->LoadProjectSettings(project_id);
+        if (!proj_settings.project_variables.empty()) {
+            resolved.command = ApplyProjectVariables(std::move(resolved.command), proj_settings.project_variables);
+            resolved.working_directory = ApplyProjectVariables(std::move(resolved.working_directory), proj_settings.project_variables);
+            for (auto& argument : resolved.arguments) {
+                argument = ApplyProjectVariables(std::move(argument), proj_settings.project_variables);
+            }
+            for (auto& entry : resolved.env_entries) {
+                entry = ApplyProjectVariables(std::move(entry), proj_settings.project_variables);
+            }
+        }
+    }
+
     return resolved;
 }
 

@@ -161,6 +161,9 @@ struct ProjectRagBinding {
     double default_min_confidence = 0.0;
     double default_max_confidence = 1.0;
     RagRetrievalMode retrieval_mode = RagRetrievalMode::Both;
+    // For model tools: search this RAG with the task instructions and inject results
+    // into the sub-agent's system prompt before the first model call.
+    bool inject_on_start = false;
 };
 
 struct RagDocumentRecord {
@@ -230,6 +233,22 @@ struct RagIngestionResult {
     std::vector<std::string> errors;
     // Non-fatal notices (e.g. a chunk truncated to fit the model context window).
     std::vector<std::string> warnings;
+};
+
+struct RagExportResult {
+    bool success = false;
+    std::vector<std::string> output_files;  // absolute paths of generated .rag series files
+    uint64_t total_uncompressed = 0;        // total source bytes across all files
+    uint64_t total_compressed   = 0;        // total bytes written to .rag series
+    int series_count = 0;
+    std::string error;
+};
+
+struct RagImportResult {
+    bool success = false;
+    std::string rag_id;
+    std::string library_name;
+    std::string error;
 };
 
 struct RagProgressUpdate {
@@ -449,6 +468,21 @@ struct ProjectCompressionSettings {
     std::string config_id;
 };
 
+// A model tool is a named sub-agent that the main model can invoke as an MCP tool.
+// It runs its own model instance with its own instructions, MCP access, and RAG access.
+// Exposed to the calling model as a single tool named "agent_<sanitized_name>".
+struct ModelToolConfig {
+    std::string id;
+    std::string name;            // human display name, e.g. "Legal Reviewer"
+    std::string description;     // shown to calling model as the tool description
+    std::string preferred_provider_id;
+    std::string preferred_model_id;
+    std::string instructions;    // system prompt injected into the sub-agent
+    std::string selected_compression_config_id;  // optional context compression for sub-agent loop
+    std::vector<ProjectMcpServerBinding> mcp_bindings;  // which servers this tool may use
+    std::vector<ProjectRagBinding> rag_bindings;        // which RAG libraries this tool may use
+};
+
 struct ProjectSettings {
     std::string project_name;
     std::string project_instructions;
@@ -456,4 +490,8 @@ struct ProjectSettings {
     std::vector<ContextCompressionConfig> compression_configs;
     std::string selected_compression_config_id;
     std::vector<ProjectRagBinding> rag_bindings;
+    std::string preferred_provider_id;
+    std::string preferred_model_id;
+    std::vector<std::string> model_tool_ids;  // IDs of model tools enabled for this project
+    std::vector<ProjectMcpVariableValue> project_variables;  // Project-level key-value variables
 };

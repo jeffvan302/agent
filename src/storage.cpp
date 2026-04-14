@@ -176,6 +176,8 @@ static RagRetrievalMode RagRetrievalModeFromString(const std::string& s) {
 }
 
 json ProjectRagBindingToJson(const ProjectRagBinding& binding) {
+    // NOTE: inject_on_start is only used in model tool rag_bindings, but we serialize it
+    // everywhere for simplicity.
     return json{
         {"rag_id", binding.rag_id},
         {"enabled", binding.enabled},
@@ -191,6 +193,7 @@ json ProjectRagBindingToJson(const ProjectRagBinding& binding) {
         {"default_min_confidence", binding.default_min_confidence},
         {"default_max_confidence", binding.default_max_confidence},
         {"retrieval_mode", RagRetrievalModeToString(binding.retrieval_mode)},
+        {"inject_on_start", binding.inject_on_start},
     };
 }
 
@@ -214,7 +217,52 @@ ProjectRagBinding ProjectRagBindingFromJson(const json& item) {
         binding.default_max_confidence = 1.0;
     }
     binding.retrieval_mode = RagRetrievalModeFromString(item.value("retrieval_mode", "both"));
+    binding.inject_on_start = item.value("inject_on_start", false);
     return binding;
+}
+
+json ModelToolConfigToJson(const ModelToolConfig& tool) {
+    json mcp_arr = json::array();
+    for (const auto& b : tool.mcp_bindings) {
+        mcp_arr.push_back(ProjectMcpServerBindingToJson(b));
+    }
+    json rag_arr = json::array();
+    for (const auto& b : tool.rag_bindings) {
+        rag_arr.push_back(ProjectRagBindingToJson(b));
+    }
+    return json{
+        {"id", tool.id},
+        {"name", tool.name},
+        {"description", tool.description},
+        {"preferred_provider_id", tool.preferred_provider_id},
+        {"preferred_model_id", tool.preferred_model_id},
+        {"instructions", tool.instructions},
+        {"selected_compression_config_id", tool.selected_compression_config_id},
+        {"mcp_bindings", std::move(mcp_arr)},
+        {"rag_bindings", std::move(rag_arr)},
+    };
+}
+
+ModelToolConfig ModelToolConfigFromJson(const json& item) {
+    ModelToolConfig tool;
+    tool.id = item.value("id", "");
+    tool.name = item.value("name", "");
+    tool.description = item.value("description", "");
+    tool.preferred_provider_id = item.value("preferred_provider_id", "");
+    tool.preferred_model_id = item.value("preferred_model_id", "");
+    tool.instructions = item.value("instructions", "");
+    tool.selected_compression_config_id = item.value("selected_compression_config_id", "");
+    if (item.contains("mcp_bindings") && item["mcp_bindings"].is_array()) {
+        for (const auto& b : item["mcp_bindings"]) {
+            tool.mcp_bindings.push_back(ProjectMcpServerBindingFromJson(b));
+        }
+    }
+    if (item.contains("rag_bindings") && item["rag_bindings"].is_array()) {
+        for (const auto& b : item["rag_bindings"]) {
+            tool.rag_bindings.push_back(ProjectRagBindingFromJson(b));
+        }
+    }
+    return tool;
 }
 
 json McpServerToJson(const McpServerConfig& server) {
@@ -786,6 +834,10 @@ std::filesystem::path AppStorage::CompressionConfigsPath() const {
     return root_path_ / "context_compression_configs.json";
 }
 
+std::filesystem::path AppStorage::ModelToolsPath() const {
+    return root_path_ / "model_tools.json";
+}
+
 std::filesystem::path AppStorage::ProjectCompressionPath(const std::string& project_id) const {
     return ProjectPath(project_id) / "context_compression.json";
 }
@@ -1082,12 +1134,26 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     j["compression_configs"] = compression_arr;
 
     j["selected_compression_config_id"] = settings.selected_compression_config_id;
+    j["preferred_provider_id"] = settings.preferred_provider_id;
+    j["preferred_model_id"] = settings.preferred_model_id;
 
     json rag_arr = json::array();
     for (const auto& binding : settings.rag_bindings) {
         rag_arr.push_back(ProjectRagBindingToJson(binding));
     }
     j["rag_bindings"] = rag_arr;
+
+    json mt_arr = json::array();
+    for (const auto& id : settings.model_tool_ids) {
+        mt_arr.push_back(id);
+    }
+    j["model_tool_ids"] = mt_arr;
+
+    json pv_arr = json::array();
+    for (const auto& pv : settings.project_variables) {
+        pv_arr.push_back({{"name", pv.name}, {"value", pv.value}});
+    }
+    j["project_variables"] = pv_arr;
 
     return j;
 }
@@ -1097,6 +1163,8 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     settings.project_name = j.value("project_name", "");
     settings.project_instructions = j.value("project_instructions", "");
     settings.selected_compression_config_id = j.value("selected_compression_config_id", "");
+    settings.preferred_provider_id = j.value("preferred_provider_id", "");
+    settings.preferred_model_id = j.value("preferred_model_id", "");
 
     if (j.contains("mcp_bindings") && j["mcp_bindings"].is_array()) {
         for (const auto& item : j["mcp_bindings"]) {
@@ -1113,6 +1181,25 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     if (j.contains("rag_bindings") && j["rag_bindings"].is_array()) {
         for (const auto& item : j["rag_bindings"]) {
             settings.rag_bindings.push_back(ProjectRagBindingFromJson(item));
+        }
+    }
+
+    if (j.contains("model_tool_ids") && j["model_tool_ids"].is_array()) {
+        for (const auto& item : j["model_tool_ids"]) {
+            if (item.is_string()) {
+                settings.model_tool_ids.push_back(item.get<std::string>());
+            }
+        }
+    }
+
+    if (j.contains("project_variables") && j["project_variables"].is_array()) {
+        for (const auto& item : j["project_variables"]) {
+            if (item.is_object()) {
+                ProjectMcpVariableValue pv;
+                pv.name  = item.value("name",  "");
+                pv.value = item.value("value", "");
+                if (!pv.name.empty()) settings.project_variables.push_back(std::move(pv));
+            }
         }
     }
 
@@ -1272,4 +1359,37 @@ void AppStorage::SaveChatRagWorkingSet(const std::string& project_id, const std:
     }
     std::filesystem::create_directories(ChatPath(project_id, chat_id));
     SaveJsonFile(ChatRagWorkingSetPath(project_id, chat_id), payload);
+}
+
+std::vector<ModelToolConfig> AppStorage::LoadModelTools() const {
+    const json data = LoadJsonFile(ModelToolsPath(), json{{"tools", json::array()}});
+    std::vector<ModelToolConfig> tools;
+    std::unordered_set<std::string> used_ids;
+    bool repaired = false;
+    if (data.contains("tools") && data["tools"].is_array()) {
+        for (const auto& item : data["tools"]) {
+            ModelToolConfig tool = ModelToolConfigFromJson(item);
+            if (tool.id.empty() || used_ids.find(tool.id) != used_ids.end()) {
+                do {
+                    tool.id = MakeId("mt");
+                } while (used_ids.find(tool.id) != used_ids.end());
+                repaired = true;
+            }
+            used_ids.insert(tool.id);
+            tools.push_back(std::move(tool));
+        }
+    }
+    if (repaired) {
+        SaveModelTools(tools);
+    }
+    return tools;
+}
+
+void AppStorage::SaveModelTools(const std::vector<ModelToolConfig>& tools) const {
+    json payload;
+    payload["tools"] = json::array();
+    for (const auto& tool : tools) {
+        payload["tools"].push_back(ModelToolConfigToJson(tool));
+    }
+    SaveJsonFile(ModelToolsPath(), payload);
 }

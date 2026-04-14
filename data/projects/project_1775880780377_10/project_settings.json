@@ -27,23 +27,34 @@
       "variables": []
     }
   ],
+  "model_tool_ids": [],
+  "preferred_model_id": "codex-MiniMax-M2.7",
+  "preferred_provider_id": "provider_1775726633372_1",
   "project_instructions": "",
   "project_name": "New Project",
+  "project_variables": [
+    {
+      "name": "ProjectFolder",
+      "value": "K:\\tester\\"
+    }
+  ],
   "rag_bindings": [
     {
       "can_delete": false,
-      "can_export": true,
+      "can_export": false,
       "can_read": true,
-      "can_write": false,
-      "default_ingest_target": false,
+      "can_write": true,
+      "default_ingest_target": true,
       "default_max_confidence": 1.0,
       "default_min_confidence": 0.0,
       "enabled": true,
-      "export_path_template": "$ProjectFolder$",
-      "expose_as_tool": true,
+      "export_path_template": "",
+      "expose_as_tool": false,
+      "inject_on_start": false,
       "max_chunks": 8,
       "rag_id": "rag_1775918532220_8",
-      "retrieval_priority": 10
+      "retrieval_mode": "both",
+      "retrieval_priority": 20
     }
   ],
   "selected_compression_config_id": "cc_f98er24s"

@@ -10,6 +10,7 @@
 
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
+#include <compressapi.h>
 #include <shellapi.h>
 #include <windows.h>
 #include <winhttp.h>
@@ -5777,4 +5778,481 @@ void RagService::SyncHnswIndex(const std::string& rag_id, void* raw_db,
     } catch (...) {}
 
     SaveHnswHandle(rag_id);
+}
+
+// ============================================================================
+// .rag archive format  (version 2)
+//
+// Series files are named  <base>-001.rag, <base>-002.rag, ...
+// All integers are little-endian.
+//
+// Per-series file header:
+//   char[4]   magic = {'R','A','G',0x02}
+//   uint32_t  series_index   (1-based)
+//   uint32_t  series_total   (written as 0, back-patched after all series done)
+//   uint32_t  rag_id_len
+//   char[N]   rag_id
+//   uint32_t  rag_name_len
+//   char[M]   rag_name
+//   uint32_t  total_files    (total source files across ALL series)
+//   uint64_t  total_uncomp   (total source bytes across ALL series)
+//
+// Per-entry:
+//   uint8_t   entry_flag     (0x01 = entry, 0x00 = end-of-series)
+//   uint32_t  path_len
+//   char[N]   rel_path       (relative path, forward slashes)
+//   uint64_t  uncomp_size
+//   uint8_t   comp_flag      (0x01 = LZMS compressed, 0x00 = stored verbatim)
+//   uint64_t  stored_size
+//   uint8_t[] data           (stored_size bytes)
+// ============================================================================
+
+namespace {
+
+static const char kRagMagic[4] = {'R', 'A', 'G', '\x02'};
+static constexpr uint64_t kMaxSeriesBytes = 500ULL * 1024 * 1024;  // 500 MB
+// Byte offset of series_total field inside the per-series header.
+static constexpr std::streamoff kSeriesTotalOffset = 8;
+
+void RagWriteU8(std::ostream& o, uint8_t v)  { o.write(reinterpret_cast<const char*>(&v), 1); }
+void RagWriteU32(std::ostream& o, uint32_t v) { o.write(reinterpret_cast<const char*>(&v), 4); }
+void RagWriteU64(std::ostream& o, uint64_t v) { o.write(reinterpret_cast<const char*>(&v), 8); }
+void RagWriteStr(std::ostream& o, const std::string& s) {
+    RagWriteU32(o, static_cast<uint32_t>(s.size()));
+    o.write(s.data(), static_cast<std::streamsize>(s.size()));
+}
+
+bool RagReadU8(std::istream& i, uint8_t& v)  { return static_cast<bool>(i.read(reinterpret_cast<char*>(&v), 1)); }
+bool RagReadU32(std::istream& i, uint32_t& v) { return static_cast<bool>(i.read(reinterpret_cast<char*>(&v), 4)); }
+bool RagReadU64(std::istream& i, uint64_t& v) { return static_cast<bool>(i.read(reinterpret_cast<char*>(&v), 8)); }
+bool RagReadStr(std::istream& i, std::string& s) {
+    uint32_t len = 0;
+    if (!RagReadU32(i, len)) return false;
+    if (len > 65535) return false;
+    s.resize(len);
+    return static_cast<bool>(i.read(s.data(), static_cast<std::streamsize>(len)));
+}
+
+// Compress data with Windows LZMS.  Returns {compressed_bytes, true} on success,
+// or {original_data, false} if compression fails or expands the data.
+std::pair<std::vector<uint8_t>, bool> RagCompress(const uint8_t* data, size_t size) {
+    if (size == 0) return {{}, true};
+    COMPRESSOR_HANDLE h = nullptr;
+    if (!CreateCompressor(COMPRESS_ALGORITHM_LZMS | COMPRESS_RAW, nullptr, &h)) {
+        return {std::vector<uint8_t>(data, data + size), false};
+    }
+    // First call with null output to determine required buffer size.
+    SIZE_T needed = 0;
+    Compress(h, data, size, nullptr, 0, &needed);
+    if (needed == 0) {
+        CloseCompressor(h);
+        return {std::vector<uint8_t>(data, data + size), false};
+    }
+    std::vector<uint8_t> out(needed);
+    SIZE_T written = 0;
+    const BOOL ok = Compress(h, data, size, out.data(), needed, &written);
+    CloseCompressor(h);
+    if (!ok || written == 0 || written >= size) {
+        return {std::vector<uint8_t>(data, data + size), false};
+    }
+    out.resize(written);
+    return {std::move(out), true};
+}
+
+// Decompress LZMS data.  orig_size must match the original uncompressed size.
+std::vector<uint8_t> RagDecompress(const uint8_t* data, size_t size, uint64_t orig_size) {
+    DECOMPRESSOR_HANDLE h = nullptr;
+    if (!CreateDecompressor(COMPRESS_ALGORITHM_LZMS | COMPRESS_RAW, nullptr, &h)) return {};
+    std::vector<uint8_t> out(static_cast<size_t>(orig_size));
+    SIZE_T written = 0;
+    const BOOL ok = Decompress(h, data, size, out.data(), out.size(), &written);
+    CloseDecompressor(h);
+    if (!ok || written != static_cast<SIZE_T>(orig_size)) return {};
+    return out;
+}
+
+// Enumerate all regular files under root, returning paths relative to root
+// using forward slashes. rag.json is first, rag.sqlite second, then the rest.
+std::vector<std::filesystem::path> EnumerateLibraryFiles(const std::filesystem::path& root) {
+    std::vector<std::filesystem::path> all;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root, ec)) {
+        if (entry.is_regular_file(ec)) {
+            all.push_back(entry.path());
+        }
+    }
+    // Sort with rag.json first, rag.sqlite second, rest alphabetically.
+    std::sort(all.begin(), all.end(), [&](const auto& a, const auto& b) {
+        const std::string an = a.filename().string();
+        const std::string bn = b.filename().string();
+        const int pa = (an == "rag.json") ? 0 : (an == "rag.sqlite") ? 1 : 2;
+        const int pb = (bn == "rag.json") ? 0 : (bn == "rag.sqlite") ? 1 : 2;
+        if (pa != pb) return pa < pb;
+        return a.wstring() < b.wstring();
+    });
+    return all;
+}
+
+// Convert a filesystem path to a forward-slash relative path string.
+std::string RelativePath(const std::filesystem::path& root, const std::filesystem::path& file) {
+    const std::wstring rel = std::filesystem::relative(file, root).wstring();
+    std::string out;
+    out.reserve(rel.size());
+    for (const wchar_t c : rel) {
+        out += (c == L'\\') ? '/' : static_cast<char>(c);
+    }
+    return out;
+}
+
+// Derive the Nth series file path from the first file's path.
+std::filesystem::path SeriesFilePath(const std::filesystem::path& first, uint32_t index) {
+    const std::string stem = first.stem().string();  // e.g. "mylib-001"
+    const auto dash = stem.rfind('-');
+    const std::string base = (dash != std::string::npos) ? stem.substr(0, dash) : stem;
+    std::ostringstream name;
+    name << base << '-' << std::setw(3) << std::setfill('0') << index << ".rag";
+    return first.parent_path() / name.str();
+}
+
+void WriteSeriesHeader(std::fstream& f, uint32_t series_index, uint32_t series_total,
+                       const std::string& rag_id, const std::string& rag_name,
+                       uint32_t total_files, uint64_t total_uncomp) {
+    f.write(kRagMagic, 4);
+    RagWriteU32(f, series_index);
+    RagWriteU32(f, series_total);
+    RagWriteStr(f, rag_id);
+    RagWriteStr(f, rag_name);
+    RagWriteU32(f, total_files);
+    RagWriteU64(f, total_uncomp);
+}
+
+}  // namespace
+
+// -----------------------------------------------------------------------------
+// ReattachLibrary
+// -----------------------------------------------------------------------------
+bool RagService::ReattachLibrary(const std::filesystem::path& library_path,
+                                  std::string* error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::filesystem::path config_path = library_path / "rag.json";
+    std::error_code ec;
+    if (!std::filesystem::exists(config_path, ec)) {
+        if (error) *error = "No rag.json found in the selected folder.";
+        return false;
+    }
+    const json library_json = LoadJsonFile(config_path, json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        if (error) *error = "Could not read rag.json — file may be corrupt.";
+        return false;
+    }
+    const std::string rag_id = library_json.value("id", "");
+    if (rag_id.empty()) {
+        if (error) *error = "rag.json does not contain a valid library ID.";
+        return false;
+    }
+    // Check if already registered.
+    for (const auto& [id, path] : LoadRegistryNoLock()) {
+        if (id == rag_id) {
+            if (error) *error = "This RAG library is already registered in the system.";
+            return false;
+        }
+    }
+    UpsertRegistryNoLock(rag_id, std::filesystem::absolute(library_path));
+    return true;
+}
+
+// -----------------------------------------------------------------------------
+// ExportLibrary
+// -----------------------------------------------------------------------------
+RagExportResult RagService::ExportLibrary(
+        const std::string& rag_id,
+        const std::filesystem::path& output_dir,
+        const std::string& base_filename,
+        std::function<void(int, int, const std::string&)> progress) const {
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagExportResult result;
+
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        result.error = "RAG library not found.";
+        return result;
+    }
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const std::filesystem::path library_path = LibraryPath(rag_id);
+
+    // Enumerate all files to export.
+    const std::vector<std::filesystem::path> files = EnumerateLibraryFiles(library_path);
+    if (files.empty()) {
+        result.error = "Library folder contains no files.";
+        return result;
+    }
+
+    // Compute total uncompressed size.
+    uint64_t total_uncomp = 0;
+    std::error_code ec;
+    for (const auto& f : files) {
+        total_uncomp += static_cast<uint64_t>(std::filesystem::file_size(f, ec));
+    }
+
+    const int total_files = static_cast<int>(files.size());
+    std::filesystem::create_directories(output_dir, ec);
+
+    uint32_t series_index = 1;
+    uint64_t current_series_bytes = 0;
+    std::vector<std::filesystem::path> series_paths;
+    std::unique_ptr<std::fstream> current_file;
+
+    auto open_series = [&]() {
+        std::ostringstream name;
+        name << base_filename << '-' << std::setw(3) << std::setfill('0') << series_index << ".rag";
+        const std::filesystem::path series_path = output_dir / name.str();
+        series_paths.push_back(series_path);
+        current_file = std::make_unique<std::fstream>(
+            series_path, std::ios::binary | std::ios::out | std::ios::trunc | std::ios::in);
+        WriteSeriesHeader(*current_file, series_index, 0 /*placeholder*/,
+                          rag_id, library.name,
+                          static_cast<uint32_t>(total_files), total_uncomp);
+        current_series_bytes = static_cast<uint64_t>(current_file->tellp());
+    };
+
+    auto close_series = [&]() {
+        if (!current_file) return;
+        RagWriteU8(*current_file, 0x00);  // end-of-series marker
+        result.total_compressed += static_cast<uint64_t>(current_file->tellp());
+        current_file->flush();
+        current_file.reset();
+    };
+
+    open_series();
+
+    for (int i = 0; i < total_files; ++i) {
+        const auto& src = files[i];
+        const std::string rel = RelativePath(library_path, src);
+        if (progress) progress(i, total_files, rel);
+
+        // Read source file.
+        const uint64_t uncomp_size = static_cast<uint64_t>(std::filesystem::file_size(src, ec));
+        std::ifstream fin(src, std::ios::binary);
+        if (!fin.is_open()) {
+            result.error = "Could not read: " + src.string();
+            return result;
+        }
+        std::vector<uint8_t> raw(static_cast<size_t>(uncomp_size));
+        fin.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(uncomp_size));
+        fin.close();
+
+        // Compress.
+        auto [data, is_compressed] = RagCompress(raw.data(), raw.size());
+        const uint64_t stored_size = static_cast<uint64_t>(data.size());
+
+        // Estimate entry overhead: 1 + 4 + rel.size() + 8 + 1 + 8 = 22 + rel.size()
+        const uint64_t entry_bytes = 22 + rel.size() + stored_size;
+
+        // If this would overflow the current series and it isn't empty, start a new one.
+        if (current_series_bytes > 0 && current_series_bytes + entry_bytes > kMaxSeriesBytes) {
+            close_series();
+            ++series_index;
+            current_series_bytes = 0;
+            open_series();
+        }
+
+        // Write entry.
+        RagWriteU8(*current_file, 0x01);
+        RagWriteStr(*current_file, rel);
+        RagWriteU64(*current_file, uncomp_size);
+        RagWriteU8(*current_file, is_compressed ? 0x01 : 0x00);
+        RagWriteU64(*current_file, stored_size);
+        current_file->write(reinterpret_cast<const char*>(data.data()),
+                             static_cast<std::streamsize>(stored_size));
+        current_series_bytes += entry_bytes;
+        result.total_uncompressed += uncomp_size;
+    }
+
+    close_series();
+
+    // Back-patch series_total in every series file.
+    const uint32_t series_total = static_cast<uint32_t>(series_paths.size());
+    for (const auto& sp : series_paths) {
+        std::fstream pf(sp, std::ios::binary | std::ios::in | std::ios::out);
+        if (pf.is_open()) {
+            pf.seekp(kSeriesTotalOffset);
+            RagWriteU32(pf, series_total);
+        }
+    }
+
+    result.series_count = static_cast<int>(series_paths.size());
+    for (const auto& sp : series_paths) {
+        result.output_files.push_back(sp.string());
+    }
+    if (progress) progress(total_files, total_files, "");
+    result.success = true;
+    return result;
+}
+
+// -----------------------------------------------------------------------------
+// ImportLibrary
+// -----------------------------------------------------------------------------
+RagImportResult RagService::ImportLibrary(
+        const std::filesystem::path& first_rag_file,
+        const std::filesystem::path& target_dir,
+        std::function<void(int, int, const std::string&)> progress) {
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagImportResult result;
+
+    // --- Read header from first series file ---
+    std::ifstream f0(first_rag_file, std::ios::binary);
+    if (!f0.is_open()) {
+        result.error = "Could not open: " + first_rag_file.string();
+        return result;
+    }
+    char magic[4]{};
+    f0.read(magic, 4);
+    if (std::memcmp(magic, kRagMagic, 4) != 0) {
+        result.error = "Not a valid .rag archive (bad magic).";
+        return result;
+    }
+    uint32_t series_index_check = 0, series_total = 0;
+    RagReadU32(f0, series_index_check);
+    RagReadU32(f0, series_total);
+    if (series_index_check != 1 || series_total == 0) {
+        result.error = "Invalid .rag header.";
+        return result;
+    }
+    std::string rag_id, rag_name;
+    uint32_t total_files_stored = 0;
+    uint64_t total_uncomp_stored = 0;
+    if (!RagReadStr(f0, rag_id) || !RagReadStr(f0, rag_name)) {
+        result.error = "Truncated .rag header.";
+        return result;
+    }
+    RagReadU32(f0, total_files_stored);
+    RagReadU64(f0, total_uncomp_stored);
+    f0.close();
+
+    if (rag_id.empty()) {
+        result.error = "Archive contains an invalid RAG ID.";
+        return result;
+    }
+
+    // Check not already registered.
+    for (const auto& [id, path] : LoadRegistryNoLock()) {
+        if (id == rag_id) {
+            result.error = "A RAG library with this ID is already registered.";
+            return result;
+        }
+    }
+
+    // Prepare destination directory: target_dir/<rag_id>/
+    std::error_code ec;
+    const std::filesystem::path dest = target_dir / rag_id;
+    std::filesystem::create_directories(dest, ec);
+    if (ec) {
+        result.error = "Could not create directory: " + dest.string();
+        return result;
+    }
+
+    // Collect all series file paths.
+    std::vector<std::filesystem::path> series_paths;
+    series_paths.push_back(first_rag_file);
+    for (uint32_t si = 2; si <= series_total; ++si) {
+        series_paths.push_back(SeriesFilePath(first_rag_file, si));
+    }
+
+    int files_done = 0;
+    const int total_files = static_cast<int>(total_files_stored);
+
+    // Process each series file.
+    for (uint32_t si = 0; si < static_cast<uint32_t>(series_paths.size()); ++si) {
+        std::ifstream fin(series_paths[si], std::ios::binary);
+        if (!fin.is_open()) {
+            result.error = "Could not open series file: " + series_paths[si].string();
+            return result;
+        }
+
+        // Skip header (re-read to advance stream position).
+        char hdr_magic[4]{};
+        fin.read(hdr_magic, 4);
+        uint32_t u32_skip = 0, u32_skip2 = 0;
+        RagReadU32(fin, u32_skip);  // series_index
+        RagReadU32(fin, u32_skip2); // series_total
+        std::string skip_str;
+        RagReadStr(fin, skip_str);  // rag_id
+        RagReadStr(fin, skip_str);  // rag_name
+        uint64_t u64_skip = 0;
+        RagReadU32(fin, u32_skip);  // total_files
+        RagReadU64(fin, u64_skip);  // total_uncomp
+
+        // Read entries.
+        while (fin.good()) {
+            uint8_t entry_flag = 0;
+            if (!RagReadU8(fin, entry_flag)) break;
+            if (entry_flag == 0x00) break;  // end-of-series
+            if (entry_flag != 0x01) {
+                result.error = "Corrupt archive: unexpected entry flag.";
+                return result;
+            }
+
+            std::string rel_path;
+            uint64_t uncomp_size = 0;
+            uint8_t comp_flag = 0;
+            uint64_t stored_size = 0;
+            if (!RagReadStr(fin, rel_path) || !RagReadU64(fin, uncomp_size) ||
+                !RagReadU8(fin, comp_flag) || !RagReadU64(fin, stored_size)) {
+                result.error = "Truncated archive entry.";
+                return result;
+            }
+
+            if (progress) progress(files_done, total_files, rel_path);
+
+            // Read stored data.
+            std::vector<uint8_t> stored(static_cast<size_t>(stored_size));
+            fin.read(reinterpret_cast<char*>(stored.data()),
+                     static_cast<std::streamsize>(stored_size));
+            if (!fin) {
+                result.error = "Unexpected end of archive while reading: " + rel_path;
+                return result;
+            }
+
+            // Decompress if needed.
+            std::vector<uint8_t> file_data;
+            if (comp_flag == 0x01) {
+                file_data = RagDecompress(stored.data(), stored.size(), uncomp_size);
+                if (file_data.empty() && uncomp_size > 0) {
+                    result.error = "Decompression failed for: " + rel_path;
+                    return result;
+                }
+            } else {
+                file_data = std::move(stored);
+            }
+
+            // Write file to destination.
+            // Convert forward-slash relative path to the OS path.
+            std::wstring wrel = Utf8ToWide(rel_path);
+            for (auto& c : wrel) {
+                if (c == L'/') c = std::filesystem::path::preferred_separator;
+            }
+            const std::filesystem::path dest_file = dest / wrel;
+            std::filesystem::create_directories(dest_file.parent_path(), ec);
+            std::ofstream fout(dest_file, std::ios::binary | std::ios::trunc);
+            if (!fout.is_open()) {
+                result.error = "Could not create: " + dest_file.string();
+                return result;
+            }
+            fout.write(reinterpret_cast<const char*>(file_data.data()),
+                       static_cast<std::streamsize>(file_data.size()));
+            fout.close();
+            ++files_done;
+        }
+    }
+
+    // Register the newly imported library.
+    UpsertRegistryNoLock(rag_id, dest);
+
+    if (progress) progress(files_done, total_files, "");
+    result.success = true;
+    result.rag_id = rag_id;
+    result.library_name = rag_name;
+    return result;
 }

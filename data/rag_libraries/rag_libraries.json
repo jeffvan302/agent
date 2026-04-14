@@ -1,8 +1,12 @@
 {
   "libraries": [
     {
+      "id": "rag_1776053664702_9",
+      "storage_path": "D:\\Temp\\RAG\\Test_Documents_rag_1776053664702_9"
+    },
+    {
       "id": "rag_1775918532220_8",
-      "storage_path": "D:\\Temp\\RAG\\Test_RAG_rag_1775918532220_8"
+      "storage_path": "E:\\Temp\\Rag\\rag_1775918532220_8"
     }
   ]
 }

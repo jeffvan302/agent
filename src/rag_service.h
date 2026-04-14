@@ -27,6 +27,21 @@ public:
     RagLibraryConfig CreateLibrary(const RagLibraryConfig& config);
     bool UpdateLibrary(const RagLibraryConfig& config, std::string* error);
     bool DeleteLibrary(const std::string& rag_id, std::string* error);
+    // Registers an existing on-disk RAG library folder that is not yet in the registry.
+    bool ReattachLibrary(const std::filesystem::path& library_path, std::string* error);
+    // Exports a library to a compressed .rag series.  base_filename should not include
+    // the extension or series number (e.g. "my_library" -> "my_library-001.rag").
+    RagExportResult ExportLibrary(
+        const std::string& rag_id,
+        const std::filesystem::path& output_dir,
+        const std::string& base_filename,
+        std::function<void(int current, int total, const std::string& name)> progress = {}) const;
+    // Imports a .rag series.  first_rag_file is the -001.rag file.  target_dir is
+    // where to unpack the library; a sub-folder named after the library ID is created.
+    RagImportResult ImportLibrary(
+        const std::filesystem::path& first_rag_file,
+        const std::filesystem::path& target_dir,
+        std::function<void(int current, int total, const std::string& name)> progress = {});
     RagLibraryStats GetStats(const std::string& rag_id) const;
     std::vector<RagDocumentSummary> ListDocuments(const std::string& rag_id) const;
     std::optional<RagDocumentRecord> GetDocument(const std::string& rag_id, const std::string& document_id) const;

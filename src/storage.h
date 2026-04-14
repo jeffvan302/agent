@@ -52,6 +52,9 @@ public:
     ProjectSettings LoadProjectSettings(const std::string& project_id) const;
     void SaveProjectSettings(const std::string& project_id, const ProjectSettings& settings) const;
 
+    std::vector<ModelToolConfig> LoadModelTools() const;
+    void SaveModelTools(const std::vector<ModelToolConfig>& tools) const;
+
     std::vector<RagWorkingSetEntry> LoadChatRagWorkingSet(const std::string& project_id, const std::string& chat_id) const;
     void SaveChatRagWorkingSet(const std::string& project_id, const std::string& chat_id, const std::vector<RagWorkingSetEntry>& entries) const;
 
@@ -82,6 +85,7 @@ private:
     std::filesystem::path ChatCompressionStatePath(const std::string& project_id, const std::string& chat_id) const;
     std::filesystem::path ChatCompressionHistoryPath(const std::string& project_id, const std::string& chat_id) const;
     std::filesystem::path ChatRagWorkingSetPath(const std::string& project_id, const std::string& chat_id) const;
+    std::filesystem::path ModelToolsPath() const;
 
     std::filesystem::path root_path_;
 };

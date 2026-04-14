@@ -24,6 +24,8 @@ constexpr wchar_t kRagLibraryEditorClassName[] = L"AgentRagLibraryEditorWindow";
 constexpr wchar_t kRagImageIngestSettingsClassName[] = L"AgentRagImageIngestSettingsWindow";
 constexpr UINT kIngestionFinishedMessage = WM_APP + 70;
 constexpr UINT kRebuildProgressMessage = WM_APP + 71;
+constexpr UINT kExportFinishedMessage = WM_APP + 72;
+constexpr UINT kImportFinishedMessage = WM_APP + 73;
 
 enum ControlId : int {
     kLibrariesList = 6101,
@@ -48,6 +50,9 @@ enum ControlId : int {
     kInstallTools = 6120,
     kImageIngestSettings = 6121,
     kViewJobs = 6122,
+    kReattachRag = 6123,
+    kExportRag = 6124,
+    kImportRag = 6125,
     kCloseButton = IDCANCEL,
 };
 
@@ -138,6 +143,15 @@ struct IngestionPayload {
 
 struct ProgressPayload {
     RagProgressUpdate progress;
+};
+
+struct ExportPayload {
+    RagExportResult result;
+    std::string rag_name;
+};
+
+struct ImportPayload {
+    RagImportResult result;
 };
 
 int Scale(HWND hwnd, int value) {
@@ -593,6 +607,11 @@ private:
     void ShowExtractionTools();
     void ShowImageIngestSettings();
     void ShowJobs();
+    void ReattachLibrary();
+    void ExportLibrary();
+    void ImportLibrary();
+    void OnExportFinished(ExportPayload* payload);
+    void OnImportFinished(ImportPayload* payload);
     void OnRebuildProgress(ProgressPayload* payload);
     void OnIngestionFinished(IngestionPayload* payload);
     void Search();
@@ -620,6 +639,9 @@ private:
     HWND install_tools_button_ = nullptr;
     HWND image_ingest_settings_button_ = nullptr;
     HWND view_jobs_button_ = nullptr;
+    HWND reattach_button_ = nullptr;
+    HWND export_rag_button_ = nullptr;
+    HWND import_rag_button_ = nullptr;
     HWND ingest_button_ = nullptr;
     HWND ingest_folder_button_ = nullptr;
     HWND rebuild_button_ = nullptr;
@@ -1638,6 +1660,12 @@ LRESULT CALLBACK RagServiceManagerWindow::WindowProc(HWND hwnd, UINT message, WP
     case kRebuildProgressMessage:
         self->OnRebuildProgress(reinterpret_cast<ProgressPayload*>(l_param));
         return 0;
+    case kExportFinishedMessage:
+        self->OnExportFinished(reinterpret_cast<ExportPayload*>(l_param));
+        return 0;
+    case kImportFinishedMessage:
+        self->OnImportFinished(reinterpret_cast<ImportPayload*>(l_param));
+        return 0;
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
@@ -1667,6 +1695,9 @@ void RagServiceManagerWindow::OnCreate() {
     install_tools_button_ = CreateWindowExW(0, L"BUTTON", L"Install Tools", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstallTools), nullptr, nullptr);
     image_ingest_settings_button_ = CreateWindowExW(0, L"BUTTON", L"Image Ingest Settings", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageIngestSettings), nullptr, nullptr);
     view_jobs_button_ = CreateWindowExW(0, L"BUTTON", L"View Jobs", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kViewJobs), nullptr, nullptr);
+    reattach_button_ = CreateWindowExW(0, L"BUTTON", L"Reattach", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kReattachRag), nullptr, nullptr);
+    export_rag_button_ = CreateWindowExW(0, L"BUTTON", L"Export RAG", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kExportRag), nullptr, nullptr);
+    import_rag_button_ = CreateWindowExW(0, L"BUTTON", L"Import RAG", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImportRag), nullptr, nullptr);
     ingest_button_ = CreateWindowExW(0, L"BUTTON", L"Ingest Files", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kIngestFiles), nullptr, nullptr);
     ingest_folder_button_ = CreateWindowExW(0, L"BUTTON", L"Ingest Folder", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kIngestFolder), nullptr, nullptr);
     rebuild_button_ = CreateWindowExW(0, L"BUTTON", L"Rebuild DB", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRebuildLibrary), nullptr, nullptr);
@@ -1680,7 +1711,7 @@ void RagServiceManagerWindow::OnCreate() {
     status_label_ = CreateWindowExW(0, L"STATIC", L"Manage reusable RAG libraries and attach them to the active project.", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatusLabel), nullptr, nullptr);
     close_button_ = CreateWindowExW(0, L"BUTTON", L"Close", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCloseButton), nullptr, nullptr);
 
-    for (HWND control : {libraries_list_, details_edit_, add_button_, edit_button_, remove_button_, attach_read_button_, attach_write_button_, detach_button_, install_tools_button_, image_ingest_settings_button_, view_jobs_button_, ingest_button_, ingest_folder_button_, rebuild_button_, documents_button_, reindex_document_button_, delete_document_button_, search_edit_, search_button_, results_edit_, status_label_, close_button_}) {
+    for (HWND control : {libraries_list_, details_edit_, add_button_, edit_button_, remove_button_, attach_read_button_, attach_write_button_, detach_button_, install_tools_button_, image_ingest_settings_button_, view_jobs_button_, reattach_button_, export_rag_button_, import_rag_button_, ingest_button_, ingest_folder_button_, rebuild_button_, documents_button_, reindex_document_button_, delete_document_button_, search_edit_, search_button_, results_edit_, status_label_, close_button_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
     SendMessageW(progress_bar_, PBM_SETRANGE32, 0, 100);
@@ -1712,12 +1743,16 @@ void RagServiceManagerWindow::LayoutControls(int width, int height) const {
     MoveWindow(detach_button_, margin + (project_row_width + gutter) * 2, y, project_row_width, button_height, TRUE);
     y += button_height + gutter;
 
-    const int tools_y = footer_y - (button_height + gutter) * 2;
+    const int tools_y = footer_y - (button_height + gutter) * 3;
     MoveWindow(libraries_list_, margin, y, left_width, tools_y - y - gutter, TRUE);
     const int install_width = (left_width - gutter) / 2;
     MoveWindow(install_tools_button_, margin, tools_y, install_width, button_height, TRUE);
     MoveWindow(image_ingest_settings_button_, margin + install_width + gutter, tools_y, left_width - install_width - gutter, button_height, TRUE);
     MoveWindow(view_jobs_button_, margin, tools_y + button_height + gutter, left_width, button_height, TRUE);
+    const int archive_col = (left_width - gutter * 2) / 3;
+    MoveWindow(reattach_button_, margin, tools_y + (button_height + gutter) * 2, archive_col, button_height, TRUE);
+    MoveWindow(export_rag_button_, margin + archive_col + gutter, tools_y + (button_height + gutter) * 2, archive_col, button_height, TRUE);
+    MoveWindow(import_rag_button_, margin + (archive_col + gutter) * 2, tools_y + (button_height + gutter) * 2, left_width - (archive_col + gutter) * 2, button_height, TRUE);
 
     const int right_x = margin + left_width + gutter;
     const int right_width = width - right_x - margin;
@@ -2319,6 +2354,190 @@ void RagServiceManagerWindow::ShowJobs() {
     UpdateStatus(L"Showing " + std::to_wstring(jobs.size()) + L" ingestion job(s).");
 }
 
+void RagServiceManagerWindow::ReattachLibrary() {
+    // Ask user to pick the folder that contains an existing on-disk RAG library.
+    const auto folder = PickFolder(hwnd_, L"Select the RAG library folder to reattach (the folder that contains rag.json).");
+    if (!folder) {
+        return;
+    }
+    std::string error;
+    if (rag_service_->ReattachLibrary(*folder, &error)) {
+        RefreshLibraries();
+        UpdateStatus(L"RAG library reattached successfully.");
+        SetWindowTextW(results_edit_, L"Library reattached successfully.\r\n\r\nIt is now listed in the RAG manager. You may need to rebuild it if embeddings are missing.");
+    } else {
+        const std::wstring msg = L"Failed to reattach library:\r\n" + Utf8ToWide(error);
+        MessageBoxW(hwnd_, msg.c_str(), L"Reattach Failed", MB_OK | MB_ICONERROR);
+        UpdateStatus(L"Reattach failed.");
+    }
+}
+
+void RagServiceManagerWindow::ExportLibrary() {
+    const RagLibraryConfig* selected = SelectedLibrary();
+    if (!selected) {
+        MessageBoxW(hwnd_, L"Please select a RAG library to export.", L"Export RAG", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    // Ask for output directory
+    const auto output_dir = PickFolder(hwnd_, L"Select the folder where the exported .rag archive series will be saved.");
+    if (!output_dir) {
+        return;
+    }
+
+    // Build a safe base filename from the library name
+    std::wstring safe_name = Utf8ToWide(selected->name);
+    for (auto& ch : safe_name) {
+        if (ch == L'/' || ch == L'\\' || ch == L':' || ch == L'*' || ch == L'?' || ch == L'"' || ch == L'<' || ch == L'>' || ch == L'|') {
+            ch = L'_';
+        }
+    }
+    if (safe_name.empty()) safe_name = Utf8ToWide(selected->id);
+    const std::string base_filename = WideToUtf8(safe_name);
+
+    const std::wstring prompt = L"Export library \"" + Utf8ToWide(selected->name) + L"\" to:\r\n" + output_dir->wstring() +
+        L"\r\n\r\nBase filename: " + safe_name + L"-001.rag\r\n\r\nProceed?";
+    if (MessageBoxW(hwnd_, prompt.c_str(), L"Export RAG Library", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+        return;
+    }
+
+    const std::string rag_id = selected->id;
+    const std::string rag_name = selected->name;
+    EnableWindow(export_rag_button_, FALSE);
+    EnableWindow(import_rag_button_, FALSE);
+    SendMessageW(progress_bar_, PBM_SETRANGE32, 0, 100);
+    SendMessageW(progress_bar_, PBM_SETPOS, 0, 0);
+    UpdateStatus(L"Exporting RAG library...");
+    SetWindowTextW(results_edit_, L"Export in progress...");
+
+    std::thread([hwnd = hwnd_, service = rag_service_, rag_id, rag_name, output_dir = *output_dir, base_filename]() {
+        auto* payload = new ExportPayload;
+        payload->rag_name = rag_name;
+        payload->result = service->ExportLibrary(rag_id, output_dir, base_filename,
+            [hwnd](int current, int total, const std::string&) {
+                // Post a progress update via progress bar range message (reuse kRebuildProgressMessage)
+                auto* p = new ProgressPayload;
+                p->progress.processed_items = current;
+                p->progress.total_items = total > 0 ? total : 1;
+                p->progress.stage = "Exporting";
+                if (!PostMessageW(hwnd, kRebuildProgressMessage, 0, reinterpret_cast<LPARAM>(p))) {
+                    delete p;
+                }
+            });
+        if (!PostMessageW(hwnd, kExportFinishedMessage, 0, reinterpret_cast<LPARAM>(payload))) {
+            delete payload;
+        }
+    }).detach();
+}
+
+void RagServiceManagerWindow::ImportLibrary() {
+    // Open a .rag file picker for the -001.rag file
+    std::vector<wchar_t> buffer(MAX_PATH * 2, L'\0');
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = hwnd_;
+    dialog.lpstrTitle = L"Select the first series file (*-001.rag) to import";
+    dialog.lpstrFile = buffer.data();
+    dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+    dialog.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    dialog.lpstrFilter = L"RAG Archive (*.rag)\0*.rag\0All Files\0*.*\0";
+    dialog.lpstrDefExt = L"rag";
+    if (!GetOpenFileNameW(&dialog)) {
+        return;
+    }
+    const std::filesystem::path first_rag_file(buffer.data());
+
+    // Ask for target directory where the library will be unpacked
+    const auto target_dir = PickFolder(hwnd_, L"Select the folder where the RAG library will be extracted (a subfolder will be created).");
+    if (!target_dir) {
+        return;
+    }
+
+    const std::wstring prompt = L"Import RAG archive:\r\n" + first_rag_file.wstring() +
+        L"\r\n\r\nExtract to:\r\n" + target_dir->wstring() + L"\r\n\r\nProceed?";
+    if (MessageBoxW(hwnd_, prompt.c_str(), L"Import RAG Library", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+        return;
+    }
+
+    EnableWindow(export_rag_button_, FALSE);
+    EnableWindow(import_rag_button_, FALSE);
+    SendMessageW(progress_bar_, PBM_SETRANGE32, 0, 100);
+    SendMessageW(progress_bar_, PBM_SETPOS, 0, 0);
+    UpdateStatus(L"Importing RAG library...");
+    SetWindowTextW(results_edit_, L"Import in progress...");
+
+    std::thread([hwnd = hwnd_, service = rag_service_, first_rag_file, target_dir = *target_dir]() {
+        auto* payload = new ImportPayload;
+        payload->result = service->ImportLibrary(first_rag_file, target_dir,
+            [hwnd](int current, int total, const std::string&) {
+                auto* p = new ProgressPayload;
+                p->progress.processed_items = current;
+                p->progress.total_items = total > 0 ? total : 1;
+                p->progress.stage = "Importing";
+                if (!PostMessageW(hwnd, kRebuildProgressMessage, 0, reinterpret_cast<LPARAM>(p))) {
+                    delete p;
+                }
+            });
+        if (!PostMessageW(hwnd, kImportFinishedMessage, 0, reinterpret_cast<LPARAM>(payload))) {
+            delete payload;
+        }
+    }).detach();
+}
+
+void RagServiceManagerWindow::OnExportFinished(ExportPayload* payload) {
+    std::unique_ptr<ExportPayload> guard(payload);
+    EnableWindow(export_rag_button_, TRUE);
+    EnableWindow(import_rag_button_, TRUE);
+    SendMessageW(progress_bar_, PBM_SETRANGE32, 0, 100);
+    SendMessageW(progress_bar_, PBM_SETPOS, payload->result.success ? 100 : 0, 0);
+
+    if (payload->result.success) {
+        std::wstring text = L"Export complete.\r\n\r\n";
+        text += L"Library: " + Utf8ToWide(payload->rag_name) + L"\r\n";
+        text += L"Series files: " + std::to_wstring(payload->result.series_count) + L"\r\n";
+        const auto mb_u = payload->result.total_uncompressed / (1024 * 1024);
+        const auto mb_c = payload->result.total_compressed / (1024 * 1024);
+        text += L"Uncompressed: " + std::to_wstring(mb_u) + L" MB\r\n";
+        text += L"Compressed:   " + std::to_wstring(mb_c) + L" MB\r\n";
+        if (payload->result.total_uncompressed > 0) {
+            const int ratio = static_cast<int>(100.0 * payload->result.total_compressed / payload->result.total_uncompressed);
+            text += L"Compression ratio: " + std::to_wstring(ratio) + L"%\r\n";
+        }
+        text += L"\r\nOutput files:\r\n";
+        for (const auto& f : payload->result.output_files) {
+            text += L"  " + Utf8ToWide(f) + L"\r\n";
+        }
+        SetWindowTextW(results_edit_, text.c_str());
+        UpdateStatus(L"Export complete — " + std::to_wstring(payload->result.series_count) + L" series file(s).");
+    } else {
+        const std::wstring msg = L"Export failed:\r\n" + Utf8ToWide(payload->result.error);
+        SetWindowTextW(results_edit_, msg.c_str());
+        UpdateStatus(L"Export failed.");
+    }
+}
+
+void RagServiceManagerWindow::OnImportFinished(ImportPayload* payload) {
+    std::unique_ptr<ImportPayload> guard(payload);
+    EnableWindow(export_rag_button_, TRUE);
+    EnableWindow(import_rag_button_, TRUE);
+    SendMessageW(progress_bar_, PBM_SETRANGE32, 0, 100);
+    SendMessageW(progress_bar_, PBM_SETPOS, payload->result.success ? 100 : 0, 0);
+
+    if (payload->result.success) {
+        RefreshLibraries();
+        std::wstring text = L"Import complete.\r\n\r\n";
+        text += L"Library: " + Utf8ToWide(payload->result.library_name) + L"\r\n";
+        text += L"RAG ID: " + Utf8ToWide(payload->result.rag_id) + L"\r\n";
+        text += L"\r\nThe library is now registered and available in the list.\r\nAttach it to your project using the Attach buttons above.";
+        SetWindowTextW(results_edit_, text.c_str());
+        UpdateStatus(L"Import complete — library registered.");
+    } else {
+        const std::wstring msg = L"Import failed:\r\n" + Utf8ToWide(payload->result.error);
+        SetWindowTextW(results_edit_, msg.c_str());
+        UpdateStatus(L"Import failed.");
+    }
+}
+
 void RagServiceManagerWindow::OnRebuildProgress(ProgressPayload* payload) {
     std::unique_ptr<ProgressPayload> guard(payload);
     const int total = std::max(1, payload->progress.total_items);
@@ -2443,6 +2662,15 @@ void RagServiceManagerWindow::OnCommand(int control_id, int notification_code) {
         break;
     case kViewJobs:
         ShowJobs();
+        break;
+    case kReattachRag:
+        ReattachLibrary();
+        break;
+    case kExportRag:
+        ExportLibrary();
+        break;
+    case kImportRag:
+        ImportLibrary();
         break;
     case kIngestFiles:
         IngestFiles();

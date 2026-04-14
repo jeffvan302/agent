@@ -1,0 +1,13 @@
+{
+  "bindings": [
+    {
+      "server_id": "mcp_server_1775829469413_4",
+      "variables": [
+        {
+          "name": "ProjectFolder",
+          "value": "K:\\tester"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "active_theme": "default",
+  "base_url": "",
+  "bind_address": "0.0.0.0",
+  "enabled": false,
+  "max_upload_mb": 50,
+  "port": 8080,
+  "session_timeout_minutes": 60,
+  "thread_pool_size": 4,
+  "tls": {
+    "cert_file": "",
+    "key_file": "",
+    "mode": "self_signed",
+    "pfx_file": "",
+    "pfx_passphrase": ""
+  },
+  "web_root": ""
+}
