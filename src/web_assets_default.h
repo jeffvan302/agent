@@ -14,4 +14,6 @@ namespace DefaultWebAssets {
     extern const char kAppJs[];
     extern const char kThemeDefaultCss[];
     extern const char kThemeDefaultJson[];
+    extern const char kThemeDarkCss[];
+    extern const char kThemeDarkJson[];
 }

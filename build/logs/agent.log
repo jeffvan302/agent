@@ -1,48 +1,17 @@
 
-=== Logger initialized at 2026-04-15T06:28:36Z ===
-2026-04-15T06:28:36Z [INFO]  Agent Desktop starting
-2026-04-15T06:28:36Z [INFO]  Command line: 
-
-=== Logger initialized at 2026-04-15T06:28:36Z ===
-2026-04-15T06:28:36Z [INFO]  Agent Desktop starting
-2026-04-15T06:28:36Z [INFO]  Command line: 
-2026-04-15T06:28:45Z [INFO]  Agent Desktop shutting down
-2026-04-15T06:28:48Z [INFO]  [WebConfig] OpenWebConfig: starting
-2026-04-15T06:28:48Z [INFO]  [WebConfig] OpenWebConfig: calling EnsureWebServer
-2026-04-15T06:28:48Z [INFO]  [WebConfig] OpenWebConfig: EnsureWebServer returned
-2026-04-15T06:28:48Z [INFO]  [WebConfig] OpenWebConfig: calling ShowWebConfigDialog
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GetCertExpiryDays: starting
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GenerateSelfSignedCert: starting
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GenerateSelfSignedCert: key generated
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GenerateSelfSignedCert: X509 created
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GenerateSelfSignedCert: certificate signed
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GenerateSelfSignedCert: writing to C:\Users\TheunisvanNiekerk\Code\agent\certs\server.key
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GenerateSelfSignedCert: _wfopen_s returned err=0
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GenerateSelfSignedCert: file opened, about to write private key
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GenerateSelfSignedCert: writing cert to C:\Users\TheunisvanNiekerk\Code\agent\certs\server.crt
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GenerateSelfSignedCert: cert _wfopen_s returned err=0
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GenerateSelfSignedCert: success
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GetCertExpiryDays: cert_path=C:\Users\TheunisvanNiekerk\Code\agent\certs\server.crt
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GetCertExpiryDays: X509 parsed successfully
-2026-04-15T06:28:48Z [INFO]  [OpenSSL] GetCertExpiryDays: days=1095
-2026-04-15T06:28:48Z [INFO]  [WebConfig] About to call ShowWindow
-2026-04-15T06:28:48Z [INFO]  [WebConfig] About to call UpdateWindow
-2026-04-15T06:28:48Z [INFO]  [WebConfig] Dialog displayed on screen
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GetCertExpiryDays: starting
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GenerateSelfSignedCert: starting
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GenerateSelfSignedCert: key generated
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GenerateSelfSignedCert: X509 created
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GenerateSelfSignedCert: certificate signed
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GenerateSelfSignedCert: writing to C:\Users\TheunisvanNiekerk\Code\agent\certs\server.key
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GenerateSelfSignedCert: _wfopen_s returned err=0
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GenerateSelfSignedCert: file opened, about to write private key
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GenerateSelfSignedCert: writing cert to C:\Users\TheunisvanNiekerk\Code\agent\certs\server.crt
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GenerateSelfSignedCert: cert _wfopen_s returned err=0
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GenerateSelfSignedCert: success
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GetCertExpiryDays: cert_path=C:\Users\TheunisvanNiekerk\Code\agent\certs\server.crt
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GetCertExpiryDays: X509 parsed successfully
-2026-04-15T06:28:50Z [INFO]  [OpenSSL] GetCertExpiryDays: days=1095
-2026-04-15T06:29:03Z [INFO]  [OpenSSL] Start: Creating SSLServer with cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\server.crt
-2026-04-15T06:29:03Z [INFO]  [OpenSSL] Start: SSLServer created
-2026-04-15T06:29:45Z [INFO]  [WebConfig] OpenWebConfig: ShowWebConfigDialog returned
-2026-04-15T06:29:50Z [INFO]  Agent Desktop shutting down
+=== Logger initialized at 2026-04-15T12:53:06Z ===
+2026-04-15T12:53:06Z [INFO]  Agent Desktop starting
+2026-04-15T12:53:06Z [INFO]  Command line: 
+2026-04-15T12:53:20Z [INFO]  [WebConfig] OpenWebConfig: starting
+2026-04-15T12:53:20Z [INFO]  [WebConfig] OpenWebConfig: calling EnsureWebServer
+2026-04-15T12:53:20Z [INFO]  [WebConfig] OpenWebConfig: EnsureWebServer returned
+2026-04-15T12:53:20Z [INFO]  [WebConfig] OpenWebConfig: calling ShowWebConfigDialog
+2026-04-15T12:53:20Z [INFO]  [OpenSSL] GetCertExpiryDays: starting
+2026-04-15T12:53:20Z [INFO]  [OpenSSL] GetCertExpiryDays: cert_path=C:\Users\TheunisvanNiekerk\Code\agent\certs\server.crt
+2026-04-15T12:53:20Z [INFO]  [OpenSSL] GetCertExpiryDays: X509 parsed successfully
+2026-04-15T12:53:20Z [INFO]  [OpenSSL] GetCertExpiryDays: days=1094
+2026-04-15T12:53:20Z [INFO]  [WebConfig] About to call ShowWindow
+2026-04-15T12:53:20Z [INFO]  [WebConfig] About to call UpdateWindow
+2026-04-15T12:53:20Z [INFO]  [WebConfig] Dialog displayed on screen
+2026-04-15T12:53:21Z [INFO]  [WebConfig] OpenWebConfig: ShowWebConfigDialog returned
+2026-04-15T12:53:38Z [INFO]  Agent Desktop shutting down

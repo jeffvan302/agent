@@ -123,6 +123,7 @@ private:
         std::string user_id;
         std::string username;
         bool        force_password_reset = false;
+        bool        needs_password_reset = false;
         std::string remote_addr;
         std::chrono::system_clock::time_point created_at
             = std::chrono::system_clock::now();
@@ -222,12 +223,22 @@ private:
         std::chrono::steady_clock::time_point lockout_until{};
     };
 
+    // Message submission rate limiting: sliding 60-second window.
+    static constexpr int kMaxMessagesPerMinute = 60;
+    struct MessageRateEntry {
+        std::vector<std::chrono::steady_clock::time_point> timestamps;
+    };
+
     bool IsRateLimited(const std::string& ip) const;
     void RecordLoginFailure(const std::string& ip);
     void RecordLoginSuccess(const std::string& ip);
+    bool IsMessageRateLimited(const std::string& ip);
+    void RecordMessageSent(const std::string& ip);
 
     mutable std::mutex rate_mutex_;
     std::unordered_map<std::string, RateLimitEntry> rate_entries_;
+    mutable std::mutex msg_rate_mutex_;
+    std::unordered_map<std::string, MessageRateEntry> message_rate_entries_;
 
     // ── Audit log ─────────────────────────────────────────────────────────
     void AppendAuditLog(const std::string& ip,

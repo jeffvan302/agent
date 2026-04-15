@@ -302,6 +302,39 @@ void WebServer::RecordLoginSuccess(const std::string& ip) {
     rate_entries_.erase(ip);
 }
 
+bool WebServer::IsMessageRateLimited(const std::string& ip) {
+    std::lock_guard<std::mutex> lock(msg_rate_mutex_);
+    auto now = std::chrono::steady_clock::now();
+    const auto window = std::chrono::minutes(1);
+
+    auto it = message_rate_entries_.find(ip);
+    if (it == message_rate_entries_.end()) return false;
+
+    // Remove timestamps outside the 60-second window
+    auto& ts = it->second.timestamps;
+    ts.erase(
+        std::remove_if(ts.begin(), ts.end(),
+            [&](const std::chrono::steady_clock::time_point& t) { return (now - t) > window; }),
+        ts.end());
+
+    return static_cast<int>(ts.size()) >= kMaxMessagesPerMinute;
+}
+
+void WebServer::RecordMessageSent(const std::string& ip) {
+    std::lock_guard<std::mutex> lock(msg_rate_mutex_);
+    auto now = std::chrono::steady_clock::now();
+    const auto window = std::chrono::minutes(1);
+
+    auto& entry = message_rate_entries_[ip];
+    // Remove old timestamps
+    entry.timestamps.erase(
+        std::remove_if(entry.timestamps.begin(), entry.timestamps.end(),
+            [&](const auto& t) { return (now - t) > window; }),
+        entry.timestamps.end());
+
+    entry.timestamps.push_back(now);
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Audit log
 // ──────────────────────────────────────────────────────────────────────────────
@@ -390,6 +423,20 @@ WebServer::RequireAuth(const void* req_ptr, void* res_ptr) {
         }
         return std::nullopt;
     }
+
+    // If user needs password reset, block all routes except change-password
+    if (session->needs_password_reset) {
+        const std::string path = req->path;
+        const bool is_change_password =
+            (path == "/change-password" || path == "/api/change-password");
+        if (!is_change_password) {
+            auto* res = static_cast<httplib::Response*>(res_ptr);
+            res->status = 302;
+            res->set_header("Location", "/change-password");
+            return std::nullopt;
+        }
+    }
+
     TouchSession(token);
     return session;
 }
@@ -565,6 +612,21 @@ void WebServer::HandleLogin(const void* req_ptr, void* res_ptr) {
     const std::string token = CreateSession(*user_opt, ip);
     AppendAuditLog(ip, "login_success", "user=" + username);
 
+    // If user needs password reset, update session and redirect to change-password page
+    if (user_opt->force_password_reset) {
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            auto it = sessions_.find(token);
+            if (it != sessions_.end()) it->second.needs_password_reset = true;
+        }
+        const std::string cookie = "session=" + token
+            + "; Path=/; HttpOnly; SameSite=Strict";
+        res->set_header("Set-Cookie", cookie);
+        res->status = 302;
+        res->set_header("Location", "/change-password");
+        return;
+    }
+
     // Set HttpOnly session cookie (add Secure when TLS is enabled)
     const std::string cookie = "session=" + token
         + "; Path=/; HttpOnly; SameSite=Strict";
@@ -610,8 +672,22 @@ void WebServer::HandleChangePassword(const void* req_ptr, void* res_ptr) {
 
     const std::string current  = body_j.value("current_password", "");
     const std::string new_pass = body_j.value("new_password", "");
-    if (new_pass.size() < 8) {
-        SendError(res_ptr, 400, "Password must be at least 8 characters"); return;
+    // Password policy: ≥10 chars, at least one uppercase, one lowercase, one digit
+    if (new_pass.size() < 10) {
+        SendError(res_ptr, 400, "Password must be at least 10 characters"); return;
+    }
+    {
+        bool has_upper = false, has_lower = false, has_digit = false;
+        for (char c : new_pass) {
+            if (std::isupper(static_cast<unsigned char>(c))) has_upper = true;
+            else if (std::islower(static_cast<unsigned char>(c))) has_lower = true;
+            else if (std::isdigit(static_cast<unsigned char>(c))) has_digit = true;
+        }
+        if (!has_upper || !has_lower || !has_digit) {
+            SendError(res_ptr, 400,
+                "Password must include at least one uppercase letter, one lowercase letter, and one digit");
+            return;
+        }
     }
 
     auto user_opt = user_store_->FindUserById(session->user_id);
@@ -626,13 +702,16 @@ void WebServer::HandleChangePassword(const void* req_ptr, void* res_ptr) {
 
     user_store_->SetPassword(session->user_id, new_pass);
 
-    // Update the session to clear the force_password_reset flag
+    // Update the session to clear both force_password_reset and needs_password_reset flags
     {
         std::lock_guard<std::mutex> lock(sessions_mutex_);
         const auto token = GetCookieValue(
             static_cast<const httplib::Request*>(req_ptr)->get_header_value("Cookie"), "session");
         auto it = sessions_.find(token);
-        if (it != sessions_.end()) it->second.force_password_reset = false;
+        if (it != sessions_.end()) {
+            it->second.force_password_reset = false;
+            it->second.needs_password_reset = false;
+        }
     }
 
     SendJson(res_ptr, 200, R"({"ok":true})");
@@ -977,6 +1056,17 @@ WebServer::CallModel(const std::string& project_id,
                 pos += username.size();
             }
         }
+        // Inject $<UserProjectFolder> if per-user folder is enabled for this project
+        const std::string user_folder = user_store_->GetUserProjectFolder(project_id, username);
+        if (!user_folder.empty()) {
+            fs::create_directories(fs::path(user_folder));
+            const std::string ph = "$<UserProjectFolder>";
+            size_t pos = 0;
+            while ((pos = instr.find(ph, pos)) != std::string::npos) {
+                instr.replace(pos, ph.size(), user_folder);
+                pos += user_folder.size();
+            }
+        }
         if (!instr.empty()) system_prompt = "Project Instructions:\n" + instr;
     }
 
@@ -1040,6 +1130,14 @@ void WebServer::HandleSendMessage(const void* req_ptr, void* res_ptr) {
     if (content.empty()) {
         SendError(res_ptr, 400, "Message content required"); return;
     }
+
+    // Rate-limit check
+    const std::string ip = GetRemoteAddr(req_ptr);
+    if (IsMessageRateLimited(ip)) {
+        static_cast<httplib::Response*>(res_ptr)->set_header("Retry-After", "60");
+        SendError(res_ptr, 429, "Too many messages — please wait before sending again"); return;
+    }
+    RecordMessageSent(ip);
 
     // Find owning project and verify user access
     const auto accessible  = user_store_->GetProjectIdsForUser(session->user_id);
@@ -1135,6 +1233,17 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 pos += username.size();
             }
         }
+        // Inject $<UserProjectFolder> if per-user folder is enabled for this project
+        const std::string user_folder = user_store_->GetUserProjectFolder(project_id, username);
+        if (!user_folder.empty()) {
+            fs::create_directories(fs::path(user_folder));
+            const std::string ph = "$<UserProjectFolder>";
+            size_t pos = 0;
+            while ((pos = instr.find(ph, pos)) != std::string::npos) {
+                instr.replace(pos, ph.size(), user_folder);
+                pos += user_folder.size();
+            }
+        }
         if (!instr.empty()) system_prompt = "Project Instructions:\n" + instr;
     }
 
@@ -1216,6 +1325,14 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
     }
     const std::string content = body_j.value("content", "");
     if (content.empty()) { SendError(res_ptr, 400, "Message content required"); return; }
+
+    // Rate-limit check
+    const std::string ip = GetRemoteAddr(req_ptr);
+    if (IsMessageRateLimited(ip)) {
+        static_cast<httplib::Response*>(res_ptr)->set_header("Retry-After", "60");
+        SendError(res_ptr, 429, "Too many messages — please wait before sending again"); return;
+    }
+    RecordMessageSent(ip);
 
     // Optional list of already-uploaded filenames to inject into the message context
     std::vector<std::string> attachments;
@@ -1422,10 +1539,26 @@ void WebServer::RegisterRoutes() {
     auto& srv = impl_->srv();
 
     // Security headers on every response
-    srv.set_default_headers({
+    // Note: HSTS only applies when TLS is enabled; CSP uses 'unsafe-inline' for
+    // styles because highlight.js themes inject inline style attributes.
+    httplib::Headers headers = {
         {"X-Frame-Options",        "DENY"},
         {"X-Content-Type-Options", "nosniff"},
-    });
+        {"Referrer-Policy",        "strict-origin-when-cross-origin"},
+        {"Content-Security-Policy",
+         "default-src 'self'; "
+         "script-src 'self'; "
+         "style-src 'self' 'unsafe-inline'; "
+         "img-src 'self' data:; "
+         "connect-src 'self'; "
+         "font-src 'self'; "
+         "frame-ancestors 'none'"},
+    };
+    if (!config_.tls_mode.empty()) {
+        headers.emplace("Strict-Transport-Security",
+                      "max-age=31536000; includeSubDomains");
+    }
+    srv.set_default_headers(std::move(headers));
 
     // ── Auth ──────────────────────────────────────────────────────────────
     srv.Post("/login", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1484,6 +1617,14 @@ void WebServer::RegisterRoutes() {
         const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
         HandleStreamMessage(&req, &res);
     });
+    // DELETE /api/chats/:id/stream — abort in-progress streaming (sent by stop button)
+    srv.Delete(R"(/api/chats/([^/]+)/stream)", [](const httplib::Request& req, httplib::Response& res) {
+        // The actual abort is handled via AbortController on the client side.
+        // This endpoint exists to allow the server to track that a cancellation occurred
+        // and for future use (e.g., logging, metrics).
+        res.status = 200;
+        res.set_content("{}", "application/json");
+    });
     // File upload
     srv.Post(R"(/api/chats/([^/]+)/upload)", [this](const httplib::Request& req, httplib::Response& res) {
         const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
@@ -1539,6 +1680,8 @@ void WebServer::EnsureDefaultWebAssets() const {
         { "js/app.js",                     DefaultWebAssets::kAppJs              },
         { "themes/default/style.css",      DefaultWebAssets::kThemeDefaultCss    },
         { "themes/default/theme.json",     DefaultWebAssets::kThemeDefaultJson   },
+        { "themes/dark/style.css",         DefaultWebAssets::kThemeDarkCss       },
+        { "themes/dark/theme.json",        DefaultWebAssets::kThemeDarkJson      },
     };
 
     const fs::path root = ResolveWebRoot();

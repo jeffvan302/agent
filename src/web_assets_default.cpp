@@ -315,15 +315,30 @@ html, body {
   flex-direction: column;
   overflow-y: auto;
   flex-shrink: 0;
+  transition: width 0.2s ease;
 }
+#sidebar.collapsed { width: 0; overflow: hidden; }
 #sidebar-header {
-  padding: 12px 16px 8px;
+  padding: 8px 12px 8px 16px;
   font-size: var(--font-size-small);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
+#sidebar-collapse-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  padding: 2px 4px;
+  line-height: 1;
+}
+#sidebar-collapse-btn:hover { color: var(--color-text-sidebar); }
 .project-item {
   border-bottom: 1px solid rgba(255,255,255,0.04);
 }
@@ -714,10 +729,13 @@ let state = {
   sending:           false,
   username:          '',
   pendingFiles:      [],     // File objects queued for upload before send
+  sidebarCollapsed:  false,
+  abortCtrl:         null,   // AbortController for current streaming request
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
+const sidebarEl    = $('sidebar');
 const projectList  = $('project-list');
 const newChatBtn   = $('new-chat-btn');
 const chatTitle    = $('chat-title');
@@ -748,11 +766,26 @@ async function api(method, path, body) {
 
 // ── Markdown rendering ────────────────────────────────────────────────────
 function renderMarkdown(text) {
-  const raw = marked.parse(text || '');
-  return DOMPurify.sanitize(raw, {
+  if (!text) return '';
+  // Extract <thinking>...</thinking> blocks before markdown parsing
+  const thinkingBlocks = [];
+  let processed = text.replace(/<thinking>([\s\S]*?)<\/thinking>/gi, (match, content) => {
+    const idx = thinkingBlocks.length;
+    thinkingBlocks.push(content.trim());
+    return `\x00THINKING_BLOCK_${idx}\x00`;
+  });
+  const raw = marked.parse(processed);
+  let result = DOMPurify.sanitize(raw, {
     ADD_TAGS: ['details', 'summary'],
     FORBID_ATTR: ['onerror', 'onload'],
   });
+  // Replace placeholders with collapsible thinking blocks
+  thinkingBlocks.forEach((content, idx) => {
+    const placeholder = `\x00THINKING_BLOCK_${idx}\x00`;
+    const block = `<details class="thinking-block"><summary>Thinking…</summary><pre class="thinking-content">${escapeHtml(content)}</pre></details>`;
+    result = result.replace(placeholder, block);
+  });
+  return result;
 }
 
 // ── Message rendering ─────────────────────────────────────────────────────
@@ -1165,6 +1198,7 @@ async function sendMessage() {
   const { updateText, finalize, getAccumulated } = createStreamingRow();
 
   const abortCtrl = new AbortController();
+  state.abortCtrl = abortCtrl;
 
   try {
     const resp = await fetch(`/api/chats/${state.selectedChatId}/messages/stream`, {
@@ -1243,6 +1277,8 @@ function setInputEnabled(enabled) {
   messageInput.disabled = !enabled;
   sendBtn.disabled      = !enabled || !state.selectedChatId;
   if (attachBtn) attachBtn.disabled = !enabled;
+  const stopBtn = $('stop-btn');
+  if (stopBtn) stopBtn.style.display = enabled ? 'none' : 'inline-block';
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────
@@ -1253,6 +1289,55 @@ function escapeHtml(str) {
 
 // ── Initialisation ────────────────────────────────────────────────────────
 async function init() {
+  // Set up sidebar collapse button
+  const sidebarHeader = document.querySelector('#sidebar-header');
+  if (sidebarHeader) {
+    const collapseBtn = document.createElement('button');
+    collapseBtn.id = 'sidebar-collapse-btn';
+    collapseBtn.title = 'Collapse sidebar';
+    collapseBtn.textContent = '◀';
+    sidebarHeader.appendChild(collapseBtn);
+    collapseBtn.addEventListener('click', () => {
+      state.sidebarCollapsed = !state.sidebarCollapsed;
+      sidebarEl.classList.toggle('collapsed', state.sidebarCollapsed);
+      collapseBtn.textContent = state.sidebarCollapsed ? '▶' : '◀';
+      collapseBtn.title = state.sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+      localStorage.setItem('sidebar_collapsed', state.sidebarCollapsed ? '1' : '0');
+    });
+    // Restore collapsed state
+    if (localStorage.getItem('sidebar_collapsed') === '1') {
+      state.sidebarCollapsed = true;
+      sidebarEl.classList.add('collapsed');
+      collapseBtn.textContent = '▶';
+    }
+  }
+
+  // Create stop button in compose bar
+  const composeEl = $('compose');
+  if (composeEl) {
+    const stopBtn = document.createElement('button');
+    stopBtn.id = 'stop-btn';
+    stopBtn.textContent = 'Stop';
+    stopBtn.title = 'Stop generating';
+    stopBtn.style.cssText = 'display:none; padding:10px 20px; background:#dc2626; color:#fff; border:none; border-radius:var(--radius-button); cursor:pointer; font-weight:600; height:44px;';
+    stopBtn.addEventListener('click', async () => {
+      if (state.abortCtrl) {
+        state.abortCtrl.abort();
+        // Notify server to cancel in-progress request
+        if (state.selectedChatId) {
+          try {
+            await fetch(`/api/chats/${state.selectedChatId}/stream`, {
+              method: 'DELETE',
+              credentials: 'same-origin',
+            });
+          } catch (_) {}
+        }
+      }
+    });
+    // Insert stop button after send button
+    composeEl.appendChild(stopBtn);
+  }
+
   const [meResp, projResp] = await Promise.all([
     api('GET', '/api/me'),
     api('GET', '/api/projects'),
@@ -1347,6 +1432,74 @@ const char kThemeDefaultJson[] = R"ASSET({
   "author": "Nardana Inc.",
   "version": "1.0",
   "description": "Clean, professional light theme"
+}
+)ASSET";
+
+const char kThemeDarkCss[] = R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
+   Dark Theme — overrides CSS custom properties for a dark UI
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Backgrounds */
+  --color-bg-page:            #1e1e1e;
+  --color-bg-sidebar:         #252526;
+  --color-bg-sidebar-hover:   #2d2d30;
+  --color-bg-sidebar-active:  #094771;
+  --color-bg-header:          #2d2d2d;
+  --color-bg-main:            #1e1e1e;
+  --color-bg-message-user:    #1a3a5c;
+  --color-bg-message-model:   #2d2d2d;
+  --color-bg-thinking:        #3d3520;
+  --color-bg-tool-call:        #2d2d30;
+  --color-bg-code:            #1e1e1e;
+  --color-bg-input:           #3c3c3c;
+  --color-bg-button-primary:  #0e639c;
+  --color-bg-button-hover:    #1177bb;
+  --color-bg-button-danger:   #c42b1c;
+
+  /* Text */
+  --color-text-primary:       #d4d4d4;
+  --color-text-secondary:     #9d9d9d;
+  --color-text-muted:         #656565;
+  --color-text-thinking:      #e0c070;
+  --color-text-code:          #d4d4d4;
+  --color-text-sidebar:       #cccccc;
+  --color-text-sidebar-active:#ffffff;
+  --color-text-button:        #ffffff;
+  --color-text-error:         #f48771;
+  --color-text-link:          #4fc3f7;
+
+  /* Accents */
+  --color-accent-primary:     #4fc3f7;
+  --color-accent-hover:       #7dd5f5;
+  --color-accent-thinking:    #c9a227;
+  --color-accent-danger:      #f48771;
+
+  /* Borders */
+  --color-border-main:        #3c3c3c;
+  --color-border-subtle:      #2d2d2d;
+  --color-border-input:       #3c3c3c;
+  --color-border-focus:       #4fc3f7;
+
+  /* Typography */
+  --font-body:      "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono:      "Cascadia Code", "Consolas", "Courier New", monospace;
+  --font-size-base: 14px;
+  --font-size-small:12px;
+  --font-size-large:16px;
+
+  /* Shape */
+  --radius-message: 8px;
+  --radius-button:  4px;
+  --radius-input:   4px;
+  --radius-card:    6px;
+}
+)ASSET";
+
+const char kThemeDarkJson[] = R"ASSET({
+  "name": "Dark",
+  "author": "Nardana Inc.",
+  "version": "1.0",
+  "description": "Dark theme"
 }
 )ASSET";
 
