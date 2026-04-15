@@ -8,10 +8,19 @@
 // https://github.com/yhirose/cpp-httplib/releases
 // and place at third_party/httplib/httplib.h
 //
-// Phase 1: add  #define CPPHTTPLIB_OPENSSL_SUPPORT  before this include
-// and link openssl libs to enable HTTPS.
+// HTTPS: define CPPHTTPLIB_OPENSSL_SUPPORT (done automatically by build.bat when
+// third_party/openssl/ is present) and link OpenSSL libs.
 #define CPPHTTPLIB_THREAD_POOL_SIZE 1   // overridden at runtime via server.new_task_queue
 #include <httplib.h>
+
+// OpenSSL direct API — only included when TLS support is compiled in.
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/pkcs12.h>
+#include <openssl/rsa.h>
+#include <openssl/x509.h>
+#endif
 
 #include "web_server.h"
 #include "web_assets_default.h"
@@ -22,6 +31,7 @@
 
 #include <windows.h>
 #include <bcrypt.h>
+#include <winhttp.h>
 
 #include <algorithm>
 #include <cctype>
@@ -31,18 +41,47 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "winhttp.lib")
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Pimpl struct — owns the httplib::Server so this TU is the only one that
-// includes httplib.h, keeping overall compile times manageable.
+// OpenSSL initialization — must happen before any OpenSSL calls.
+// The Shining Light OpenSSL 3.x builds read an openssl.cnf that tries to load
+// the FIPS provider, which causes a fatal error if FIPS isn't built.
+// Setting OPENSSL_CONF to "nul" prevents the config file from being loaded.
+// ──────────────────────────────────────────────────────────────────────────────
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+namespace {
+    struct OpenSSLInit {
+        OpenSSLInit() {
+            _putenv_s("OPENSSL_CONF", "nul");
+            Logger::Info("OpenSSL", "OPENSSL_CONF set to nul");
+            OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG, nullptr);
+            Logger::Info("OpenSSL", "OPENSSL_init_crypto called");
+        }
+    };
+    static OpenSSLInit openssl_init;
+}
+#endif
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Pimpl struct — owns the httplib::Server (or SSLServer) so this TU is the
+// only one that includes httplib.h, keeping overall compile times manageable.
+//
+// The main server is heap-allocated so we can create either httplib::Server
+// (HTTP) or httplib::SSLServer (HTTPS) based on the runtime config.
 // ──────────────────────────────────────────────────────────────────────────────
 struct WebServerImpl {
-    httplib::Server server;
+    std::unique_ptr<httplib::Server> server;      // plain HTTP or SSL
+    std::unique_ptr<httplib::Server> redirect_srv; // HTTP→HTTPS redirect (optional)
+
+    httplib::Server& srv() { return *server; }
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -65,6 +104,17 @@ WebServerConfig WebServerConfig::LoadFromFile(const fs::path& path) {
     cfg.session_timeout_minutes = j.value("session_timeout_minutes", 60);
     cfg.thread_pool_size        = j.value("thread_pool_size", 4);
     cfg.max_upload_bytes        = j.value("max_upload_mb", 50ULL) * 1024ULL * 1024ULL;
+    cfg.http_redirect_port      = j.value("http_redirect_port", 0);
+
+    // TLS subtree
+    if (j.contains("tls") && j["tls"].is_object()) {
+        const auto& t = j["tls"];
+        cfg.tls_mode            = t.value("mode", "");
+        cfg.tls_cert_file       = t.value("cert_file", "");
+        cfg.tls_key_file        = t.value("key_file", "");
+        cfg.tls_pfx_file        = t.value("pfx_file", "");
+        cfg.tls_pfx_passphrase  = t.value("pfx_passphrase", "");
+    }
     return cfg;
 }
 
@@ -79,11 +129,14 @@ void WebServerConfig::SaveToFile(const fs::path& path) const {
         {"session_timeout_minutes",  session_timeout_minutes},
         {"thread_pool_size",         thread_pool_size},
         {"max_upload_mb",            max_upload_bytes / (1024ULL * 1024ULL)},
-        {"tls",                      {{"mode", "self_signed"},
-                                      {"cert_file", ""},
-                                      {"key_file", ""},
-                                      {"pfx_file", ""},
-                                      {"pfx_passphrase", ""}}}
+        {"http_redirect_port",       http_redirect_port},
+        {"tls", {
+            {"mode",           tls_mode},
+            {"cert_file",      tls_cert_file},
+            {"key_file",       tls_key_file},
+            {"pfx_file",       tls_pfx_file},
+            {"pfx_passphrase", tls_pfx_passphrase},
+        }},
     };
     const auto tmp = fs::path(path).replace_extension(".tmp");
     { std::ofstream f(tmp); f << j.dump(2); }
@@ -444,8 +497,28 @@ void WebServer::HandleStaticOrPage(const void* req_ptr, void* res_ptr) {
     }
 
     if (!ServeFile(resolved, res_ptr)) {
-        res->status = 404;
-        res->set_content("Not found", "text/plain");
+        // Vendor library CDN fallback: if a vendor file is missing locally
+        // (download still in progress or failed), redirect to the canonical CDN
+        // URL so the page still works.
+        static const std::unordered_map<std::string, std::string> kVendorCdn = {
+            { "js/vendor/highlight.min.js",
+              "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" },
+            { "css/vendor/vs2015.min.css",
+              "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css" },
+            { "js/vendor/marked.min.js",
+              "https://cdnjs.cloudflare.com/ajax/libs/marked/11.2.0/marked.min.js" },
+            { "js/vendor/purify.min.js",
+              "https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js" },
+        };
+        const auto it = kVendorCdn.find(url_path);
+        if (it != kVendorCdn.end()) {
+            res->status = 302;
+            res->set_header("Location", it->second);
+            res->set_header("Cache-Control", "no-store");
+        } else {
+            res->status = 404;
+            res->set_content("Not found", "text/plain");
+        }
     }
 }
 
@@ -1282,12 +1355,11 @@ void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
         SendError(res_ptr, 403, "Access denied"); return;
     }
 
-    // Find "file" field in multipart
-    auto it = req->files.find("file");
-    if (it == req->files.end()) {
+    // Find "file" field in multipart (httplib stores files in req->form.files)
+    if (!req->form.has_file("file")) {
         SendError(res_ptr, 400, "No 'file' field in upload"); return;
     }
-    const auto& file_info = it->second;
+    const auto file_info = req->form.get_file("file");  // returns FormData by value
 
     // Enforce upload size limit
     if (file_info.content.size() > config_.max_upload_bytes) {
@@ -1347,7 +1419,7 @@ void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
 // Route registration
 // ──────────────────────────────────────────────────────────────────────────────
 void WebServer::RegisterRoutes() {
-    auto& srv = impl_->server;
+    auto& srv = impl_->srv();
 
     // Security headers on every response
     srv.set_default_headers({
@@ -1480,6 +1552,366 @@ void WebServer::EnsureDefaultWebAssets() const {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// EnsureVendorLibs
+//
+// Downloads the four front-end vendor libraries from cdnjs if the cached
+// copies are absent from the web root.  Runs in a detached background thread
+// so Start() returns immediately.  On any failure (no internet, etc.) the
+// missing files stay absent and the CDN-redirect fallback in
+// HandleStaticOrPage kicks in at serve time.
+// ──────────────────────────────────────────────────────────────────────────────
+namespace {
+
+// Synchronous WinHTTP GET to a file.  Returns true on success.
+static bool WinHttpDownloadToFile(const wchar_t* url, const fs::path& dest) {
+    URL_COMPONENTSW comp = {};
+    comp.dwStructSize       = sizeof(comp);
+    wchar_t host[512]       = {};
+    wchar_t url_path[2048]  = {};
+    comp.lpszHostName       = host;       comp.dwHostNameLength  = 511;
+    comp.lpszUrlPath        = url_path;   comp.dwUrlPathLength   = 2047;
+
+    if (!WinHttpCrackUrl(url, 0, 0, &comp)) return false;
+
+    struct HI {
+        HINTERNET h = nullptr;
+        ~HI() { if (h) WinHttpCloseHandle(h); }
+    } sess, conn, req;
+
+    sess.h = WinHttpOpen(L"AgentVendorFetch/1.0",
+                         WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!sess.h) return false;
+
+    // Timeouts: 15 s connect, 60 s receive
+    DWORD t15 = 15000, t60 = 60000;
+    WinHttpSetOption(sess.h, WINHTTP_OPTION_CONNECT_TIMEOUT,    &t15, sizeof t15);
+    WinHttpSetOption(sess.h, WINHTTP_OPTION_RECEIVE_TIMEOUT,    &t60, sizeof t60);
+    WinHttpSetOption(sess.h, WINHTTP_OPTION_SEND_TIMEOUT,       &t15, sizeof t15);
+    WinHttpSetOption(sess.h, WINHTTP_OPTION_RESOLVE_TIMEOUT,    &t15, sizeof t15);
+
+    conn.h = WinHttpConnect(sess.h, host, comp.nPort, 0);
+    if (!conn.h) return false;
+
+    const bool is_https = (comp.nScheme == INTERNET_SCHEME_HTTPS);
+    req.h = WinHttpOpenRequest(conn.h, L"GET", url_path,
+                               nullptr,
+                               WINHTTP_NO_REFERER,
+                               WINHTTP_DEFAULT_ACCEPT_TYPES,
+                               is_https ? WINHTTP_FLAG_SECURE : 0);
+    if (!req.h) return false;
+
+    if (!WinHttpSendRequest(req.h, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) return false;
+    if (!WinHttpReceiveResponse(req.h, nullptr)) return false;
+
+    // Verify HTTP 200
+    DWORD status = 0, sz = sizeof(DWORD);
+    WinHttpQueryHeaders(req.h,
+                        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX,
+                        &status, &sz, WINHTTP_NO_HEADER_INDEX);
+    if (status != 200) return false;
+
+    // Read body
+    std::vector<char> body;
+    body.reserve(512 * 1024);
+    DWORD avail = 0;
+    while (WinHttpQueryDataAvailable(req.h, &avail) && avail > 0) {
+        const size_t off = body.size();
+        body.resize(off + avail);
+        DWORD read = 0;
+        if (!WinHttpReadData(req.h, body.data() + off, avail, &read)) break;
+        body.resize(off + read);
+        avail = 0;
+    }
+    if (body.empty()) return false;
+
+    // Write to file (create directories first)
+    std::error_code ec;
+    fs::create_directories(dest.parent_path(), ec);
+    if (ec) return false;
+
+    std::ofstream ofs(dest, std::ios::binary);
+    if (!ofs) return false;
+    ofs.write(body.data(), static_cast<std::streamsize>(body.size()));
+    return ofs.good();
+}
+
+} // anonymous namespace
+
+void WebServer::EnsureVendorLibs() const {
+    struct VendorLib { const wchar_t* url; const char* rel_path; };
+    static const VendorLib kLibs[] = {
+        { L"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js",
+          "js/vendor/highlight.min.js" },
+        { L"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css",
+          "css/vendor/vs2015.min.css" },
+        { L"https://cdnjs.cloudflare.com/ajax/libs/marked/11.2.0/marked.min.js",
+          "js/vendor/marked.min.js" },
+        { L"https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js",
+          "js/vendor/purify.min.js" },
+    };
+
+    // Check if any files are missing before spawning a thread
+    const fs::path root = ResolveWebRoot();
+    bool any_missing = false;
+    for (const auto& lib : kLibs) {
+        if (!fs::exists(root / lib.rel_path)) { any_missing = true; break; }
+    }
+    if (!any_missing) return;
+
+    // Snapshot the paths we need so the lambda owns everything
+    struct Entry { std::wstring url; fs::path dest; };
+    std::vector<Entry> todo;
+    for (const auto& lib : kLibs) {
+        const fs::path dest = root / lib.rel_path;
+        if (!fs::exists(dest)) todo.push_back({ lib.url, dest });
+    }
+
+    // Download in background so Start() is not delayed
+    std::thread([todo = std::move(todo)]() {
+        for (const auto& e : todo) {
+            WinHttpDownloadToFile(e.url.c_str(), e.dest);
+            // Silent on failure — CDN redirect fallback handles it at serve time
+        }
+    }).detach();
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// TLS helpers
+// ──────────────────────────────────────────────────────────────────────────────
+fs::path WebServer::TlsCertsDir() const {
+    return app_root_ / "certs";
+}
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+// Generate a self-signed RSA-2048 / SHA-256 certificate valid for 3 years.
+// Uses the modern EVP_PKEY_CTX API (OpenSSL 3.x compatible).
+static bool GenerateSelfSignedCert(const fs::path& cert_path, const fs::path& key_path)
+{
+    Logger::Info("OpenSSL", "GenerateSelfSignedCert: starting");
+    // ── Generate RSA-2048 key ────────────────────────────────────────────────
+    EVP_PKEY* pkey = nullptr;
+    {
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+        if (!ctx) {
+            Logger::Error("OpenSSL", "GenerateSelfSignedCert: EVP_PKEY_CTX_new_id failed");
+            return false;
+        }
+        if (EVP_PKEY_keygen_init(ctx) <= 0 ||
+            EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0 ||
+            EVP_PKEY_keygen(ctx, &pkey) <= 0)
+        {
+            Logger::Error("OpenSSL", "GenerateSelfSignedCert: EVP_PKEY_keygen failed");
+            EVP_PKEY_CTX_free(ctx);
+            return false;
+        }
+        EVP_PKEY_CTX_free(ctx);
+    }
+    Logger::Info("OpenSSL", "GenerateSelfSignedCert: key generated");
+
+    // ── Build X.509 certificate ──────────────────────────────────────────────
+    X509* x509 = X509_new();
+    if (!x509) {
+        Logger::Error("OpenSSL", "GenerateSelfSignedCert: X509_new failed");
+        EVP_PKEY_free(pkey);
+        return false;
+    }
+    Logger::Info("OpenSSL", "GenerateSelfSignedCert: X509 created");
+
+    ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
+    X509_gmtime_adj(X509_get_notBefore(x509), 0);
+    X509_gmtime_adj(X509_get_notAfter(x509), 60LL * 60 * 24 * 365 * 3); // 3 years
+
+    X509_set_pubkey(x509, pkey);
+
+    X509_NAME* name = X509_get_subject_name(x509);
+    X509_NAME_add_entry_by_txt(name, "O",  MBSTRING_ASC,
+        reinterpret_cast<const unsigned char*>("Agent"), -1, -1, 0);
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+        reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
+    X509_set_issuer_name(x509, name);   // self-signed
+
+    if (X509_sign(x509, pkey, EVP_sha256()) == 0) {
+        Logger::Error("OpenSSL", "GenerateSelfSignedCert: X509_sign failed");
+        X509_free(x509); EVP_PKEY_free(pkey); return false;
+    }
+    Logger::Info("OpenSSL", "GenerateSelfSignedCert: certificate signed");
+
+    // ── Write PEM files ──────────────────────────────────────────────────────
+    std::error_code ec;
+    fs::create_directories(cert_path.parent_path(), ec);
+    Logger::Info("OpenSSL", "GenerateSelfSignedCert: writing to " + key_path.string());
+    Logger::Flush();
+
+    bool ok = true;
+    {
+        FILE* f = nullptr;
+        errno_t err = _wfopen_s(&f, key_path.wstring().c_str(), L"w");
+        Logger::Info("OpenSSL", "GenerateSelfSignedCert: _wfopen_s returned err=" + std::to_string(err));
+        Logger::Flush();
+        if (err == 0 && f) {
+            Logger::Info("OpenSSL", "GenerateSelfSignedCert: file opened, about to write private key");
+            Logger::Flush();
+            ok = (PEM_write_PrivateKey(f, pkey, nullptr, nullptr, 0, nullptr, nullptr) == 1);
+            fclose(f);
+            if (!ok) Logger::Error("OpenSSL", "GenerateSelfSignedCert: PEM_write_PrivateKey failed");
+        } else {
+            ok = false;
+            Logger::Error("OpenSSL", "GenerateSelfSignedCert: could not open key file for writing, err=" + std::to_string(err));
+        }
+    }
+    Logger::Flush();
+    if (ok) {
+        FILE* f = nullptr;
+        Logger::Info("OpenSSL", "GenerateSelfSignedCert: writing cert to " + cert_path.string());
+        Logger::Flush();
+        errno_t err = _wfopen_s(&f, cert_path.wstring().c_str(), L"w");
+        Logger::Info("OpenSSL", "GenerateSelfSignedCert: cert _wfopen_s returned err=" + std::to_string(err));
+        Logger::Flush();
+        if (err == 0 && f) {
+            ok = (PEM_write_X509(f, x509) == 1);
+            fclose(f);
+            if (!ok) Logger::Error("OpenSSL", "GenerateSelfSignedCert: PEM_write_X509 failed");
+        } else {
+            ok = false;
+            Logger::Error("OpenSSL", "GenerateSelfSignedCert: could not open cert file for writing, err=" + std::to_string(err));
+        }
+    }
+    Logger::Flush();
+
+    X509_free(x509);
+    EVP_PKEY_free(pkey);
+    if (ok) Logger::Info("OpenSSL", "GenerateSelfSignedCert: success");
+    Logger::Flush();
+    return ok;
+}
+#endif // CPPHTTPLIB_OPENSSL_SUPPORT
+
+bool WebServer::ResolveTlsCertAndKey(std::string& out_cert, std::string& out_key) const
+{
+    if (config_.tls_mode.empty()) return false;
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    if (config_.tls_mode == "self_signed") {
+        const fs::path cert_path = TlsCertsDir() / "server.crt";
+        const fs::path key_path  = TlsCertsDir() / "server.key";
+        if (!fs::exists(cert_path) || !fs::exists(key_path)) {
+            if (!GenerateSelfSignedCert(cert_path, key_path)) return false;
+        }
+        out_cert = cert_path.string();
+        out_key  = key_path.string();
+        return true;
+    }
+    if (config_.tls_mode == "pem") {
+        if (config_.tls_cert_file.empty() || config_.tls_key_file.empty()) return false;
+        if (!fs::exists(config_.tls_cert_file) || !fs::exists(config_.tls_key_file)) return false;
+        out_cert = config_.tls_cert_file;
+        out_key  = config_.tls_key_file;
+        return true;
+    }
+    if (config_.tls_mode == "pfx") {
+        // Extract PEM from PFX, write to certs dir, return those paths.
+        if (config_.tls_pfx_file.empty() || !fs::exists(config_.tls_pfx_file)) return false;
+
+        const fs::path cert_path = TlsCertsDir() / "pfx_server.crt";
+        const fs::path key_path  = TlsCertsDir() / "pfx_server.key";
+
+        // Re-extract only if PFX is newer than cached PEM files
+        bool need_extract = !fs::exists(cert_path) || !fs::exists(key_path);
+        if (!need_extract) {
+            std::error_code ec;
+            auto pfx_t  = fs::last_write_time(config_.tls_pfx_file, ec);
+            auto cert_t = fs::last_write_time(cert_path, ec);
+            if (pfx_t > cert_t) need_extract = true;
+        }
+
+        if (need_extract) {
+            FILE* f = nullptr;
+            if (_wfopen_s(&f, fs::path(config_.tls_pfx_file).wstring().c_str(), L"rb") != 0 || !f)
+                return false;
+            PKCS12* p12 = d2i_PKCS12_fp(f, nullptr);
+            fclose(f);
+            if (!p12) return false;
+
+            EVP_PKEY* pkey = nullptr; X509* cert = nullptr;
+            const char* pass = config_.tls_pfx_passphrase.empty()
+                               ? nullptr : config_.tls_pfx_passphrase.c_str();
+            int rc = PKCS12_parse(p12, pass, &pkey, &cert, nullptr);
+            PKCS12_free(p12);
+            if (!rc || !pkey || !cert) { EVP_PKEY_free(pkey); X509_free(cert); return false; }
+
+            std::error_code ec;
+            fs::create_directories(TlsCertsDir(), ec);
+            bool ok = true;
+            {
+                FILE* wf = nullptr;
+                if (_wfopen_s(&wf, key_path.wstring().c_str(), L"w") == 0 && wf) {
+                    ok = (PEM_write_PrivateKey(wf, pkey, nullptr, nullptr, 0, nullptr, nullptr) == 1);
+                    fclose(wf);
+                } else ok = false;
+            }
+            if (ok) {
+                FILE* wf = nullptr;
+                if (_wfopen_s(&wf, cert_path.wstring().c_str(), L"w") == 0 && wf) {
+                    ok = (PEM_write_X509(wf, cert) == 1);
+                    fclose(wf);
+                } else ok = false;
+            }
+            EVP_PKEY_free(pkey); X509_free(cert);
+            if (!ok) return false;
+        }
+
+        out_cert = cert_path.string();
+        out_key  = key_path.string();
+        return true;
+    }
+#else
+    (void)out_cert; (void)out_key;
+#endif
+    return false;
+}
+
+int WebServer::GetCertExpiryDays() const
+{
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    Logger::Info("OpenSSL", "GetCertExpiryDays: starting");
+    Logger::Flush();
+    std::string cert_path, key_path;
+    if (!ResolveTlsCertAndKey(cert_path, key_path)) {
+        Logger::Error("OpenSSL", "GetCertExpiryDays: ResolveTlsCertAndKey failed");
+        Logger::Flush();
+        return -1;
+    }
+    Logger::Flush();
+    Logger::Info("OpenSSL", "GetCertExpiryDays: cert_path=" + cert_path);
+
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, fs::path(cert_path).wstring().c_str(), L"r") != 0 || !f) {
+        Logger::Error("OpenSSL", "GetCertExpiryDays: could not open cert file");
+        return -1;
+    }
+    X509* cert = PEM_read_X509(f, nullptr, nullptr, nullptr);
+    fclose(f);
+    if (!cert) {
+        Logger::Error("OpenSSL", "GetCertExpiryDays: PEM_read_X509 failed");
+        return -1;
+    }
+    Logger::Info("OpenSSL", "GetCertExpiryDays: X509 parsed successfully");
+
+    const ASN1_TIME* not_after = X509_get0_notAfter(cert);
+    int days = 0, secs = 0;
+    ASN1_TIME_diff(&days, &secs, nullptr, not_after);
+    X509_free(cert);
+    Logger::Info("OpenSSL", "GetCertExpiryDays: days=" + std::to_string(days));
+    return days;
+#else
+    return -1;
+#endif
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Start / Stop
 // ──────────────────────────────────────────────────────────────────────────────
 bool WebServer::Start() {
@@ -1487,24 +1919,88 @@ bool WebServer::Start() {
 
     // Bootstrap any missing default web assets before binding the port
     EnsureDefaultWebAssets();
+    // Kick off background download of vendor JS/CSS libraries if not cached
+    EnsureVendorLibs();
 
     // Recreate the impl (allows restart after Stop)
     impl_ = std::make_unique<WebServerImpl>();
+
+    // ── Create main server (HTTPS or HTTP) ────────────────────────────────
+    bool use_tls = !config_.tls_mode.empty();
+    if (use_tls) {
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+        std::string cert, key;
+        if (!ResolveTlsCertAndKey(cert, key)) {
+            // TLS configured but certs unavailable — fall back to HTTP
+            use_tls = false;
+            AppendAuditLog("system", "tls_fallback",
+                "TLS cert/key resolution failed; starting HTTP");
+            impl_->server = std::make_unique<httplib::Server>();
+        } else {
+            Logger::Info("OpenSSL", "Start: Creating SSLServer with cert=" + cert);
+            impl_->server = std::make_unique<httplib::SSLServer>(
+                cert.c_str(), key.c_str());
+            Logger::Info("OpenSSL", "Start: SSLServer created");
+            AppendAuditLog("system", "tls_start",
+                "HTTPS started with cert: " + cert);
+        }
+#else
+        // OpenSSL not compiled in — ignore TLS config and start plain HTTP
+        use_tls = false;
+        AppendAuditLog("system", "tls_unavailable",
+            "TLS configured but CPPHTTPLIB_OPENSSL_SUPPORT not defined; using HTTP");
+        impl_->server = std::make_unique<httplib::Server>();
+#endif
+    } else {
+        impl_->server = std::make_unique<httplib::Server>();
+    }
+
     RegisterRoutes();
 
-    impl_->server.new_task_queue = [this]() -> httplib::TaskQueue* {
+    impl_->srv().new_task_queue = [this]() -> httplib::TaskQueue* {
         return new httplib::ThreadPool(
             static_cast<size_t>(std::max(1, config_.thread_pool_size)));
     };
 
     // Bind first to detect port conflicts before launching thread
-    if (!impl_->server.bind_to_port(config_.bind_address.c_str(), config_.port)) {
+    if (!impl_->srv().bind_to_port(config_.bind_address.c_str(), config_.port)) {
         return false;
+    }
+
+    // ── Optional HTTP→HTTPS redirect listener ─────────────────────────────
+    if (use_tls && config_.http_redirect_port > 0 &&
+        config_.http_redirect_port != config_.port)
+    {
+        impl_->redirect_srv = std::make_unique<httplib::Server>();
+        const std::string redirect_base = config_.base_url.empty()
+            ? "https://localhost:" + std::to_string(config_.port)
+            : config_.base_url;
+
+        impl_->redirect_srv->Get(".*", [redirect_base](const httplib::Request& req,
+                                                         httplib::Response& res) {
+            res.status = 301;
+            res.set_header("Location", redirect_base + req.path);
+            res.set_content("Redirecting to HTTPS", "text/plain");
+        });
+        impl_->redirect_srv->Post(".*", [redirect_base](const httplib::Request& req,
+                                                          httplib::Response& res) {
+            res.status = 301;
+            res.set_header("Location", redirect_base + req.path);
+            res.set_content("Redirecting to HTTPS", "text/plain");
+        });
+
+        if (impl_->redirect_srv->bind_to_port(
+                config_.bind_address.c_str(), config_.http_redirect_port))
+        {
+            redirect_thread_ = std::thread([this]() {
+                impl_->redirect_srv->listen_after_bind();
+            });
+        }
     }
 
     running_.store(true);
     server_thread_ = std::thread([this]() {
-        impl_->server.listen_after_bind();
+        impl_->srv().listen_after_bind();
         running_.store(false);
     });
 
@@ -1513,7 +2009,14 @@ bool WebServer::Start() {
 
 void WebServer::Stop() {
     if (!running_.load()) return;
-    impl_->server.stop();
+
+    // Stop redirect server first (doesn't own running_ flag)
+    if (impl_ && impl_->redirect_srv) {
+        impl_->redirect_srv->stop();
+        if (redirect_thread_.joinable()) redirect_thread_.join();
+    }
+
+    impl_->srv().stop();
     if (server_thread_.joinable()) server_thread_.join();
     running_.store(false);
     PurgeExpiredSessions();

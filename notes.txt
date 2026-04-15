@@ -1,10 +1,1 @@
-Even if the project doesn't have permission to use a function (for example, writing to the disk), the tool might have that permission. 
-The reason why this is important is that we might want to use the tool to save content to the drive, but ensuring that certain procedures are followed.  We might want to use a model, for example, to use as a filter to detect personal information. That personal information needs to be removed before it's saved to the drive. 
-
-It could be that that tool has access to a RAG that contains sensitive information of a personal nature and that personal information needs to be removed before it's returned to the main model. 
-
-The best way to approach this is that if a tool is set to be available for a project. Then that project should look for any variables that are in that tool as well and ask for those values to be set when we set the project. 
-
-That brings us to the project settings where we can add the model tools. The left panel has a list of MCP servers. When we click on them, there are a few settings at the bottom where we can check off whether it should use a server. What we can do is actually that setting to check it off; it can actually shrink a little bit. There's a lot of white space below the variables. What we can actually do is shrink that up a little bit and then place the model tools down layer there. We can have a list with check boxes. We don't need to do anything else; those tools are configured already. If we want to have a tool that's a model tool, all we have to do is check it off and then that should be recorded as a tool that's available to the project settings. 
-
-In addition to that the project settings window needs a little bit of love and care. With the MCP tools some of the variables that we need to be able to set at this point are not available. For example the file system requires a project folder. If we create a new project we can set it but when we go to the project settings there are no ways to edit that so we need to fix some of that at the same time.
+https://github.com/upstash/context7

@@ -2219,6 +2219,7 @@ class MainWindow {
 public:
     MainWindow();
     HWND Create(HINSTANCE instance);
+    void OpenWebConfig();  // public so command-line options can trigger it
 
 private:
     static int Scale(HWND hwnd, int value);
@@ -2243,7 +2244,6 @@ private:
     void EditProjectSettings();
     void RunSetupSystem();
     void EnsureWebServer();   // lazily creates web_server_ if not yet constructed
-    void OpenWebConfig();
     void OpenAdminConfig();
     void SetupDefaultMcpServersIfEmpty();
     void ReloadProjects(const std::string& preferred_project_id, const std::string& preferred_chat_id);
@@ -2986,17 +2986,22 @@ void MainWindow::EnsureWebServer() {
 // Web Config — full settings dialog + Start/Stop
 // ──────────────────────────────────────────────────────────────────────────────
 void MainWindow::OpenWebConfig() {
+    Logger::Info("WebConfig", "OpenWebConfig: starting");
     const auto app_root = storage_.root_path();
     const auto settings_path = app_root / "web_settings.json";
 
     // Ensure settings file and WebServer instance exist
+    Logger::Info("WebConfig", "OpenWebConfig: calling EnsureWebServer");
     EnsureWebServer();
+    Logger::Info("WebConfig", "OpenWebConfig: EnsureWebServer returned");
 
     // Load current config from file (dialog will read it live too)
     auto cfg = WebServerConfig::LoadFromFile(settings_path);
 
     // Show the dialog — it modifies cfg in place and handles Start/Stop
+    Logger::Info("WebConfig", "OpenWebConfig: calling ShowWebConfigDialog");
     const bool accepted = ShowWebConfigDialog(hwnd_, web_server_.get(), &cfg, app_root);
+    Logger::Info("WebConfig", "OpenWebConfig: ShowWebConfigDialog returned");
 
     if (accepted) {
         // Persist updated config
@@ -4453,7 +4458,52 @@ ChatInfo* MainWindow::FindChat(const std::string& project_id, const std::string&
 }
 }  // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
+struct CommandLineArgs {
+    bool web_config = false;
+    LogLevel log_level = LogLevel::Info;
+    std::wstring log_level_str;
+};
+
+static CommandLineArgs ParseCommandLineArgs(PWSTR cmd_line) {
+    CommandLineArgs args;
+
+    std::wstring cmd_w(cmd_line);
+    std::wistringstream iss(cmd_w);
+    std::wstring arg;
+
+    while (iss >> arg) {
+        if (arg == L"--web-config") {
+            args.web_config = true;
+        } else if (arg == L"--log-level") {
+            iss >> args.log_level_str;
+            if (!args.log_level_str.empty()) {
+                if (args.log_level_str == L"error") args.log_level = LogLevel::Error;
+                else if (args.log_level_str == L"warn") args.log_level = LogLevel::Warn;
+                else if (args.log_level_str == L"info") args.log_level = LogLevel::Info;
+                else if (args.log_level_str == L"debug") args.log_level = LogLevel::Debug;
+            }
+        } else if (arg == L"--help" || arg == L"-h") {
+            MessageBoxW(nullptr,
+                L"Agent Desktop Command Line Options:\n\n"
+                L"  --web-config     Open Web Config dialog directly\n"
+                L"  --log-level N    Set log level: error, warn, info, debug\n"
+                L"  --help, -h       Show this help message\n\n"
+                L"Example:\n"
+                L"  agent.exe --web-config --log-level debug",
+                L"Agent Desktop Help", MB_OK | MB_ICONINFORMATION);
+        }
+    }
+
+    return args;
+}
+
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmd_line, int show_command) {
+    CommandLineArgs args = ParseCommandLineArgs(cmd_line);
+
+    Logger::Initialize(std::filesystem::current_path() / "logs", args.log_level);
+    Logger::Info("Agent Desktop starting");
+    Logger::Info("Command line: " + WideToUtf8(std::wstring(cmd_line)));
+
     LoadLibraryW(L"Msftedit.dll");
 
     INITCOMMONCONTROLSEX controls{};
@@ -4464,7 +4514,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     MainWindow window;
     HWND hwnd = window.Create(instance);
     if (!hwnd) {
+        Logger::Error("Failed to create main window");
+        Logger::Shutdown();
         return 1;
+    }
+
+    if (args.web_config) {
+        Logger::Info("Opening Web Config from command line");
+        window.OpenWebConfig();
     }
 
     ShowWindow(hwnd, show_command);
@@ -4475,6 +4532,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+
+    Logger::Info("Agent Desktop shutting down");
+    Logger::Shutdown();
 
     return static_cast<int>(msg.wParam);
 }

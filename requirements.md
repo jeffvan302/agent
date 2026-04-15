@@ -3,7 +3,7 @@
 **Platform:** Windows (Win32/Win64)
 **Language:** C++ (C++20 or later)
 **Version:** 0.1.0 - Active Proof-of-Concept Implementation
-**Date:** April 13, 2026
+**Date:** April 15, 2026
 
 ---
 
@@ -13,7 +13,7 @@ A native Windows desktop application with a full graphical user interface (GUI) 
 
 **Every feature described in this document - configuration, model management, MCP server management, project/chat management, Model Tool authoring, logging, and diagnostics - must be accessible and manageable through the GUI.** While JSON config files remain human-editable as a fallback, the GUI is the primary interface for all operations.
 
-### 1.1 Current Implementation Snapshot - April 13, 2026
+### 1.1 Current Implementation Snapshot - April 15, 2026
 
 The current proof-of-concept is a native Win32 C++20 desktop application with these implemented or partially implemented foundations:
 
@@ -33,7 +33,7 @@ The current proof-of-concept is a native Win32 C++20 desktop application with th
 - Current RAG retrieval using SQLite metadata, SQLite FTS5 keyword search, embedding BLOB cosine scan, and hybrid result merging.
 - Built-in active RAG tools can be exposed to tool-capable models per project binding: list RAG libraries, search with confidence windows, retrieve extracted document text, and ingest generated documents into write-enabled RAGs.
 
-### 1.1A Detailed Implementation Baseline - April 13, 2026
+### 1.1A Detailed Implementation Baseline - April 15, 2026
 
 This section is the current source-of-truth implementation checkpoint. It captures features that have been added during the proof-of-concept, including several items that were added before they were fully reflected in the original phase roadmap.
 
@@ -172,6 +172,24 @@ This section is the current source-of-truth implementation checkpoint. It captur
 - Context compression preview window.
 - Context messages debug window with saved request context and compression snapshot details.
 
+#### Web Server Implementation (April 15, 2026)
+
+The embedded web server and multi-user chat interface are now in a working Phase 1 state. The full design spec is in `web_requirements.md`.
+
+- The web server is compiled directly into `agent.exe` using **cpp-httplib** (header-only). No separate process or installer is required.
+- **HTTPS/TLS** is fully implemented and gated by `#ifdef CPPHTTPLIB_OPENSSL_SUPPORT`. OpenSSL 3.x is linked statically (no DLLs required on end-user machines). Three certificate modes are supported: self-signed (auto-generated via OpenSSL EVP_PKEY_CTX RSA-2048), PEM file pair, and PFX/PKCS#12 bundle.
+- **OpenSSL Windows applink fix**: `src/openssl_applink.c` is compiled into the exe to provide the OPENSSL_Applink jump table required for static OpenSSL on Windows. Without it the app crashes immediately with "no OPENSSL_Applink".
+- **Static lib detection in build.bat** handles both the old `libssl_static.lib` naming (OpenSSL ≤3.3) and the new `libssl.lib` naming (OpenSSL ≥3.4) in the `lib\VC\x64\MD[d]\` subdirectory. The download script `scripts/download_openssl.ps1` fetches the Shining Light Productions full installer automatically.
+- An optional **HTTP→HTTPS redirect listener** runs on a configurable secondary port.
+- **Session management**: secure random session tokens, sliding expiry, in-memory session store with mutex, per-IP rate limiting on login (5 failures → 15-minute lockout), audit log.
+- **Web Config dialog** (desktop): port, bind address, base URL, TLS mode, certificate file pickers, self-signed certificate generation, certificate expiry display (days remaining), theme selection, start/stop, active session count.
+- **Admin Config dialog** (desktop): create/edit/delete web users with bcrypt-hashed passwords (cost ≥ 12), display name, email, enabled flag, force-password-reset flag, active session list with per-user forced logout. Groups and project bindings are defined in spec but not yet implemented in the dialog.
+- **Web user store** (`web_user_store.h/.cpp`): User struct, bcrypt password verification via OpenSSL EVP, `users.json` persistence with atomic write (temp-file + rename).
+- **Chat API routes** (all require session cookie auth): `GET /api/projects`, `GET /api/projects/:id/chats`, `POST /api/projects/:id/chats`, `PATCH /api/chats/:id` (rename), `DELETE /api/chats/:id`, `GET /api/chats/:id/messages`, `POST /api/chats/:id/messages` (blocking), `GET /api/chats/:id/stream` (SSE streaming), `POST /api/chats/:id/upload` (file attachment).
+- **Default web assets** are embedded as C++ string literals in `src/web_assets_default.cpp` and written to `www/` on first launch. The `www/` folder is then served from disk, allowing admin customization without recompiling. Vendor libraries (highlight.js, marked.js, DOMPurify) are downloaded from CDN into `www/js/vendor/` on first start in a background thread.
+- The chat streaming path uses **Server-Sent Events (SSE)** over HTTPS. WebSocket upgrade is planned for a future web phase.
+- **Not yet implemented in the web server**: groups and group-to-project bindings (Admin Config dialog), `$<UserName>` / `$<UserProjectFolder>` variable injection, file attachment pipeline wired into model calls, security hardening headers (HSTS, CSP, X-Frame-Options), dark theme, sidebar collapse, thinking-block and tool-call rendering in the web UI, WebSocket streaming, per-user project folders, and admin web panel. See `web_requirements.md` for the full phase roadmap.
+
 #### Important Current Gaps
 
 - No central log viewer for API requests, MCP JSON-RPC traffic, RAG jobs, and app errors.
@@ -181,13 +199,14 @@ This section is the current source-of-truth implementation checkpoint. It captur
 - No Model-as-Tool implementation yet.
 - No Python bridge or plugin runtime yet.
 - No workflow engine yet.
-- No chat attachment/multi-modal prompt input pipeline yet; RAG standalone image-file ingestion is now implemented separately.
-- No theming, compact mode, or collapsible left panel.
+- No chat attachment/multi-modal prompt input pipeline in the desktop chat yet; RAG standalone image-file ingestion is implemented separately. File upload in the web interface is partially wired (upload route exists; attachment-to-model-request pipeline not yet complete).
+- No theming, compact mode, or collapsible left panel in the desktop app.
 - No local llama.cpp provider yet.
 - No automated test suite or structured regression harness.
 - Build artifacts and runtime data are currently present in the working tree during development and should be separated or ignored before release packaging.
 - Concurrent chat execution is implemented (April 2026). The single global `request_in_flight_` lock has been replaced with a per-chat `chats_in_flight_` map. Each chat runs on its own worker thread. Only the active chat's input controls lock while it is in flight; the tree, all navigation, and all manager buttons remain fully interactive at all times. Background chats stream and complete independently, tree labels show a live ● indicator for in-flight chats, and a configurable concurrency limit (default 8) prevents resource exhaustion. See §2.2 for the full design.
 - RAG-specific gaps are tracked in detail in `rag_service_requirements.md`, with the current highest priorities being retrieval mode policy, RAG working set, token-budget-aware RAG context, ingestion job persistence, and production vector indexing.
+- Web server gaps are tracked in detail in `web_requirements.md`, with the current highest priorities being groups/project bindings, security headers, and file attachment pipeline.
 
 ### 1.2 Why C++
 
@@ -834,130 +853,255 @@ The application supports attaching files and media to messages, with intelligent
 
 ## 11. Implementation Phases
 
-The phases are ordered by the principle of **prove it works, then build on it**. Each phase produces a usable increment that can be tested end-to-end before moving on. The first thing we need is a GUI that can talk to a model — everything else builds from there.
+The phases are ordered by the principle of **prove it works, then build on it**. Each phase produces a usable increment that can be tested end-to-end before moving on.
 
-### Phase 1 — GUI Shell & Model Connectivity
+**Status key: ✅ Complete · 🔄 In Progress / Partial · ⬜ Not Started**
 
-The goal of this phase is a running application where you can configure a model provider, select a model, type a prompt, and get a streamed response back in a chat window. This is the proof-of-life that validates the entire API layer before anything else is built on top of it.
+---
 
-- Set up the C++ project structure, source file layout, and the `build.bat` build script (§12)
-- Stand up the basic GUI window with the three-panel layout (left panel placeholder, center chat panel, bottom input area)
-- Implement the **Provider & Model Manager** dialog — add/edit/remove providers with name, base URL, API key fields, and model list
-- Implement `providers.json` persistence (read/write)
-- Implement the **model selector** dropdown in the chat input area, populated from configured providers
-- Implement the OpenAI-compatible API communication layer:
-  - HTTP client with TLS support
-  - `/v1/chat/completions` request construction (model, messages, system prompt, temperature, max_tokens)
-  - **Streaming SSE** response parsing with incremental token rendering in the chat window
-  - Error handling for connection failures, invalid keys (401), rate limits (429), and malformed responses
-- Implement the basic chat message flow: user types message → request sent to selected model → streamed response rendered → both messages stored in history
-- Implement basic project and chat persistence (create project, create chat, save/load `messages.json`)
-- Implement the left panel with project/chat tree navigation (create, select, rename, delete)
-- **Test connection** button in the Provider Manager that sends a minimal request to verify the endpoint and key work
-- At the end of this phase: you can open the app, configure an OpenAI endpoint (or Ollama, or any OpenAI-compatible API), pick a model, and have a working streaming conversation
+### Phase 1 — GUI Shell & Model Connectivity ✅ Complete
 
-### Phase 2 — Basic MCP Tool Integration
+All items in this phase are implemented and working.
 
-The goal of this phase is to get MCP tools working end-to-end with practical servers — web search, fetch, filesystem access — so the model can actually do useful things beyond chat.
+- C++ project structure, `build.bat` build script with debug/release modes, MSVC toolchain auto-detection
+- Native Win32 three-panel GUI: project/chat tree (left), transcript pane (center), prompt input (bottom)
+- Provider & Model Manager dialog: add/edit/remove providers, name/URL/API-key/model-list fields
+- `providers.json` persistence, model selector dropdown in main window
+- OpenAI-compatible API layer: WinHTTP-based HTTP client, `/v1/chat/completions` request construction, SSE streaming response parsing, incremental token rendering with auto-scroll
+- Error handling: connection failures, 401/429/malformed responses
+- Basic chat message flow: send → stream → store
+- Project and chat persistence: `data/projects/<id>/chats/<id>/messages.json`
+- Left panel: project/chat tree with create, select, rename, delete
+- Test connection button in Provider Manager
 
-- Implement the MCP client for the **stdio transport**: subprocess spawning (`CreateProcess`), JSON-RPC 2.0 over stdin/stdout (newline-delimited), stderr capture for logging
-- Implement the MCP **lifecycle**: `initialize` handshake, capability negotiation, `initialized` notification, graceful shutdown
-- Implement **tool discovery** (`tools/list` with pagination) and **tool invocation** (`tools/call`) with all result content types (text, image, structured)
-- Implement the **MCP Server Manager** dialog — add/edit/remove stdio servers (command, args, env vars, working directory), enable/disable, connect/disconnect per server, live status indicators
-- Implement `mcp_servers.json` persistence
-- **Bridge MCP tools to the OpenAI API layer**: convert discovered MCP tools into the OpenAI `tools` array format (function calling), parse tool call requests from model responses, dispatch to the correct MCP server, return results, and feed them back to the model for continued reasoning
-- Display tool calls in the chat UI: collapsible sections showing tool name, arguments, and results
-- Implement the **per-server consent model** (§9): on first connect, show the server's tools and get user approval; persist consent state per project
-- Implement `notifications/tools/list_changed` handling so the tool list stays current
-- **Validation target**: configure a web search MCP server and a fetch server, then have the model search the web and retrieve page content as part of a conversation
+---
 
-### Phase 3 — MCP Full Compliance & Streamable HTTP
+### Phase 2 — Basic MCP Tool Integration ✅ Complete
 
-Complete the MCP specification implementation so any MCP server — local or remote, stdio or HTTP — works correctly.
+All items in this phase are implemented and working.
 
-- Implement the **Streamable HTTP transport**: POST for sending JSON-RPC messages, SSE stream handling for responses, GET for server-initiated streams
-- Implement **session management** for HTTP transport (`MCP-Session-Id` tracking, 404 handling for expired sessions, DELETE on cleanup)
-- Implement **resources**: `resources/list`, `resources/read`, `resources/subscribe`/`resources/unsubscribe`, `notifications/resources/list_changed`, `notifications/resources/updated`
-- Implement **prompts**: `prompts/list`, `prompts/get` with arguments, `notifications/prompts/list_changed`
-- Implement **client features provided to servers**: roots (`roots/list`, `notifications/roots/list_changed`), sampling (`sampling/createMessage` routed through active model), elicitation (`elicitation/create` surfaced to the user)
-- Implement all **utilities**: progress tracking (`notifications/progress` with UI progress bars), cancellation (`notifications/cancelled`), logging (`notifications/message` routed to log viewer), ping keepalive
-- Implement full **capability negotiation** — declare all client capabilities, read and respect all server capabilities
-- Add the **log viewer** panel for MCP JSON-RPC traffic inspection
-- Update the MCP Server Manager to support HTTP server configuration (URL, auth headers)
+- MCP stdio transport: `CreateProcess` subprocess spawning, JSON-RPC 2.0 over stdin/stdout (newline-delimited), stderr capture
+- MCP lifecycle: `initialize` handshake, capability negotiation, `initialized` notification, graceful shutdown
+- Tool discovery: `tools/list` with `nextCursor` pagination
+- Tool invocation: `tools/call` with text/image/structured result handling, up to 8 tool-call rounds
+- MCP Server Manager dialog: add/edit/remove stdio servers (command, args, env, working dir, scope, variables), enable/disable, connect/disconnect, live status
+- `mcp_servers.json` persistence
+- MCP-to-OpenAI bridge: convert discovered tools to `tools` array, parse tool call requests from streamed response, dispatch to MCP, feed results back
+- Tool trace pane in main window showing tool name, arguments, and results
+- Per-server consent model: show tools on first connect, persist consent state per project
+- `notifications/tools/list_changed` handling
+- MCP variables (global + per-server), `$Name$` / `$<Name>$` substitution, context injection
 
-### Phase 4 — Model-as-Tool System
+---
+
+### Phase 3 — MCP Full Compliance & Streamable HTTP 🔄 Partial
+
+Stdio MCP is complete. The following items remain unimplemented:
+
+**Streamable HTTP transport** (all of these are required together before any HTTP MCP server can be used):
+1. In `src/mcp_manager.cpp`: add a new `McpHttpClient` class alongside `McpStdioClient`. It sends JSON-RPC as `POST` to the server's MCP endpoint URL with `Content-Type: application/json` and reads the response body. Use cpp-httplib for the HTTP calls (already linked).
+2. In `McpHttpClient::Connect`: send the `initialize` request as a POST; read the response JSON; send the `notifications/initialized` POST.
+3. For server-initiated streams: open a persistent `GET` request to the same endpoint, read the SSE stream in a background thread, and dispatch incoming JSON-RPC frames to registered notification handlers.
+4. Session management: store the `MCP-Session-Id` response header after initialize; include it as a request header on all subsequent calls. If any call returns 404, treat the session as expired and reconnect. Send `DELETE` to the endpoint on shutdown.
+5. Update `mcp_servers.json` schema and MCP Server Manager dialog to support HTTP servers: add a "Transport" dropdown (stdio / HTTP), show URL + auth-header fields when HTTP is selected, hide command/args/env fields.
+6. Test with a real HTTP MCP server (e.g., a locally hosted MCP server or a remote service).
+
+**Resources** (implement in `McpManager` after HTTP transport works):
+7. `resources/list` with pagination → store discovered resource URIs per server.
+8. `resources/read` → return resource content as text or binary.
+9. `resources/subscribe` and `resources/unsubscribe` → track subscriptions; handle `notifications/resources/updated` and `notifications/resources/list_changed`.
+10. Expose a resource browser panel in the MCP Server Manager or a separate Resources dialog.
+
+**Prompts**:
+11. `prompts/list` with pagination → store prompt definitions per server.
+12. `prompts/get` with argument filling → return rendered prompt messages.
+13. Handle `notifications/prompts/list_changed`.
+14. Surface prompts in the UI: a "Prompts" button in the toolbar or right-click on a project to list and apply prompts.
+
+**Client features provided to servers**:
+15. Roots: respond to `roots/list` with the current project's root directories. Emit `notifications/roots/list_changed` when the user switches projects.
+16. Sampling: handle `sampling/createMessage` requests — route through the currently active model, return the result. Gate behind the per-server consent flag (sampling consent is separate from tool consent).
+17. Elicitation: handle `elicitation/create` — show the requested form/prompt to the desktop user, block until they respond, return the response to the server.
+
+**Utilities**:
+18. Progress: handle `notifications/progress` — show a progress bar in the tool trace pane (use the `progressToken` from the original tool call request to correlate).
+19. Cancellation: send `notifications/cancelled` when the user presses Stop. The `requestId` must match the in-flight tool call's JSON-RPC id.
+20. Logging: handle `notifications/message` from servers — route to a central log viewer (see item 21).
+21. Log viewer panel: a dedicated dialog (or dockable pane) showing a filterable/searchable list of entries. Each entry has timestamp, level (debug/info/warning/error), source (server name or "API" or "App"), and message. This also covers API request logs, RAG job logs, and application errors. Log level selector filters the view. Export-to-file button.
+22. Ping: respond to server `ping` requests with an empty result.
+
+---
+
+### Phase 4 — Model-as-Tool System ⬜ Not Started
 
 Enable models to be wrapped as tools so the orchestrating model can delegate to specialized sub-models.
 
-- Implement the **Model Tool definition format** and `model_tools.json` persistence
-- Implement the **Model Tool execution engine**: intercept tool calls targeting a Model Tool, construct a sub-request to the target provider/model with the defined system prompt and input schema, collect the response, format it as a standard tool result
-- Implement **Model Tool chaining** (§5A.1) with configurable max depth and loop detection
-- Implement **tool access permissions** (§5A.2): whitelist enforcement for file read/write, web search, MCP tool access, and Model Tool chaining permissions
-- Build the **Model Tool Editor** dialog: create, edit, duplicate, delete Model Tools with all fields from §5.2, plus the access permission configuration from §5A.2
-- Implement the **test/preview panel** in the Model Tool Editor for invoking with sample input
-- Integrate Model Tools into the unified tool list alongside MCP tools — the orchestrating model sees them identically
-- Implement import/export of Model Tool definitions as JSON
+**Data layer** (do this first — no UI yet):
+1. Define the `ModelTool` struct in a new `src/model_tools_manager.h`: fields for id, name, display_name, description, target_provider_id, target_model_id, system_prompt, input_schema (JSON Schema string), output_format_instructions, temperature_override (optional double), max_tokens_override (optional int), context_inclusion_policy (enum: none / summary / full), enabled, chaining_enabled, max_chain_depth, allowed_tool_names (string list), allowed_model_tool_names (string list).
+2. Implement `ModelToolsManager` in `src/model_tools_manager.cpp` with `LoadFromFile`, `SaveToFile`, `GetAll`, `GetById`, `Add`, `Update`, `Remove`. File: `model_tools.json`.
+3. Write unit-testable `ExecuteModelTool(tool_id, arguments_json, calling_context)` method. It constructs a new OpenAI-compatible request to the target provider/model, sends it synchronously (or with a callback), and returns the result as a `nlohmann::json` tool result.
 
-### Phase 5 - Context Management & RAG
+**Tool registration**:
+4. In `src/openai_client.cpp` (or wherever the unified tool list is assembled for a chat request): after adding MCP tools, call `ModelToolsManager::GetEnabledToolsForProject` and append them as additional `tools` array entries. The OpenAI tool name is the Model Tool's `name` field; the description and input_schema are taken directly from the definition.
 
-Give the application intelligent context handling so it can manage long conversations and recall information efficiently.
+**Tool dispatch**:
+5. In the tool-call loop in the chat worker thread: when a tool call's function name matches a Model Tool name (check `ModelToolsManager::IsModelTool(name)`), call `ExecuteModelTool` instead of dispatching to MCP.
+6. Log the sub-model call in the tool trace pane: show tool name, arguments, which provider/model was called, and the result.
 
-- Implement the **context condensation protocol** (§7.3): compression configs, manual compression, compression snapshots/history, truncate-top compression, and hierarchical structured compression are implemented. Message pinning UI, tokenizer-specific token counting, and production hardening remain pending.
-- Implement optional model `context_window` support. This is implemented as a preflight estimate and warning/blocking check; blank or zero values are ignored.
-- Implement the **RAG library system** (§7.4). The current proof-of-concept includes reusable libraries, project bindings, storage folders, SQLite metadata, FTS5, embedding storage, rich document extraction, ingest preview, rebuild, and query workflows.
-- Implement the **embedding pipeline**. Local Ollama and LM Studio embedding providers are implemented; remote OpenAI-compatible embedding providers and local ONNX/Python embeddings remain pending.
-- Implement **RAG integration with context construction**. Current chat requests can retrieve project RAG chunks and inject them into the system prompt as retrieved project knowledge.
-- Implement **active RAG tool mode**. Current chat requests can expose built-in RAG tools for projects with tool-enabled RAG bindings: `rag_list_libraries`, `rag_search`, `rag_get_document`, `rag_write_document_to_drive`, and `rag_ingest_generated_document`.
-- Implement **RAG indexing**. Explicit file and folder ingestion are implemented, including rich document extraction and standalone image-file ingestion into extracted Markdown; automatic indexing of messages, summaries, MCP results, web documents, and chat attachments remains pending.
-- Build the **RAG configuration UI**. A RAG Service Manager, one-screen RAG library editor, system-wide Image Ingest Settings window, and full Project Settings RAG binding editor are implemented; retrieval mode policy, working-set diagnostics, project/web ingestion workflows, write/export audit history, persistent ingestion jobs, and advanced retrieval controls remain pending.
-- Implement message pinning UI in the chat view (pin/unpin individual messages to protect from condensation). This remains pending.
+**Chaining and permissions**:
+7. When `ExecuteModelTool` is called and the Model Tool has `chaining_enabled = true`, pass an allowed-tools context to the sub-request construction so only tools in `allowed_tool_names` and `allowed_model_tool_names` are included in the sub-request's `tools` array. Max chain depth is tracked via a call-depth counter passed through `calling_context`; when depth >= `max_chain_depth`, return an error tool result.
 
-### Phase 6 — Multi-Modal Input & UI Polish
+**UI — Model Tool Editor dialog**:
+8. New `src/model_tools_dialog.cpp/.h`: a dialog listing all Model Tools in a list view. Toolbar buttons: New, Edit, Duplicate, Delete, Export JSON, Import JSON.
+9. Edit panel (same dialog, right side or modal): all fields from the `ModelTool` struct. Target provider/model shown as two dropdowns populated from `ProviderManager`. Input schema has a multiline edit field for raw JSON Schema with a "Validate" button.
+10. Test/preview panel at the bottom of the edit form: a multiline input for sample arguments JSON, a "Test" button that calls `ExecuteModelTool` with those arguments and displays the result. The result pane shows both the raw JSON returned and any formatted text content.
+11. Wire the "Model Tools" toolbar button in `src/main.cpp` to open this dialog.
 
-Make the application handle diverse input types and refine the user experience.
+---
 
-- Implement **multi-modal input handling** (§6.6): attachment button, file type detection, processing pipeline with configurable filters (pass-through, extract text, summarize, custom)
-- Implement file processing for: images (base64 encoding for vision models), PDFs (text extraction), text/code files (direct inclusion), office documents (text extraction)
-- Implement the **preview-before-send** flow for processed attachments
-- Implement **theming** (§6.7): light/dark mode toggle, system theme detection, consistent styling across all UI elements
-- Implement **compact mode** (§6.8): minimal layout, always-on-top option, auto-activate on window resize threshold
-- Implement **API key encryption** using Windows DPAPI — migrate plaintext keys on first run after upgrade
-- Implement all remaining **settings UI** for global and per-project configuration
-- Implement the **collapsible left panel** animation and drag handle
-- Performance optimization, error handling hardening, edge case coverage across all existing features
+### Phase 5 — Context Management & RAG 🔄 Substantially Complete
 
-### Phase 7 — Python Bridge & Plugins
+The proof-of-concept for this phase is working. The following items remain:
 
-Embed Python to unlock the plugin system and in-process Python execution.
+**Context compression gaps**:
+1. Message pinning UI: in the transcript pane, add a right-click context menu on individual messages with a "Pin" / "Unpin" option. A pinned message gets a visual indicator (small pin icon). Pinned message IDs are stored in `project_settings.json` or `compression_state.json`. Pinned messages are excluded from condensation input even when they fall in the oldest range.
+2. Tokenizer-specific token counting: the current estimate is approximate. Add an optional tiktoken-compatible token counter (this can be a simple lookup table for GPT models and a character/word heuristic for others). Wire it into the context window preflight check.
+3. Compression failure hardening: if the compression model call fails (timeout, API error), the app currently may leave the context in an inconsistent state. Add explicit error recovery: log the failure, leave the message list untouched, and show a retry option in the UI.
 
-- Bundle CPython into the application distribution (python3.dll + standard library + pip)
-- Implement the pybind11 (or C API) bridge layer with proper GIL management on dedicated threads
-- Expose core C++ APIs to Python: project context access, tool registry, message history, context window state
-- Implement the **Python plugin system** (§5C): loader, extension point dispatch (context processors, context tools, input/output filters, data transformers), plugin lifecycle management
-- Build the **plugin management UI** (§5C.4): discover plugins, enable/disable, per-plugin configuration forms, dependency installation via bundled pip
-- Enable in-process loading of Python-based MCP servers as an optional alternative to stdio subprocess
-- Implement local embedding models via the Python bridge (sentence-transformers) as an alternative to remote embedding APIs for RAG
+**RAG production hardening** (priority order):
+4. Retrieval mode policy: add a "retrieval mode" setting per project-RAG binding (passive-only / tool-only / both). Currently both modes are always active based on the Tool checkbox. Passive-only means the model never sees the RAG tool definitions but always gets context injected; tool-only means context injection is off and the model must search explicitly.
+5. Per-chat RAG working set: after the model calls `rag_search` and selects results, those chunk IDs should be stored in a per-chat working set so they remain available in later turns without re-searching. Add `rag_add_to_working_set` and `rag_clear_working_set` tool variants, or track selected chunk IDs automatically when the model calls `rag_get_document`.
+6. Token-budget-aware RAG context trimming: before injecting the "Retrieved Project Knowledge" block into the system prompt, calculate its estimated token count. If it would push the total request over `context_window * 0.8`, trim the block by removing the lowest-confidence chunks until it fits.
+7. Production vector backend: replace the SQLite embedding BLOB cosine scan with HNSWlib (header-only C++ library, Apache 2.0 license). HNSWlib gives O(log n) approximate nearest-neighbor search instead of O(n) full scan. The library stores its index as a file on disk alongside the SQLite DB. The `RagService` class already has a clean abstraction boundary for the retrieval step.
+8. Persistent ingestion jobs: if the app crashes or is closed during a large folder ingest, the job is lost. Add a `pending_jobs.json` that records in-progress ingestion jobs. On app start, if pending jobs exist, offer to resume or discard them.
 
-### Phase 8 — Agent Workflows
+---
+
+### Phase 6 — Web Server & Multi-User Access 🔄 Phase 1 Complete, Phase 2 Pending
+
+See `web_requirements.md` for the full design specification. The web server is compiled into the executable and is operational. Refer to `web_requirements.md §Phase Roadmap` for the detailed per-task breakdown.
+
+**Phase 1 of the web feature is complete** as of April 15, 2026:
+- HTTPS/TLS with self-signed cert, PEM, and PFX modes; OpenSSL statically linked
+- Session management, rate limiting, audit log
+- Chat API routes (projects, chats, messages, SSE streaming, file upload endpoint)
+- Web Config and Admin Config dialogs (users)
+- Default web assets (HTML/CSS/JS) embedded and served from `www/`
+
+**Phase 2 of the web feature is the current priority** (see `web_requirements.md` for full task list):
+- Groups and project bindings in Admin Config
+- `$<UserName>` and `$<UserProjectFolder>` variable injection in web sessions
+- Security hardening headers (HSTS, CSP, X-Frame-Options, X-Content-Type-Options)
+- File attachment pipeline wired into model calls
+- Dark theme
+- Thinking block and tool-call rendering in `www/js/app.js`
+- Forced-password-reset flow and change-password page
+- WebSocket upgrade for streaming (currently SSE)
+
+---
+
+### Phase 7 — Desktop UI Polish & Multi-Modal Input ⬜ Not Started
+
+Clean up the desktop experience and add rich attachment support.
+
+**Multi-modal input** (do in this order):
+1. Add an **Attach** button to the chat input area. On click, open a file picker (`GetOpenFileName`) filtered to supported types (images, PDF, DOCX, XLSX, text, code).
+2. After selection, display attachment chips above the input field showing filename, type icon, and a remove (×) button. Chips persist until the message is sent.
+3. On send, for each attachment: detect type by extension, apply the appropriate input filter:
+   - Images (PNG, JPG, WebP, GIF): base64-encode; add to the `content` array as `{"type": "image_url", "image_url": {"url": "data:image/...;base64,..."}}` — only when the selected model has `supports_vision = true`.
+   - PDF / DOCX / XLSX: run through the existing RAG extraction pipeline to get plain text; include as a `{"type": "text", ...}` block prepended to the user message.
+   - Plain text / code files: read content and include as a fenced code block with the appropriate language tag.
+4. Copy attached files to `data/projects/<id>/chats/<id>/attachments/<uuid>.<ext>` and store a reference in the message JSON.
+5. Preview-before-send: after processing, show the extracted text (or image thumbnail) in a modal with "Send as-is" / "Summarize first" / "Cancel" options. The "Summarize first" path calls the active model with just the document text and a summarization prompt before appending the summary to the user message.
+6. Add a `max_attachment_tokens` global setting (default: 8000 tokens estimated). Warn if an attachment would push the request over budget.
+
+**Desktop theming**:
+7. Add a `Theme` setting to global settings (`settings.json`): values `light`, `dark`, `system`.
+8. Implement Win32 dark mode support: set `DWMWA_USE_IMMERSIVE_DARK_MODE` on the main window and dialogs, update `WM_CTLCOLOR*` handlers for all controls to use dark brushes when dark mode is active.
+9. Detect Windows system theme via `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme` registry key and watch for `WM_SETTINGCHANGE` to react to OS theme changes at runtime.
+10. Add a theme toggle button to the main window toolbar.
+
+**Compact mode**:
+11. Add a compact mode toggle: keyboard shortcut `Ctrl+Shift+M` and a toolbar button. Compact mode hides the left panel entirely, collapses the toolbar to icon-only, reduces font sizes, and makes the input area single-line (expandable on click).
+12. Implement "always on top" via `SetWindowPos(..., HWND_TOPMOST, ...)`. Expose as a checkbox in compact mode toolbar.
+13. Auto-activate compact mode when the window width drops below a configurable threshold (default: 600px). Add this threshold to global settings.
+
+**Collapsible left panel**:
+14. Add a collapse/expand toggle button at the top of the left panel (a `◀` / `▶` arrow). Clicking it animates the panel width from its current value to 0 (or ~40px icon strip) over ~150ms using a `SetTimer` animation loop. Store the collapsed state in `settings.json`.
+15. In the icon strip (collapsed state), show one project icon per project. Hovering shows a tooltip with project name. Clicking expands back to full width and selects that project.
+
+**API key encryption**:
+16. In `ProviderManager::SaveToFile`: before writing, encrypt each API key string using `CryptProtectData` (Windows DPAPI). Write the encrypted bytes as base64 in a `"api_key_encrypted"` field; omit `"api_key"`.
+17. In `ProviderManager::LoadFromFile`: if `"api_key_encrypted"` is present, decrypt with `CryptUnprotectData`; fall back to plaintext `"api_key"` for backward compatibility.
+18. On first load after upgrade (plaintext keys exist): automatically re-encrypt and re-save.
+19. Update the Provider Manager dialog so the API key field shows `●●●●●●` when a key is stored, with a show/hide toggle eye button.
+
+---
+
+### Phase 8 — Python Bridge & Plugins ⬜ Not Started
+
+Embed Python to unlock the plugin system and in-process execution.
+
+**CPython embedding** (prerequisite for everything else in this phase):
+1. Download the CPython embeddable package (e.g., `python-3.12.x-embed-amd64.zip`) into `third_party/python/`. Add a download step to `scripts/setup.ps1`.
+2. In `build.bat`, when `third_party/python/python312.dll` exists, add `/DHAVE_PYTHON`, `/I"third_party/python/include"` to CFLAGS, and `third_party/python/python312.lib` to LIBS.
+3. Implement `src/python_bridge.h/.cpp`: `PythonBridge` class that calls `Py_InitializeEx`, sets `sys.path` to include the bundled `Lib/` and a `plugins/` directory, and exposes `ExecScript(path, args)` and `CallFunction(module, func, args)` via the C API. All calls go through a single dedicated `std::thread` to avoid GIL contention with the UI thread.
+
+**Plugin loader**:
+4. Define the plugin manifest format: a `plugin.json` in each plugin folder under `plugins/` containing `{"name": "...", "extension_point": "context_processor|context_tool|input_filter|output_filter|data_transformer", "entry_module": "plugin_main", "entry_func": "run", "config_schema": {...}}`.
+5. At startup, `PythonBridge::DiscoverPlugins` scans `plugins/` for `plugin.json` files, imports each entry module, and registers the plugin in an in-memory registry.
+6. Implement each extension point dispatch:
+   - **Context processor**: called with the current message list before the request is sent; returns a (possibly modified) message list. Wire into `OpenAiClient::BuildRequest`.
+   - **Context tool**: exposed as a virtual MCP tool; when called by the model, dispatches to the plugin's `run` function with the tool arguments.
+   - **Input filter**: called with raw file content when an attachment is processed (Phase 7); returns processed text.
+   - **Output filter**: called with the assistant's final response text before it is displayed; returns (possibly modified) text.
+   - **Data transformer**: used in workflow steps (Phase 9) to transform data between steps.
+
+**Plugin Management UI**:
+7. New `src/plugin_manager_dialog.cpp/.h`: a dialog listing all discovered plugins with columns for name, extension point, status (enabled/disabled), and config.
+8. Toolbar: Enable/Disable toggle, Open Folder (opens the plugin's directory in Explorer), Install Dependencies button (calls `pip install -r requirements.txt` in the managed virtual environment via `PythonBridge`).
+9. Per-plugin config form: generated dynamically from the plugin's `config_schema` JSON Schema. Simple text/bool/number fields rendered as Win32 controls; persisted to `plugins/<name>/config.json`.
+10. Plugin output log: a `RICHEDIT` control at the bottom of the dialog showing print output and errors from plugin execution.
+
+**In-process Python MCP servers** (optional optimization, do last):
+11. Add a `"transport": "python_inprocess"` option to MCP server config. When selected, instead of spawning a subprocess, `PythonBridge` imports the server module and calls its `handle_request(json_rpc_request_str)` function directly. Response is returned as a string. This eliminates stdin/stdout overhead for Python MCP servers.
+
+**Local embedding via Python**:
+12. Implement `src/rag_embedding_python.cpp`: an embedding provider that calls a Python plugin function `embed_text(texts: list[str]) -> list[list[float]]`. This allows sentence-transformers or any Python embedding library to be used without requiring Ollama or LM Studio.
+
+---
+
+### Phase 9 — Agent Workflows ⬜ Not Started
 
 Add the workflow system for automated multi-step agent processes.
 
-- Implement the **workflow definition format** and `workflows.json` persistence (§5B)
-- Implement the **workflow execution engine**: step sequencing, model calls, tool calls, conditional branching, loops, user prompts, transform steps
-- Implement **workflow state persistence** so workflows survive application restarts
-- Build the **workflow editor UI** (§5B.4): sequential/visual step editor, add/reorder/connect steps, test/dry-run mode
-- Integrate workflows as callable tools so the orchestrating model can trigger them
-- Implement workflow progress display in the chat UI with step-by-step trace view
-- Implement workflow import/export
+**Data layer** (do first):
+1. Define the `WorkflowStep` and `Workflow` structs in `src/workflow_engine.h`. Step types: `model_call`, `tool_call`, `conditional`, `loop`, `user_prompt`, `transform`. Each step has an `id`, `type`, `input_mapping` (how to pull data from previous step outputs), `output_key` (name for this step's output in the workflow context), and type-specific fields.
+2. Implement `WorkflowEngine::LoadFromFile` / `SaveToFile` for `workflows.json`.
+3. Implement `WorkflowEngine::Execute(workflow_id, input_args, on_step_complete_callback)` in a worker thread. The execution context is a `std::map<string, nlohmann::json>` (step outputs keyed by output_key). Steps execute sequentially; conditional steps evaluate a JSONPath or simple expression against the context. Loop steps run a sub-sequence until a condition is false or max iterations is reached.
+4. Implement `WorkflowEngine::Pause` and `WorkflowEngine::Resume`: serialize the current execution context and step index to `data/workflow_state/<execution_id>.json`; reload and continue on resume.
 
-### Phase 9 — Local Inference & Future Features
+**Workflow as a tool**:
+5. When building the tool list for a chat request, add each enabled workflow as a tool. The tool name is the workflow's machine-readable id; the description is the workflow's description; the input schema is the workflow's `input_schema`.
+6. When the model calls a workflow tool, dispatch to `WorkflowEngine::Execute` and return the workflow's final output as the tool result.
 
-Add local model execution and remaining future features.
+**Workflow Editor UI**:
+7. New `src/workflow_editor_dialog.cpp/.h`: a dialog listing workflows. Toolbar: New, Edit, Delete, Duplicate, Export, Import, Run (with input form).
+8. The step editor is a vertically stacked list of step cards. Each card shows the step type, a summary of its config, and drag handles for reordering. An "Add Step" button appends a new step; a step's expand button opens its full configuration in a panel below the list.
+9. Test/dry-run mode: a "Run" button opens a small input form (from the workflow's `input_schema`), then executes the workflow and displays each step's input, output, and result in a trace view — similar to the tool trace pane in the main window.
 
-- Integrate **llama.cpp** as a built-in provider (§12.3): model file loading (GGUF), GPU detection (CUDA, Vulkan), quantization options
-- Implement the local inference configuration UI: model file browser, GPU settings, performance tuning
-- Wire the local inference provider into the same provider abstraction so it works identically to API-based providers (streaming, tool use, model selector)
-- Implement **conversation branching**: fork a conversation at any message point, creating a new chat that shares history up to the branch point and diverges from there
+---
+
+### Phase 10 — Local Inference ⬜ Not Started
+
+Add llama.cpp as a built-in local model provider.
+
+1. Add `third_party/llama.cpp` as a git submodule. Build the static library as part of `build.bat` when the submodule is present (compile `llama.cpp`, `ggml.c`, `ggml-alloc.c`, `ggml-backend.cpp`, and CUDA/Vulkan backend files if GPU is detected).
+2. Implement `src/llama_provider.h/.cpp`: a provider class that satisfies the same interface as `OpenAiClient` but calls llama.cpp's C API directly. Constructor takes model path, context size, GPU layers. `SendMessage` streams tokens via the `llama_decode` / `llama_sampling_sample` loop on a worker thread, posting delta events to the UI via `PostMessage`.
+3. Add GPU detection at build time: if CUDA is available (`nvcc` on PATH), compile ggml-cuda.cu and set `-DGGML_CUDA=ON`. If Vulkan SDK is present, compile ggml-vulkan.cpp and set `-DGGML_VULKAN=ON`. Fall back to CPU if neither is available.
+4. Add a "Local Model" provider type in the Provider Manager. When type = local, replace URL + API key fields with: model file path (file picker for `.gguf`), context size, GPU layers slider (0 = CPU only, n = offload n layers to GPU), thread count.
+5. Wire `llama_provider` into the model selector so it appears identically to API-based providers in the dropdown.
+6. Implement **conversation branching**: right-click any user or assistant message in the transcript → "Branch from here". Creates a new chat in the same project with all messages up to (and including) the selected message copied, then opens the new chat for editing. The branch-point message id is stored in `chat.json` metadata for traceability.
 
 ---
 

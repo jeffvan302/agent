@@ -1,2 +1,7 @@
 2026-04-14T19:58:22Z [127.0.0.1] login_failed user=jeff@nardana.net
 2026-04-14T19:58:33Z [127.0.0.1] login_success user=admin
+2026-04-15T01:29:36Z [127.0.0.1] login_success user=admin
+2026-04-15T01:52:13Z [system] tls_unavailable TLS configured but CPPHTTPLIB_OPENSSL_SUPPORT not defined; using HTTP
+2026-04-15T05:16:32Z [system] tls_fallback TLS cert/key resolution failed; starting HTTP
+2026-04-15T05:17:02Z [127.0.0.1] login_success user=admin
+2026-04-15T06:29:03Z [system] tls_start HTTPS started with cert: C:\Users\TheunisvanNiekerk\Code\agent\certs\server.crt

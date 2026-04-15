@@ -35,19 +35,29 @@
 // ──────────────────────────────────────────────────────────────────────────────
 struct WebServerConfig {
     bool     auto_start          = false;
-    int      port                = 8080;    // Phase 0: HTTP; Phase 1: HTTPS default 8443
+    int      port                = 8080;    // HTTP default; use 8443 for HTTPS
     std::string bind_address     = "0.0.0.0";
-    std::string base_url;                   // e.g. "http://192.168.1.10:8080"
+    std::string base_url;                   // e.g. "https://192.168.1.10:8443"
     std::string web_root;                   // absolute path; empty = auto-detect www/
     std::string active_theme     = "default";
     int      session_timeout_minutes = 60;
     int      thread_pool_size    = 4;
     size_t   max_upload_bytes    = 50ULL * 1024 * 1024;  // 50 MB
 
-    // Phase 1 TLS fields (unused in Phase 0):
-    // std::string tls_mode;        // "self_signed" | "pem" | "pfx"
-    // std::string tls_cert_file;
-    // std::string tls_key_file;
+    // ── TLS / HTTPS ───────────────────────────────────────────────────────────
+    // tls_mode: ""            = plain HTTP (default)
+    //           "self_signed" = auto-generate cert/key under <app_root>/certs/
+    //           "pem"         = load tls_cert_file + tls_key_file (PEM)
+    //           "pfx"         = load tls_pfx_file with tls_pfx_passphrase
+    std::string tls_mode;
+    std::string tls_cert_file;          // PEM certificate path (mode "pem")
+    std::string tls_key_file;           // PEM private key path (mode "pem")
+    std::string tls_pfx_file;           // PKCS#12 bundle path  (mode "pfx")
+    std::string tls_pfx_passphrase;     // PFX passphrase       (mode "pfx")
+
+    // Optional plain-HTTP port that 301-redirects every request to HTTPS.
+    // 0 = disabled.
+    int      http_redirect_port = 0;
 
     static WebServerConfig LoadFromFile(const std::filesystem::path& path);
     void SaveToFile(const std::filesystem::path& path) const;
@@ -98,6 +108,14 @@ public:
 
     // ── Audit log ─────────────────────────────────────────────────────────
     void SetAuditLogPath(const std::filesystem::path& path);
+
+    // ── TLS status (public — used by Web Config dialog) ───────────────────
+    // Returns the directory used for auto-generated certs (<app_root>/certs/).
+    std::filesystem::path TlsCertsDir() const;
+
+    // Returns days until the configured certificate expires, or -1 if
+    // unknown / not applicable (HTTP mode, cert unreadable, no OpenSSL).
+    int GetCertExpiryDays() const;
 
 private:
     // ── Session ──────────────────────────────────────────────────────────
@@ -222,6 +240,20 @@ private:
     // ── Default web-asset creation ────────────────────────────────────────
     void EnsureDefaultWebAssets() const;
 
+    // ── Vendor library caching ────────────────────────────────────────────
+    // Downloads highlight.js / marked / DOMPurify from CDN into
+    // <web_root>/js/vendor/ and <web_root>/css/vendor/ on first start.
+    // Runs in a detached thread so it never blocks Start().
+    // If files already exist or download fails, it is a silent no-op.
+    void EnsureVendorLibs() const;
+
+    // ── TLS helpers (private) ─────────────────────────────────────────────
+    // Resolves the active cert + key paths for Start() based on tls_mode.
+    // Returns false if the mode requires files that don't exist or are invalid.
+    // On "self_signed" this generates the cert/key if absent.
+    bool ResolveTlsCertAndKey(std::string& out_cert, std::string& out_key) const;
+
+
     // ── Members ───────────────────────────────────────────────────────────
     AppStorage*    storage_;
     WebUserStore*  user_store_;
@@ -230,6 +262,7 @@ private:
 
     std::unique_ptr<WebServerImpl> impl_;
     std::thread   server_thread_;
+    std::thread   redirect_thread_;     // HTTP→HTTPS redirect listener (optional)
     std::atomic<bool> running_{false};
 
     mutable std::mutex sessions_mutex_;

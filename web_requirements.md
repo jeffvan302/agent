@@ -716,3 +716,174 @@ The implementation is structured into five phases. **Phase 0 is a proof-of-conce
 ---
 
 *End of document.*
+
+---
+
+## 13. Phase Implementation Roadmap
+
+**Document version updated:** April 15, 2026  
+**Status key: ✅ Complete · 🔄 In Progress / Partial · ⬜ Not Started**
+
+---
+
+### Web Phase 1 — Embedded HTTPS Server & Core Chat API ✅ Complete
+
+Everything in this phase is implemented and working as of April 15, 2026.
+
+**Server infrastructure:**
+- cpp-httplib header-only library integrated; `WebServerImpl` owns `std::unique_ptr<httplib::Server>` switched to `httplib::SSLServer` at runtime when TLS is configured
+- `WebServerConfig` struct with all fields from §5.1; `LoadFromFile`/`SaveToFile` against `web_settings.json`
+- `WebServer::Start()` / `Stop()` / `Reconfigure()` / `IsRunning()` working; `running_` is `std::atomic<bool>`
+- Thread-pool HTTP server listening on configured port; dedicated listener thread separate from Win32 message pump
+
+**TLS / HTTPS:**
+- `#ifdef CPPHTTPLIB_OPENSSL_SUPPORT` gating — compiles as plain HTTP if OpenSSL not present
+- Self-signed cert auto-generation via OpenSSL EVP_PKEY_CTX (RSA-2048, SHA-256, 3-year validity); certs stored in `<app_root>/certs/`
+- PEM file mode: load `tls_cert_file` + `tls_key_file` directly
+- PFX/PKCS#12 mode: `d2i_PKCS12_fp` + `PKCS12_parse`, extract cert+key to cached PEM files, re-extract only when PFX is newer
+- HTTP→HTTPS redirect listener on optional `http_redirect_port`; runs on `redirect_thread_`
+- `GetCertExpiryDays()` reads the active cert's `notAfter` field and returns days remaining; Web Config dialog shows this with a ⚠ warning when ≤ 30 days
+- OpenSSL static linking fix: `src/openssl_applink.c` compiled into `agent.exe`; `build.bat` auto-detects static libs in `lib\VC\x64\MD[d]\` for both old (`_static` suffix) and new (plain name) Shining Light Productions installer layouts
+
+**Authentication & sessions:**
+- `WebUserStore` (`src/web_user_store.h/.cpp`): `User` struct, bcrypt password hashing/verification via OpenSSL EVP, `users.json` persistence with atomic write (temp + rename)
+- Session tokens: 256-bit random hex, stored in `sessions_` map under `sessions_mutex_`; sliding expiry based on `session_timeout_minutes`
+- `HttpOnly`, `Secure`, `SameSite=Strict` cookie; never accessible to JavaScript
+- Per-IP login rate limiting: 5 failures → 15-minute lockout; `rate_entries_` map under `rate_mutex_`
+- Audit log: login success/failure/logout, chat create/delete, IP address, timestamp; written to `audit_log_path_` under `audit_mutex_`
+
+**API routes (all require valid session cookie):**
+- `POST /login` — bcrypt verify, issue session cookie
+- `POST /logout` — delete session
+- `GET /api/projects` — return all projects from `AppStorage` (group filtering not yet implemented)
+- `GET /api/projects/:id/chats` — chats owned by this user in this project
+- `POST /api/projects/:id/chats` — create new chat
+- `PATCH /api/chats/:id` — rename chat
+- `DELETE /api/chats/:id` — delete chat (user's own only)
+- `GET /api/chats/:id/messages` — full message history
+- `POST /api/chats/:id/messages` — blocking send → model → store → return assistant text
+- `GET /api/chats/:id/stream` — SSE streaming send; `on_delta` pushes `data: {"delta":"..."}` events; ends with `data: {"done":true}`
+- `POST /api/chats/:id/upload` — multipart file upload; stores to `uploads/` directory
+- `POST /api/change-password` — verify old password, update bcrypt hash
+
+**Static file serving:**
+- Path traversal protection: resolve and verify path is still inside `web_root_` before opening
+- MIME type detection from extension; cache headers per §4.3
+- `{{THEME_PATH}}` template injection in HTML responses
+
+**Default web assets:**
+- `src/web_assets_default.cpp` contains `index.html`, `login.html`, `css/base.css`, `themes/default/*`, `js/app.js` as C++ string literals
+- `EnsureDefaultWebAssets()` writes them to `www/` on first launch; never overwrites existing files
+- `EnsureVendorLibs()` downloads highlight.js, marked.js, DOMPurify from CDN into `www/js/vendor/` in a detached background thread on first start
+
+**Desktop dialogs:**
+- Web Config dialog (`src/web_config_dialog.cpp`): port, bind address, base URL, TLS mode dropdown (Off / Self-signed / PEM / PFX), cert/key file pickers, Generate button for self-signed, cert expiry display, thread pool size, session timeout, max upload MB, theme dropdown, Start/Stop button, active session count
+- Admin Config dialog (`src/admin_config_dialog.cpp`): user list with create/edit/delete; fields: username, display name, email, password (bcrypt-hashed), enabled, force-password-reset; active sessions list with per-user forced logout button
+
+---
+
+### Web Phase 2 — Groups, Access Control & Security Hardening 🔄 Current Priority
+
+#### Step-by-step implementation tasks
+
+**A. Groups and project bindings — WebUserStore**
+
+1. Add `Group` struct to `src/web_user_store.h`: `{string id, string name, vector<string> user_ids}`. Add `ProjectBinding` struct: `{string project_id, vector<string> group_ids, bool user_project_folder_enabled, string user_project_folder_root}`.
+2. Add `groups_` and `project_bindings_` vectors to `WebUserStore`'s private members.
+3. Update `WebUserStore::SaveToFile` to serialize `groups` and `project_bindings` arrays into `users.json` alongside `users`.
+4. Update `WebUserStore::LoadFromFile` to deserialize both new arrays; tolerate missing keys (empty arrays as default) for backward compatibility with existing `users.json` files.
+5. Add public methods: `CreateGroup(name) → Group`, `UpdateGroup(Group)`, `DeleteGroup(id)`, `GetAllGroups() → vector<Group>`, `AddUserToGroup(user_id, group_id)`, `RemoveUserFromGroup(user_id, group_id)`.
+6. Add: `SetProjectBinding(ProjectBinding)`, `GetProjectBinding(project_id) → optional<ProjectBinding>`, `GetProjectsForUser(user_id) → vector<string>` (returns project_ids where any of the user's group_ids appears in the binding's group_ids).
+
+**B. Groups and project bindings — Admin Config dialog**
+
+7. Add a "Groups" tab to the Admin Config dialog alongside the existing "Users" tab. The tab contains: a list view of groups (name, member count); Add/Edit/Delete buttons; an edit panel with group name field and a user-assignment checklist (all users listed with checkboxes).
+8. Add a "Project Bindings" tab. It shows a list of all projects (from `AppStorage::GetAllProjects`). Clicking a project shows: a checklist of groups that have access to it, a "User project folder" checkbox, and a "Root path" text field with a browse button. Saving writes the binding via `WebUserStore::SetProjectBinding`.
+9. Wire `WebUserStore::DeleteUser` to also remove that user_id from all `groups_` user_ids lists.
+
+**C. Access-controlled project list**
+
+10. In `WebServer::HandleGetProjects`: replace the current "return all projects" logic with `user_store_->GetProjectsForUser(session.user_id)`. Filter `AppStorage::GetAllProjects()` to only return projects whose IDs are in that list. If the list is empty (no bindings configured yet), fall back to returning all projects to avoid locking out admins during initial setup — add a comment noting this fallback should be removed once all users are in groups.
+
+**D. User variable injection**
+
+11. In `WebServer::StreamModel` and `WebServer::CallModel`: after resolving the project's variable map, inject `"UserName" → session.username` unconditionally for web sessions.
+12. Look up the project binding via `WebUserStore::GetProjectBinding(project_id)`. If `user_project_folder_enabled` is true, compute the per-user folder path as `<user_project_folder_root>\<username>\` and inject `"UserProjectFolder" → <computed_path>`. Create the folder on disk if it does not exist (`std::filesystem::create_directories`).
+13. These injected variables flow into MCP server command/args/env substitution and into the project system prompt via `ApplyProjectVariables` — no additional wiring needed if the variable map is passed correctly.
+
+**E. Security hardening headers**
+
+14. In `WebServer::RegisterRoutes`, add a post-routing hook (or add headers in each handler) that sets these response headers on every response:
+    - `X-Frame-Options: DENY`
+    - `X-Content-Type-Options: nosniff`
+    - `Referrer-Policy: strict-origin-when-cross-origin`
+15. On HTTPS responses only (check `config_.tls_mode != ""`), add: `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+16. Add a `Content-Security-Policy` header. Start with a strict policy and relax only what's needed: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'`. The `'unsafe-inline'` for styles is needed for highlight.js themes.
+
+**F. Message submission rate limiting**
+
+17. Add a second rate-limit table `message_rate_entries_` in `WebServer` (similar to `rate_entries_` for login). Track per-IP message POST counts with a sliding 60-second window. Default limit: 60 messages/minute/IP. If exceeded, return HTTP 429 with a `Retry-After` header.
+18. Apply this check at the top of `HandleSendMessage` and `HandleStreamMessage`.
+
+**G. Forced password reset flow**
+
+19. In `HandleLogin` success path: after creating the session, check `user.force_password_reset`. If true, set a `needs_password_reset` flag on the session (add this field to `Session` struct) and respond with a redirect to `/change-password` instead of `/`.
+20. In `RequireAuth`: if the session has `needs_password_reset = true`, block all routes except `GET /change-password` and `POST /api/change-password`; redirect others to `/change-password`.
+21. Add `GET /change-password` route: serve `www/change-password.html` (create this file; it mirrors `login.html` structure with old-password and new-password fields).
+22. In `POST /api/change-password`: validate old password, enforce password policy (≥ 10 chars, upper + lower + digit), update the bcrypt hash, clear `force_password_reset`, clear `needs_password_reset` on the session. Return 200 on success or 400 with an error message on validation failure.
+
+**H. Web UI — dark theme**
+
+23. Create `www/themes/dark/theme.json`: `{"name": "Dark", "author": "Nardana Inc.", "version": "1.0", "description": "Dark theme"}`.
+24. Create `www/themes/dark/style.css`: override all CSS custom properties from `base.css` with dark values. Target palette: page background `#1e1e1e`, sidebar `#252526`, header `#2d2d2d`, user messages `#1a3a5c`, model messages `#2d2d2d`, text primary `#d4d4d4`, accent `#4fc3f7`, code blocks `#1e1e1e` with `#d4d4d4` text.
+25. Copy or symlink `www/themes/default/logo.svg` and `favicon.ico` into `www/themes/dark/`, or create dark variants.
+26. Add the dark theme files to `src/web_assets_default.cpp` so they are embedded and auto-created alongside the default theme.
+
+**I. Web UI — thinking blocks and tool call rendering**
+
+27. In `www/js/app.js`: after the message content is rendered through `marked.parse()`, scan the raw assistant text for `<thinking>...</thinking>` blocks. Replace each with a collapsible `<details><summary>Thinking…</summary><pre>...</pre></details>` element. Apply a `.thinking-block` CSS class.
+28. In the SSE stream handler in `app.js`: when a `tool_call` event arrives (add this as a distinct SSE event type from the server), render a collapsed `.tool-call-block` div with header `"Called: tool_name"` and a toggle to expand the arguments and result JSON.
+29. Update `HandleStreamMessage` in `web_server.cpp` to emit `event: tool_call\ndata: {"name":"...","args":{...}}\n\n` SSE events when a tool call is dispatched, and `event: tool_result\ndata: {"name":"...","result":...}\n\n` when the result arrives.
+
+**J. Web UI — sidebar and stop button**
+
+30. In `www/js/app.js`: add a collapse button `◀` at the top of the sidebar. On click, add class `sidebar--collapsed` to the sidebar element. In `base.css`, `.sidebar--collapsed` sets `width: 0; overflow: hidden`. Store the collapsed state in `localStorage.setItem('sidebar_collapsed', '1')` and restore on page load.
+31. During SSE streaming in `app.js`: show a "Stop" button in the compose bar. On click, abort the `EventSource` connection (close it) and send `DELETE /api/chats/:id/stream` (add this route to the server; it clears any in-flight request flag for that chat).
+
+---
+
+### Web Phase 3 — File Attachments & WebSocket Streaming ⬜ Not Started
+
+**File attachment pipeline:**
+
+1. In `WebServerConfig`, add `uploads_dir` (default: `uploads/` relative to app root). Create the directory on startup if it does not exist.
+2. `HandleUpload` (already a route): validate that the uploaded file's MIME type is in the allowed list (images, PDF, DOCX, XLSX, text, code extensions). Reject others with 415. Store with a UUID filename in `uploads/<session_token_prefix>/<uuid>.<ext>`. Return the UUID to the client.
+3. In `HandleStreamMessage` and `HandleSendMessage`: accept an optional `"attachments": ["<uuid>", ...]` array in the JSON body. For each UUID, resolve the path under `uploads/`. Call `BuildUserContentWithAttachments` (already declared in `web_server.h`) which reads each file and constructs an augmented content array:
+   - Images → base64-encode, add as `{"type": "image_url", ...}` — only if project's selected model supports vision.
+   - PDF/DOCX/XLSX → run through `RagService`'s extraction pipeline; include extracted text as a `{"type": "text", ...}` block.
+   - Text/code → read content; include as a `{"type": "text", ...}` block.
+4. In `www/js/app.js`: add a `📎` button next to the send button. On click, trigger `<input type="file" multiple>`. After selection, `POST` each file to `/api/chats/:id/upload` and store the returned UUID. Show attachment chips above the input field (filename + remove ×). On send, include the UUID list in the message POST body.
+5. Render attachment chips in sent user messages: a small badge showing the filename. Images render as inline thumbnails (use the `/api/chats/:id/attachments/<uuid>` route to serve the file — add this route in step 6).
+6. Add `GET /api/chats/:id/attachments/:uuid` route that serves the uploaded file with appropriate content-type headers (only accessible to the owning user's session).
+
+**WebSocket streaming upgrade:**
+
+7. In `WebServerImpl`, alongside the existing `httplib::SSLServer`, add a WebSocket upgrade handler. cpp-httplib supports WebSocket via `svr.Get("/ws/chats/:id", ws_handler)` where the handler is called with an `httplib::WebSocketMessage`.
+8. In the WebSocket handler: authenticate via a `token` query parameter (the session cookie cannot be sent with WS upgrade in all browsers; pass it as `?token=<value>` in the URL). Validate the token against `sessions_`.
+9. Replace the SSE `HandleStreamMessage` with a WebSocket version: when a text frame arrives with `{"action": "send", "content": "...", "attachments": [...]}`, call `StreamModel` with an `on_delta` that sends `{"delta": "..."}` WebSocket text frames. On completion send `{"done": true}`. On error send `{"error": "..."}`.
+10. In `www/js/app.js`: replace the `EventSource` streaming path with a `WebSocket` connection to `wss://<host>/ws/chats/<id>?token=<session_token>`. On `onmessage`: parse JSON, append delta text or handle done/error. On `onclose`/`onerror`: show a reconnecting indicator and attempt reconnect with exponential backoff (1s, 2s, 4s, max 30s).
+11. Keep the SSE route as a fallback for environments that block WebSocket (configurable in `web_settings.json`).
+
+---
+
+### Web Phase 4 — Admin Web Panel & Account Self-Service ⬜ Not Started
+
+1. Add an `is_admin` boolean field to the `User` struct and `users.json` schema. Expose it in the Admin Config dialog (a checkbox labelled "Web admin — can access `/admin/` panel").
+2. In `RequireAuth`: add an overload `RequireAdminAuth` that additionally checks `user.is_admin`; return 403 if not.
+3. Implement `GET /admin/` route: serve `www/admin/index.html` (a separate admin SPA). This page is gated by `RequireAdminAuth`.
+4. Admin web panel — Users page: `GET /admin/api/users` returns all users; `POST /admin/api/users` creates; `PATCH /admin/api/users/:id` updates; `DELETE /admin/api/users/:id` soft-disables (set `enabled = false`; never hard-delete). The web UI mirrors the desktop Admin Config Users tab.
+5. Admin web panel — Groups page: same CRUD pattern via `/admin/api/groups/*`.
+6. Admin web panel — Sessions page: `GET /admin/api/sessions` returns all active sessions (token prefix, username, IP, idle time); `DELETE /admin/api/sessions/:token_prefix` forces logout.
+7. Email-based password reset (requires SMTP config): add `smtp_host`, `smtp_port`, `smtp_user`, `smtp_password`, `smtp_from` to `web_settings.json`. Implement `POST /api/auth/forgot-password` that generates a one-time reset token (store in a `reset_tokens_` map with 30-minute expiry), sends an email with a reset link, and returns 200 regardless of whether the email exists (to prevent user enumeration). Implement `POST /api/auth/reset-password?token=<token>` that validates the token, checks password policy, updates the hash, and invalidates the token.
+8. TOTP two-factor authentication: add `totp_secret` (base32) and `totp_enabled` fields to `User`. Implement `POST /admin/api/users/:id/totp/setup` (generates a secret, returns a QR code URI for an authenticator app). Implement `POST /admin/api/users/:id/totp/verify` (verifies a 6-digit TOTP code against the secret using the TOTP algorithm — implement TOTP in a small helper using `bcrypt.h` or a new `totp.h`). When `totp_enabled = true`, the login flow adds a second step: after password verification, issue a temporary "awaiting-2fa" session and redirect to a TOTP entry page; only upgrade to a full session after successful TOTP verification.
+

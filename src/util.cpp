@@ -7,6 +7,9 @@
 #include <cwctype>
 #include <iomanip>
 #include <sstream>
+#include <fstream>
+#include <mutex>
+#include <filesystem>
 
 namespace {
 std::string TrimAscii(std::string value) {
@@ -147,3 +150,80 @@ std::optional<double> ParseDouble(const std::wstring& value) {
     }
     return std::nullopt;
 }
+
+namespace {
+    std::filesystem::path g_log_path;
+    std::mutex g_log_mutex;
+    LogLevel g_log_level = LogLevel::Info;
+    bool g_initialized = false;
+
+    const char* LevelPrefix(LogLevel level) {
+        switch (level) {
+            case LogLevel::Error: return "[ERROR]";
+            case LogLevel::Warn:  return "[WARN] ";
+            case LogLevel::Info:  return "[INFO] ";
+            case LogLevel::Debug: return "[DEBUG]";
+        }
+        return "[????]";
+    }
+}  // namespace
+
+void Logger::Initialize(const std::filesystem::path& log_dir, LogLevel level) {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    if (g_initialized) return;
+
+    g_log_level = level;
+    std::error_code ec;
+    std::filesystem::create_directories(log_dir, ec);
+    g_log_path = log_dir / "agent.log";
+
+    std::ofstream ofs(g_log_path, std::ios::app);
+    if (ofs.is_open()) {
+        ofs << "\n=== Logger initialized at " << CurrentTimestampUtc() << " ===\n";
+    }
+    g_initialized = true;
+}
+
+void Logger::Shutdown() {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    if (!g_initialized) return;
+    Flush();
+    g_initialized = false;
+}
+
+void Logger::Flush() {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    if (!g_initialized || g_log_path.empty()) return;
+}
+
+void Logger::LogImpl(LogLevel level, const std::string& context, const std::string& msg) {
+    if (!g_initialized || level > g_log_level) return;
+
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    if (!g_log_path.empty()) {
+        std::ofstream ofs(g_log_path, std::ios::app);
+        if (ofs.is_open()) {
+            ofs << CurrentTimestampUtc() << " "
+                << LevelPrefix(level) << " ";
+            if (!context.empty()) {
+                ofs << "[" << context << "] ";
+            }
+            ofs << msg << "\n";
+        }
+    }
+}
+
+void Logger::Error(const std::string& msg) { LogImpl(LogLevel::Error, "", msg); }
+void Logger::Warn(const std::string& msg) { LogImpl(LogLevel::Warn, "", msg); }
+void Logger::Info(const std::string& msg) { LogImpl(LogLevel::Info, "", msg); }
+void Logger::Debug(const std::string& msg) { LogImpl(LogLevel::Debug, "", msg); }
+
+void Logger::Error(const std::wstring& msg) { Error(WideToUtf8(msg)); }
+void Logger::Warn(const std::wstring& msg) { Warn(WideToUtf8(msg)); }
+void Logger::Info(const std::wstring& msg) { Info(WideToUtf8(msg)); }
+void Logger::Debug(const std::wstring& msg) { Debug(WideToUtf8(msg)); }
+
+void Logger::Error(const std::string& context, const std::string& msg) { LogImpl(LogLevel::Error, context, msg); }
+void Logger::Warn(const std::string& context, const std::string& msg) { LogImpl(LogLevel::Warn, context, msg); }
+void Logger::Info(const std::string& context, const std::string& msg) { LogImpl(LogLevel::Info, context, msg); }
+void Logger::Debug(const std::string& context, const std::string& msg) { LogImpl(LogLevel::Debug, context, msg); }

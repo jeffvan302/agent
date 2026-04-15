@@ -53,14 +53,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
-where cl.exe >nul 2>nul
+where cl.exe >/dev/null 2>/dev/null
 if errorlevel 1 (
     echo ERROR: cl.exe is not available after MSVC environment initialization.
     popd
     exit /b 1
 )
 
-where rc.exe >nul 2>nul
+where rc.exe >/dev/null 2>/dev/null
 if errorlevel 1 (
     echo ERROR: rc.exe is not available. Install the Windows SDK resource compiler component.
     popd
@@ -80,8 +80,93 @@ if /I "%BUILD_TYPE%"=="release" (
 )
 
 set INCLUDES=/I"%SCRIPT_DIR%src" /I"%SCRIPT_DIR%third_party" /I"%SCRIPT_DIR%third_party\sqlite" /I"%SCRIPT_DIR%third_party\httplib"
-set SOURCES=src\main.cpp src\util.cpp src\storage.cpp src\openai_client.cpp src\prompt_dialog.cpp src\project_setup_dialog.cpp src\project_settings_dialog.cpp src\provider_manager.cpp src\mcp_manager.cpp src\mcp_server_manager.cpp src\rag_service.cpp src\rag_service_manager.cpp src\context_compression.cpp src\context_compression_manager.cpp src\model_tools_manager.cpp src\web_user_store.cpp src\web_server.cpp src\web_assets_default.cpp src\web_config_dialog.cpp src\admin_config_dialog.cpp third_party\sqlite\sqlite3.c
-set LIBS=user32.lib gdi32.lib comctl32.lib comdlg32.lib shell32.lib shlwapi.lib ole32.lib winhttp.lib cabinet.lib bcrypt.lib
+set SOURCES=src\main.cpp src\util.cpp src\storage.cpp src\openai_client.cpp src\prompt_dialog.cpp src\project_setup_dialog.cpp src\project_settings_dialog.cpp src\provider_manager.cpp src\mcp_manager.cpp src\mcp_server_manager.cpp src\rag_service.cpp src\rag_service_manager.cpp src\context_compression.cpp src\context_compression_manager.cpp src\model_tools_manager.cpp src\web_user_store.cpp src\web_server.cpp src\web_assets_default.cpp src\web_config_dialog.cpp src\admin_config_dialog.cpp src\openssl_applink.c third_party\sqlite\sqlite3.c
+set LIBS=user32.lib gdi32.lib comctl32.lib comdlg32.lib shell32.lib shlwapi.lib ole32.lib winhttp.lib cabinet.lib bcrypt.lib advapi32.lib
+
+rem -- OpenSSL auto-detection ---------------------------------------------------
+rem If third_party\openssl\ exists and contains the expected headers, enable HTTPS.
+rem Run  scripts\download_openssl.ps1  to populate that directory automatically.
+rem
+rem Static linking is strongly preferred -- it embeds OpenSSL into agent.exe so
+rem no separate DLLs are needed on end-user machines.
+rem
+rem Static lib search order:
+rem   1. third_party\openssl\lib\VC\x64\MD\libssl_static.lib   (old naming, release)
+rem   2. third_party\openssl\lib\VC\x64\MD\libssl.lib           (new naming 3.4+, release)
+rem   3. same two checks for MDd (debug)
+rem   4. third_party\openssl\lib\libssl_static.lib              (flat layout)
+rem   5. third_party\openssl\lib\libssl.lib                     (import lib -- dynamic)
+rem
+set OPENSSL_DIR=%SCRIPT_DIR%third_party\openssl
+set OPENSSL_SSL_LIB=
+set OPENSSL_CRYPTO_LIB=
+set OPENSSL_STATIC=0
+
+if not exist "%OPENSSL_DIR%\include\openssl\ssl.h" goto :no_openssl
+
+rem -- Pick VC subdirectory for this runtime variant ---------------------------
+if /I "%BUILD_TYPE%"=="release" (
+    set OPENSSL_STATIC_DIR=%OPENSSL_DIR%\lib\VC\x64\MD
+) else (
+    set OPENSSL_STATIC_DIR=%OPENSSL_DIR%\lib\VC\x64\MDd
+)
+
+rem -- Try _static suffix first (OpenSSL 3.3 and earlier) ----------------------
+if exist "%OPENSSL_STATIC_DIR%\libssl_static.lib" (
+    set OPENSSL_SSL_LIB=%OPENSSL_STATIC_DIR%\libssl_static.lib
+    set OPENSSL_CRYPTO_LIB=%OPENSSL_STATIC_DIR%\libcrypto_static.lib
+    set OPENSSL_STATIC=1
+    goto :openssl_found
+)
+
+rem -- Try plain name in VC subdir (OpenSSL 3.4+ renamed _static -> plain) -----
+rem    libs in lib\VC\x64\MD[d]\ are ALWAYS the static variants
+if exist "%OPENSSL_STATIC_DIR%\libssl.lib" (
+    set OPENSSL_SSL_LIB=%OPENSSL_STATIC_DIR%\libssl.lib
+    set OPENSSL_CRYPTO_LIB=%OPENSSL_STATIC_DIR%\libcrypto.lib
+    set OPENSSL_STATIC=1
+    goto :openssl_found
+)
+
+rem -- Flat lib\ fallbacks (static suffix) -------------------------------------
+if exist "%OPENSSL_DIR%\lib\libssl_static.lib" (
+    set OPENSSL_SSL_LIB=%OPENSSL_DIR%\lib\libssl_static.lib
+    set OPENSSL_CRYPTO_LIB=%OPENSSL_DIR%\lib\libcrypto_static.lib
+    set OPENSSL_STATIC=1
+    goto :openssl_found
+)
+
+rem -- Last resort: flat lib\libssl.lib = import lib (dynamic DLL required) ----
+if exist "%OPENSSL_DIR%\lib\libssl.lib" (
+    set OPENSSL_SSL_LIB=%OPENSSL_DIR%\lib\libssl.lib
+    set OPENSSL_CRYPTO_LIB=%OPENSSL_DIR%\lib\libcrypto.lib
+    set OPENSSL_STATIC=0
+    goto :openssl_found
+)
+
+goto :no_openssl
+
+:openssl_found
+echo OpenSSL found -- enabling HTTPS/TLS support.
+if "%OPENSSL_STATIC%"=="1" (
+    echo   Linking STATICALLY -- no runtime DLLs needed.
+) else (
+    echo   Linking dynamically -- DLLs will be copied to build directory.
+)
+set CFLAGS=%CFLAGS% /DCPPHTTPLIB_OPENSSL_SUPPORT
+set INCLUDES=%INCLUDES% /I"%OPENSSL_DIR%\include"
+rem applink.c is compiled via src\openssl_applink.c (already in SOURCES above).
+rem OpenSSL static builds also need these Windows system libs:
+set LIBS=%LIBS% %OPENSSL_SSL_LIB% %OPENSSL_CRYPTO_LIB% Crypt32.lib ws2_32.lib
+
+if "%OPENSSL_STATIC%"=="0" (
+    rem Copy runtime DLLs to build output so the exe runs in-place
+    for %%f in ("%OPENSSL_DIR%\bin\*.dll") do (
+        copy /y "%%f" "%OUT_DIR%\" >/dev/null 2>&1
+    )
+)
+
+:no_openssl
 
 rc /nologo /fo "%OUT_DIR%\app.res" app.rc
 if errorlevel 1 (

@@ -1,3 +1,5 @@
+// AUTO-GENERATED — do not edit by hand.
+// Including the header first gives const variables external linkage.
 #include "web_assets_default.h"
 
 namespace DefaultWebAssets {
@@ -10,9 +12,10 @@ const char kIndexHtml[] = R"ASSET(<!DOCTYPE html>
   <title>Agent Chat</title>
   <link rel="stylesheet" href="/css/base.css">
   <link rel="stylesheet" href="{{THEME_PATH}}/style.css">
-  <!-- Syntax highlighting for code blocks -->
-  <link rel="stylesheet"
-        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css">
+  <!-- Vendor libraries — served from local cache after first-start download.
+       The server 302-redirects to cdnjs until the background download
+       completes, so syntax highlighting works from day one. -->
+  <link rel="stylesheet" href="/css/vendor/vs2015.min.css">
 </head>
 <body>
 <div id="app">
@@ -59,10 +62,9 @@ const char kIndexHtml[] = R"ASSET(<!DOCTYPE html>
   </div>
 </div>
 
-<!-- Libraries loaded from CDN for Phase 0; bundle locally in Phase 1 -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/11.2.0/marked.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js"></script>
+<script src="/js/vendor/highlight.min.js"></script>
+<script src="/js/vendor/marked.min.js"></script>
+<script src="/js/vendor/purify.min.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>
@@ -108,7 +110,7 @@ const char kLoginHtml[] = R"ASSET(<!DOCTYPE html>
       const password = document.getElementById('password').value;
 
       btn.disabled   = true;
-      btn.textContent = 'Signing in...';
+      btn.textContent = 'Signing in…';
       errEl.style.display = 'none';
 
       try {
@@ -132,7 +134,7 @@ const char kLoginHtml[] = R"ASSET(<!DOCTYPE html>
           btn.textContent     = 'Sign In';
         }
       } catch (err) {
-        errEl.textContent   = 'Network error -- is the server running?';
+        errEl.textContent   = 'Network error — is the server running?';
         errEl.style.display = 'block';
         btn.disabled        = false;
         btn.textContent     = 'Sign In';
@@ -183,6 +185,9 @@ const char kChangePasswordHtml[] = R"ASSET(<!DOCTYPE html>
   </div>
 
   <script>
+    // Check if this is a forced reset (no current password needed) by peeking
+    // at the URL param or the login redirect.  The server indicates forced reset
+    // via the /login response body; we store it in sessionStorage for one page hop.
     const forced = sessionStorage.getItem('force_password_reset') === 'true';
     if (forced) {
       document.getElementById('current-group').style.display = 'none';
@@ -213,7 +218,7 @@ const char kChangePasswordHtml[] = R"ASSET(<!DOCTYPE html>
       }
 
       btn.disabled    = true;
-      btn.textContent = 'Updating...';
+      btn.textContent = 'Updating…';
 
       try {
         const body = { new_password: newPw };
@@ -235,7 +240,7 @@ const char kChangePasswordHtml[] = R"ASSET(<!DOCTYPE html>
           btn.textContent     = 'Update Password';
         }
       } catch (err) {
-        errEl.textContent   = 'Network error -- please try again.';
+        errEl.textContent   = 'Network error — please try again.';
         errEl.style.display = 'block';
         btn.disabled        = false;
         btn.textContent     = 'Update Password';
@@ -679,7 +684,8 @@ html, body {
 }
 )ASSET";
 
-const char kAppJs[] = R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
+const char kAppJs[] =
+    R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
    app.js — Web chat application
    Vanilla JS, no framework.  Uses Server-Sent Events for streaming responses.
    ───────────────────────────────────────────────────────────────────────── */
@@ -1077,7 +1083,8 @@ function startInlineRename(entry, nameSpan, projectId, chatId, currentName) {
   input.addEventListener('click', e => e.stopPropagation());
 }
 
-// ── File attachment ───────────────────────────────────────────────────────
+// ── File attachment ─────────────────────────────────────────────────────)ASSET"
+    R"ASSET(──
 if (attachBtn && fileInput) {
   attachBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
@@ -1275,7 +1282,11 @@ async function init() {
 init();
 )ASSET";
 
-const char kThemeDefaultCss[] = R"ASSET(:root {
+const char kThemeDefaultCss[] = R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
+   Default Light Theme — overrides CSS custom properties defined in base.css
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Backgrounds */
   --color-bg-page:            #f5f7fa;
   --color-bg-sidebar:         #1e2433;
   --color-bg-sidebar-hover:   #2a3245;
@@ -1291,6 +1302,8 @@ const char kThemeDefaultCss[] = R"ASSET(:root {
   --color-bg-button-primary:  #2563eb;
   --color-bg-button-hover:    #1d4ed8;
   --color-bg-button-danger:   #dc2626;
+
+  /* Text */
   --color-text-primary:       #111827;
   --color-text-secondary:     #4b5563;
   --color-text-muted:         #9ca3af;
@@ -1301,19 +1314,27 @@ const char kThemeDefaultCss[] = R"ASSET(:root {
   --color-text-button:        #ffffff;
   --color-text-error:         #dc2626;
   --color-text-link:          #2563eb;
+
+  /* Accents */
   --color-accent-primary:     #2563eb;
   --color-accent-hover:       #1d4ed8;
   --color-accent-thinking:    #d97706;
   --color-accent-danger:      #dc2626;
+
+  /* Borders */
   --color-border-main:        #e5e7eb;
   --color-border-subtle:      #f3f4f6;
   --color-border-input:       #d1d5db;
   --color-border-focus:       #2563eb;
+
+  /* Typography */
   --font-body:      "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono:      "Cascadia Code", "Consolas", "Courier New", monospace;
   --font-size-base: 14px;
   --font-size-small:12px;
   --font-size-large:16px;
+
+  /* Shape */
   --radius-message: 12px;
   --radius-button:  6px;
   --radius-input:   6px;
