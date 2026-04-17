@@ -425,6 +425,14 @@ std::optional<std::string> FindBindingValue(const ProjectMcpServerBinding& bindi
     return it->value;
 }
 
+std::optional<std::string> FindVariableValue(const std::vector<ProjectMcpVariableValue>& variables, const std::string& name) {
+    const auto it = std::find_if(variables.begin(), variables.end(), [&](const ProjectMcpVariableValue& variable) { return variable.name == name; });
+    if (it == variables.end()) {
+        return std::nullopt;
+    }
+    return it->value;
+}
+
 void ReplaceAll(std::string& text, const std::string& needle, const std::string& replacement) {
     if (needle.empty()) {
         return;
@@ -437,10 +445,23 @@ void ReplaceAll(std::string& text, const std::string& needle, const std::string&
     }
 }
 
-std::string ApplyBindingVariables(std::string text, const ProjectMcpServerBinding& binding) {
-    for (const auto& variable : binding.variables) {
-        ReplaceAll(text, "$" + variable.name + "$", variable.value);
+void UpsertVariableValue(std::vector<ProjectMcpVariableValue>& values,
+                         const std::string& name,
+                         const std::string& value) {
+    auto it = std::find_if(values.begin(), values.end(), [&](const ProjectMcpVariableValue& variable) { return variable.name == name; });
+    if (it != values.end()) {
+        it->value = value;
+    } else {
+        values.push_back({name, value});
+    }
+}
+
+std::string ApplyVariableValues(std::string text, const std::vector<ProjectMcpVariableValue>& values) {
+    for (const auto& variable : values) {
+        if (variable.name.empty()) continue;
         ReplaceAll(text, "$<" + variable.name + ">$", variable.value);
+        ReplaceAll(text, "$" + variable.name + "$", variable.value);
+        ReplaceAll(text, "$<" + variable.name + ">", variable.value);
     }
     return text;
 }
@@ -469,7 +490,8 @@ std::string ApplyProjectVariables(std::string text, const std::vector<ProjectMcp
 
 bool TextUsesVariable(const std::string& text, const std::string& name) {
     return text.find("$" + name + "$") != std::string::npos ||
-           text.find("$<" + name + ">$") != std::string::npos;
+           text.find("$<" + name + ">$") != std::string::npos ||
+           text.find("$<" + name + ">") != std::string::npos;
 }
 
 bool ConfigUsesVariable(const McpServerConfig& config, const std::string& name) {
@@ -1460,7 +1482,14 @@ std::optional<ProjectMcpServerBinding> McpManager::FindProjectBinding(const std:
 std::optional<McpServerConfig> McpManager::ResolveConfigForProject(const McpServerConfig& config, const std::string& project_id, std::string* error) const {
     McpServerConfig resolved = config;
     const auto used_global_variables = UsedGlobalVariables(config, global_variables_);
-    const bool uses_project_variables = !config.variables.empty() || !used_global_variables.empty();
+    std::vector<ProjectMcpVariableValue> project_variables;
+    if (storage_ && !project_id.empty()) {
+        project_variables = storage_->LoadProjectSettings(project_id).project_variables;
+    }
+    const bool uses_named_project_variables = std::any_of(project_variables.begin(), project_variables.end(), [&](const ProjectMcpVariableValue& variable) {
+        return !variable.name.empty() && ConfigUsesVariable(config, variable.name);
+    });
+    const bool uses_project_variables = !config.variables.empty() || !used_global_variables.empty() || uses_named_project_variables;
 
     if (config.scope == McpServerScope::PerProject && project_id.empty()) {
         if (error) {
@@ -1489,18 +1518,47 @@ std::optional<McpServerConfig> McpManager::ResolveConfigForProject(const McpServ
     }
 
     std::vector<std::string> missing_variables;
-    for (const auto& variable : config.variables) {
-        const auto value = FindBindingValue(*binding, variable.name);
-        if (!value || Trim(*value).empty()) {
-            missing_variables.push_back("$<" + variable.name + ">$");
+    std::vector<ProjectMcpVariableValue> resolved_values;
+
+    auto resolve_value = [&](const std::string& name, bool prefer_project_value) -> std::optional<std::string> {
+        const auto project_value = FindVariableValue(project_variables, name);
+        const auto binding_value = FindBindingValue(*binding, name);
+        if (prefer_project_value && project_value && !Trim(*project_value).empty()) {
+            return project_value;
         }
+        if (binding_value && !Trim(*binding_value).empty()) {
+            return binding_value;
+        }
+        if (project_value && !Trim(*project_value).empty()) {
+            return project_value;
+        }
+        return std::nullopt;
+    };
+
+    auto require_value = [&](const std::string& name, bool prefer_project_value) {
+        if (name.empty() || FindVariableValue(resolved_values, name)) {
+            return;
+        }
+        const auto value = resolve_value(name, prefer_project_value);
+        if (!value) {
+            missing_variables.push_back("$<" + name + ">$");
+            return;
+        }
+        UpsertVariableValue(resolved_values, name, *value);
+    };
+
+    for (const auto& variable : config.variables) {
+        require_value(variable.name, false);
     }
     for (const auto& variable : used_global_variables) {
-        const auto value = FindBindingValue(*binding, variable.name);
-        if (!value || Trim(*value).empty()) {
-            missing_variables.push_back("$<" + variable.name + ">$");
+        require_value(variable.name, true);
+    }
+    for (const auto& variable : project_variables) {
+        if (!variable.name.empty() && ConfigUsesVariable(config, variable.name)) {
+            require_value(variable.name, true);
         }
     }
+
     if (!missing_variables.empty()) {
         std::ostringstream stream;
         stream << "Missing project values for MCP variables: ";
@@ -1516,30 +1574,13 @@ std::optional<McpServerConfig> McpManager::ResolveConfigForProject(const McpServ
         return std::nullopt;
     }
 
-    resolved.command = ApplyBindingVariables(resolved.command, *binding);
-    resolved.working_directory = ApplyBindingVariables(resolved.working_directory, *binding);
+    resolved.command = ApplyVariableValues(resolved.command, resolved_values);
+    resolved.working_directory = ApplyVariableValues(resolved.working_directory, resolved_values);
     for (auto& argument : resolved.arguments) {
-        argument = ApplyBindingVariables(argument, *binding);
+        argument = ApplyVariableValues(argument, resolved_values);
     }
     for (auto& entry : resolved.env_entries) {
-        entry = ApplyBindingVariables(entry, *binding);
-    }
-
-    // Apply project-level variables ($<VarName> syntax, no trailing '$').
-    // These are loaded once per server resolution; server launches are infrequent
-    // so the extra storage read is acceptable.
-    if (storage_) {
-        const auto proj_settings = storage_->LoadProjectSettings(project_id);
-        if (!proj_settings.project_variables.empty()) {
-            resolved.command = ApplyProjectVariables(std::move(resolved.command), proj_settings.project_variables);
-            resolved.working_directory = ApplyProjectVariables(std::move(resolved.working_directory), proj_settings.project_variables);
-            for (auto& argument : resolved.arguments) {
-                argument = ApplyProjectVariables(std::move(argument), proj_settings.project_variables);
-            }
-            for (auto& entry : resolved.env_entries) {
-                entry = ApplyProjectVariables(std::move(entry), proj_settings.project_variables);
-            }
-        }
+        entry = ApplyVariableValues(entry, resolved_values);
     }
 
     return resolved;

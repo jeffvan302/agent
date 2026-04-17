@@ -10,6 +10,7 @@
 #include "project_settings_dialog.h"
 #include "provider_manager.h"
 #include "rag_service.h"
+#include "rag_tool_bridge.h"
 #include "rag_service_manager.h"
 #include "context_compression.h"
 #include "context_compression_manager.h"
@@ -45,6 +46,7 @@ constexpr UINT kChatDeltaMessage = WM_APP + 1;
 constexpr UINT kChatFinishedMessage = WM_APP + 2;
 constexpr UINT kToolTraceMessage = WM_APP + 3;
 constexpr UINT kMcpChangedMessage = WM_APP + 4;
+constexpr UINT kWebContentChangedMessage = WM_APP + 5;
 
 enum ControlId : int {
     kTree = 3001,
@@ -1615,12 +1617,8 @@ McpToolCallResult CallModelToolAgent(
         }
     }
 
-    // Build RAG tool definitions scoped to this tool's rag_bindings
-    // Create a temporary project-like binding by calling BuildRagToolDefinitions with the scoped bindings
-    // We pass the tool's rag_bindings to the rag_service queries by overriding the project_id binding
-    // For now we use the existing project_id; rag access is filtered at query time by what bindings allow.
-    // The sub-agent inherits the calling project_id for variable resolution.
-    const auto sub_rag_defs = BuildRagToolDefinitions(rag_service, project_id);
+    // RAGs are exposed as virtual MCP servers, one server per project-bound library.
+    const auto sub_rag_tools = rag_tools::BuildRagToolSet(rag_service, project_id);
 
     // Build full tool definitions
     std::vector<ChatToolDefinition> tool_definitions;
@@ -1633,7 +1631,7 @@ McpToolCallResult CallModelToolAgent(
         def.parameters_json = exposed.input_schema_json;
         tool_definitions.push_back(std::move(def));
     }
-    for (const auto& rd : sub_rag_defs) {
+    for (const auto& rd : sub_rag_tools.definitions) {
         tool_definitions.push_back(rd);
     }
 
@@ -1660,53 +1658,8 @@ McpToolCallResult CallModelToolAgent(
     sub_request.temperature   = 0.2;
     sub_request.max_tokens    = 4096;
 
-    // inject_on_start: pre-search RAGs whose bindings have inject_on_start=true
-    // and retrieval_mode Both or PassiveOnly, then prepend results to system prompt.
-    {
-        // Gather all project RAG results once (filtered per library below)
-        // Use a generous limit so we can partition per-library after the fact.
-        constexpr int kInjectQueryLimit = 64;
-        const auto all_inject_results = (!task_instructions.empty() && rag_service)
-            ? rag_service->QueryProject(project_id, task_instructions, kInjectQueryLimit)
-            : std::vector<RagQueryResult>{};
-
-        std::string inject_context;
-        for (const auto& rb : tool_config->rag_bindings) {
-            if (!rb.inject_on_start) continue;
-            if (rb.retrieval_mode != RagRetrievalMode::Both &&
-                rb.retrieval_mode != RagRetrievalMode::PassiveOnly) continue;
-
-            std::optional<RagLibraryConfig> lib;
-            if (rag_service) lib = rag_service->GetLibrary(rb.rag_id);
-            const std::string lib_name = lib ? lib->name : rb.rag_id;
-            const int max_chunks = std::max(1, rb.max_chunks);
-
-            std::ostringstream oss;
-            int count = 0;
-            for (const auto& r : all_inject_results) {
-                if (r.rag_id != rb.rag_id) continue;
-                if (count >= max_chunks) break;
-                oss << "\n[RAG: " << r.rag_name
-                    << " | Source: " << r.document_title
-                    << " | Score: " << r.score << "]\n"
-                    << r.text << "\n";
-                ++count;
-            }
-            if (count > 0) {
-                inject_context += "\n\n### Pre-Searched Knowledge: " + lib_name + "\n";
-                inject_context += oss.str();
-            }
-        }
-
-        if (!inject_context.empty()) {
-            const std::string header =
-                "## Pre-Searched Context\n"
-                "The following relevant knowledge was retrieved from RAG libraries "
-                "before this task began. Use it when relevant.\n";
-            sub_request.system_prompt =
-                header + inject_context + "\n\n" + sub_request.system_prompt;
-        }
-    }
+    // Passive/pre-searched RAG injection is intentionally inactive for now.
+    // Project RAG access is available through the active virtual MCP tools above.
 
     // Append structured JSON reply format requirement to system prompt
     sub_request.system_prompt +=
@@ -1783,8 +1736,14 @@ McpToolCallResult CallModelToolAgent(
                     result.success = false;
                     result.is_tool_error = true;
                     result.content_text = "Invalid arguments for tool '" + tc.name + "'.";
-                } else if (IsRagToolName(tc.name)) {
-                    result = CallRagTool(rag_service, mcp_manager, project_id, tc.name, tc.arguments_json);
+                } else if (rag_tools::IsRagToolName(tc.name, &sub_rag_tools.routes)) {
+                    result = rag_tools::CallRagTool(
+                        rag_service,
+                        mcp_manager,
+                        project_id,
+                        tc.name,
+                        tc.arguments_json,
+                        &sub_rag_tools.routes);
                 } else {
                     result = mcp_manager->CallExposedTool(project_id, tc.name, tc.arguments_json);
                 }
@@ -2257,6 +2216,7 @@ private:
     void OnChatFinished(ChatFinishedPayload* payload);
     void OnToolTrace(ToolTracePayload* payload);
     void OnMcpStateChanged();
+    void OnWebContentChanged();
     void RenderTranscript();
     void RenderToolTrace();
     void UpdateStatus(const std::wstring& text);
@@ -2403,6 +2363,9 @@ LRESULT CALLBACK MainWindow::WindowProc(HWND hwnd, UINT message, WPARAM w_param,
         return 0;
     case kMcpChangedMessage:
         self->OnMcpStateChanged();
+        return 0;
+    case kWebContentChangedMessage:
+        self->OnWebContentChanged();
         return 0;
     case WM_CLOSE:
         DestroyWindow(hwnd);
@@ -2920,7 +2883,6 @@ void MainWindow::EditProjectSettings() {
 
     // Save MCP bindings
     mcp_manager_.SaveProjectBindings(active_project_id_, result->mcp_bindings);
-    mcp_manager_.ConnectAutoServers(active_project_id_);
 
     // Save project settings (including selected compression config - global configs are managed separately)
     ProjectSettings saved_settings;
@@ -2939,6 +2901,7 @@ void MainWindow::EditProjectSettings() {
         result->selected_compression_config_id,
     });
     rag_service_.SaveProjectBindings(active_project_id_, result->rag_bindings);
+    mcp_manager_.ConnectAutoServers(active_project_id_);
 
     RenderToolTrace();
     UpdateStatus(L"Project settings saved.");
@@ -2978,8 +2941,12 @@ void MainWindow::EnsureWebServer() {
         default_cfg.SaveToFile(settings_path);
     }
     auto cfg = WebServerConfig::LoadFromFile(settings_path);
-    web_server_ = std::make_unique<WebServer>(&storage_, &user_store_, cfg, app_root);
+    web_server_ = std::make_unique<WebServer>(
+        &storage_, &user_store_, cfg, app_root, &mcp_manager_, &rag_service_);
     web_server_->SetAuditLogPath(app_root / "web_audit.log");
+    web_server_->SetContentChangedCallback([hwnd = hwnd_]() {
+        PostMessageW(hwnd, kWebContentChangedMessage, 0, 0);
+    });
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -3332,6 +3299,7 @@ std::string MainWindow::BuildMcpProjectContext() const {
     }
 
     std::unordered_map<std::string, std::string> values;
+    const auto project_settings = storage_.LoadProjectSettings(active_project_id_);
     for (const auto& binding : bindings) {
         for (const auto& variable : binding.variables) {
             const std::string name = Trim(variable.name);
@@ -3339,6 +3307,13 @@ std::string MainWindow::BuildMcpProjectContext() const {
             if (!name.empty() && !value.empty()) {
                 values[name] = value;
             }
+        }
+    }
+    for (const auto& variable : project_settings.project_variables) {
+        const std::string name = Trim(variable.name);
+        const std::string value = Trim(variable.value);
+        if (!name.empty() && !value.empty()) {
+            values[name] = value;
         }
     }
 
@@ -3549,6 +3524,14 @@ void MainWindow::SendCurrentMessage() {
         request.system_prompt += mcp_project_context;
     }
 
+    const std::string rag_context = rag_tools::BuildRagProjectContext(&rag_service_, active_project_id_);
+    if (!rag_context.empty()) {
+        if (!request.system_prompt.empty()) {
+            request.system_prompt += "\n\n";
+        }
+        request.system_prompt += rag_context;
+    }
+
     // Lazy-load per-chat working set from disk if not already in memory.
     auto ws_it = rag_working_sets_by_chat_.find(active_chat_id_);
     if (ws_it == rag_working_sets_by_chat_.end()) {
@@ -3557,10 +3540,9 @@ void MainWindow::SendCurrentMessage() {
     }
     const std::vector<RagWorkingSetEntry>& current_working_set = ws_it->second;
 
-    // Compute token budgets for RAG context, reserving a portion of the context window.
-    // Passive context: up to 15% of context window; working set: up to 10%.
+    // Compute the token budget for active RAG search results retained in the working set.
+    // Passive RAG context injection is intentionally inactive in this phase.
     const int context_window = request.model.context_window;
-    const int rag_passive_budget  = context_window > 0 ? context_window * 15 / 100 : 0;
     const int rag_working_budget  = context_window > 0 ? context_window * 10 / 100 : 0;
 
     // Include the working set from prior turns first (closest to the user message)
@@ -3571,16 +3553,6 @@ void MainWindow::SendCurrentMessage() {
             request.system_prompt += "\n\n";
         }
         request.system_prompt += working_set_context;
-    }
-
-    // Passive RAG context for this turn's query
-    const std::string rag_context = rag_service_.BuildContextBlock(
-        active_project_id_, user_message.content, 12, rag_passive_budget);
-    if (!rag_context.empty()) {
-        if (!request.system_prompt.empty()) {
-            request.system_prompt += "\n\n";
-        }
-        request.system_prompt += rag_context;
     }
 
     if (selected_compression_config) {
@@ -3597,7 +3569,10 @@ void MainWindow::SendCurrentMessage() {
     const std::string project_id = active_project_id_;
     const std::string chat_id = active_chat_id_;
     const auto exposed_tools = mcp_manager_.GetExposedToolsForProject(project_id);
-    const auto rag_tool_definitions = BuildRagToolDefinitions(&rag_service_, project_id);
+    const auto rag_tool_set = rag_tools::BuildRagToolSet(&rag_service_, project_id);
+    const auto rag_tool_definitions = rag_tool_set.definitions;
+    const auto rag_tool_routes = rag_tool_set.routes;
+    const auto rag_exposed_tools = rag_tool_set.exposed_tools;
     const auto all_model_tools = storage_.LoadModelTools();
     // Filter model tools to only those enabled for this project.
     const auto project_settings_for_tools = storage_.LoadProjectSettings(project_id);
@@ -3635,17 +3610,14 @@ void MainWindow::SendCurrentMessage() {
             }
         }
 
-        // Collect RAG library names (Both/PassiveOnly retrieval modes)
+        // Collect RAG library names that are available as active tools.
         std::vector<std::string> rag_names;
-        std::vector<std::string> inject_rag_names;
         for (const auto& rb : mt.rag_bindings) {
-            if (rb.retrieval_mode == RagRetrievalMode::Both ||
-                rb.retrieval_mode == RagRetrievalMode::PassiveOnly) {
+            if (rb.enabled && rb.can_read && rb.expose_as_tool &&
+                rb.retrieval_mode != RagRetrievalMode::PassiveOnly &&
+                rb.retrieval_mode != RagRetrievalMode::Disabled) {
                 if (const auto lib = rag_service_.GetLibrary(rb.rag_id)) {
                     rag_names.push_back(lib->name);
-                    if (rb.inject_on_start) {
-                        inject_rag_names.push_back(lib->name);
-                    }
                 }
             }
         }
@@ -3663,18 +3635,10 @@ void MainWindow::SendCurrentMessage() {
                 desc += ".";
             }
             if (!rag_names.empty()) {
-                desc += " RAG knowledge libraries: ";
+                desc += " RAG MCP servers: ";
                 for (size_t i = 0; i < rag_names.size(); ++i) {
                     if (i) desc += ", ";
                     desc += rag_names[i];
-                }
-                desc += ".";
-            }
-            if (!inject_rag_names.empty()) {
-                desc += " Pre-searches at start: ";
-                for (size_t i = 0; i < inject_rag_names.size(); ++i) {
-                    if (i) desc += ", ";
-                    desc += inject_rag_names[i];
                 }
                 desc += ".";
             }
@@ -3688,13 +3652,8 @@ void MainWindow::SendCurrentMessage() {
             for (const auto& sn : mcp_server_names) {
                 instr_desc += " [MCP server: " + sn + "]";
             }
-            for (size_t i = 0; i < rag_names.size(); ++i) {
-                instr_desc += " [RAG library: " + rag_names[i];
-                if (i < inject_rag_names.size() &&
-                    std::find(inject_rag_names.begin(), inject_rag_names.end(), rag_names[i]) != inject_rag_names.end()) {
-                    instr_desc += " (pre-searched)";
-                }
-                instr_desc += "]";
+            for (const auto& rag_name : rag_names) {
+                instr_desc += " [RAG MCP server: " + rag_name + "]";
             }
             instr_desc += ". Provide sufficient context for the agent to complete the task using these resources.";
         }
@@ -3789,7 +3748,7 @@ void MainWindow::SendCurrentMessage() {
         return;
     }
 
-    std::thread([hwnd = hwnd_, request, project_id, chat_id, existing_count, exposed_tools, rag_tool_definitions, model_tool_definitions, model_tools, project_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
+    std::thread([hwnd = hwnd_, request, project_id, chat_id, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, model_tool_definitions, model_tools, project_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
         constexpr int kMaxToolRounds = 8;
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
@@ -3804,6 +3763,9 @@ void MainWindow::SendCurrentMessage() {
                 : (exposed.description + " (MCP server: " + exposed.server_name + ", tool: " + exposed.tool_name + ")");
             definition.parameters_json = exposed.input_schema_json;
             tool_definitions.push_back(std::move(definition));
+            tool_lookup[exposed.alias] = exposed;
+        }
+        for (const auto& exposed : rag_exposed_tools) {
             tool_lookup[exposed.alias] = exposed;
         }
         tool_definitions.insert(tool_definitions.end(), rag_tool_definitions.begin(), rag_tool_definitions.end());
@@ -3918,8 +3880,15 @@ void MainWindow::SendCurrentMessage() {
                     for (size_t pi = 0; pi < pending.size(); ++pi) {
                         if (!pending[pi].tool_call.arguments_valid) continue;
                         if (IsModelToolAlias(pending[pi].tool_call.name)) continue;
-                        if (IsRagToolName(pending[pi].tool_call.name)) {
-                            pending[pi].result = CallRagTool(rag_service, mcp_manager, project_id, pending[pi].tool_call.name, pending[pi].tool_call.arguments_json, working_set_additions.get());
+                        if (rag_tools::IsRagToolName(pending[pi].tool_call.name, &rag_tool_routes)) {
+                            pending[pi].result = rag_tools::CallRagTool(
+                                rag_service,
+                                mcp_manager,
+                                project_id,
+                                pending[pi].tool_call.name,
+                                pending[pi].tool_call.arguments_json,
+                                &rag_tool_routes,
+                                working_set_additions.get());
                         } else {
                             pending[pi].result = mcp_manager->CallExposedTool(project_id, pending[pi].tool_call.name, pending[pi].tool_call.arguments_json);
                         }
@@ -3932,8 +3901,15 @@ void MainWindow::SendCurrentMessage() {
                     // No model tools — run all calls serially
                     for (auto& p : pending) {
                         if (!p.tool_call.arguments_valid) continue;
-                        if (IsRagToolName(p.tool_call.name)) {
-                            p.result = CallRagTool(rag_service, mcp_manager, project_id, p.tool_call.name, p.tool_call.arguments_json, working_set_additions.get());
+                        if (rag_tools::IsRagToolName(p.tool_call.name, &rag_tool_routes)) {
+                            p.result = rag_tools::CallRagTool(
+                                rag_service,
+                                mcp_manager,
+                                project_id,
+                                p.tool_call.name,
+                                p.tool_call.arguments_json,
+                                &rag_tool_routes,
+                                working_set_additions.get());
                         } else {
                             p.result = mcp_manager->CallExposedTool(project_id, p.tool_call.name, p.tool_call.arguments_json);
                         }
@@ -3948,8 +3924,8 @@ void MainWindow::SendCurrentMessage() {
                     const auto tool_it = tool_lookup.find(p.tool_call.name);
                     if (tool_it != tool_lookup.end()) {
                         trace_payload->entry.title = tool_it->second.server_name + " / " + tool_it->second.tool_name;
-                    } else if (IsRagToolName(p.tool_call.name)) {
-                        trace_payload->entry.title = "RAG / " + p.tool_call.name;
+                    } else if (rag_tools::IsRagToolName(p.tool_call.name, &rag_tool_routes)) {
+                        trace_payload->entry.title = rag_tools::TraceTitleForRagTool(p.tool_call.name, rag_tool_routes);
                     } else if (IsModelToolAlias(p.tool_call.name)) {
                         trace_payload->entry.title = "Agent / " + p.tool_call.name;
                     } else {
@@ -3983,7 +3959,40 @@ void MainWindow::SendCurrentMessage() {
         }
 
         if (!success && error.empty()) {
-            error = "The model exceeded the MCP tool-call loop limit.";
+            ChatRequestOptions final_request = request;
+            final_request.messages = working_messages;
+            if (!final_request.system_prompt.empty()) {
+                final_request.system_prompt += "\n\n";
+            }
+            final_request.system_prompt +=
+                "The MCP tool-call round limit has been reached. Do not call or "
+                "request any more tools. Use the tool results already present in "
+                "the conversation to write the final answer. If the requested work "
+                "succeeded, say so and summarize the important output. If it did "
+                "not fully succeed, explain the last observed state and what remains.";
+
+            const auto final_result = OpenAIClient::StreamChat(
+                final_request,
+                [hwnd, project_id, chat_id](const std::string& piece) {
+                    auto* payload = new ChatDeltaPayload;
+                    payload->project_id = project_id;
+                    payload->chat_id = chat_id;
+                    payload->text = piece;
+                    PostMessageW(hwnd, kChatDeltaMessage, 0, reinterpret_cast<LPARAM>(payload));
+                });
+
+            if (final_result.success && !final_result.full_text.empty()) {
+                MessageRecord assistant_message;
+                assistant_message.role = "assistant";
+                assistant_message.content = final_result.full_text;
+                assistant_message.created_at = CurrentTimestampUtc();
+                working_messages.push_back(std::move(assistant_message));
+                success = true;
+            } else {
+                error = final_result.error.empty()
+                    ? "The model exceeded the MCP tool-call loop limit."
+                    : "The model exceeded the MCP tool-call loop limit, and the final summary failed: " + final_result.error;
+            }
         }
 
         auto* final_payload = new ChatFinishedPayload;
@@ -4210,6 +4219,10 @@ void MainWindow::OnMcpStateChanged() {
     RenderToolTrace();
 }
 
+void MainWindow::OnWebContentChanged() {
+    ReloadProjects(active_project_id_, active_chat_id_);
+}
+
 void MainWindow::RenderTranscript() {
     std::wstring transcript;
     if (active_chat_id_.empty()) {
@@ -4219,7 +4232,8 @@ void MainWindow::RenderTranscript() {
             if (message.role == "tool") {
                 continue;
             }
-            if (message.role == "assistant" && message.content.empty()) {
+            if (message.role == "assistant" &&
+                (message.content.empty() || !message.tool_calls_json.empty())) {
                 continue;
             }
 
@@ -4511,30 +4525,35 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmd_line, int show_comm
     controls.dwICC = ICC_TREEVIEW_CLASSES | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&controls);
 
-    MainWindow window;
-    HWND hwnd = window.Create(instance);
-    if (!hwnd) {
-        Logger::Error("Failed to create main window");
-        Logger::Shutdown();
-        return 1;
+    int exit_code = 0;
+    {
+        MainWindow window;
+        HWND hwnd = window.Create(instance);
+        if (!hwnd) {
+            Logger::Error("Failed to create main window");
+            Logger::Shutdown();
+            return 1;
+        }
+
+        if (args.web_config) {
+            Logger::Info("Opening Web Config from command line");
+            window.OpenWebConfig();
+        }
+
+        ShowWindow(hwnd, show_command);
+        UpdateWindow(hwnd);
+
+        MSG msg{};
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+
+        Logger::Info("Agent Desktop shutting down");
+        exit_code = static_cast<int>(msg.wParam);
     }
-
-    if (args.web_config) {
-        Logger::Info("Opening Web Config from command line");
-        window.OpenWebConfig();
-    }
-
-    ShowWindow(hwnd, show_command);
-    UpdateWindow(hwnd);
-
-    MSG msg{};
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-
-    Logger::Info("Agent Desktop shutting down");
+    Logger::Info("Agent Desktop shutdown complete");
     Logger::Shutdown();
 
-    return static_cast<int>(msg.wParam);
+    return exit_code;
 }

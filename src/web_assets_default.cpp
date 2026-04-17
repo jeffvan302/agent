@@ -65,6 +65,10 @@ const char kIndexHtml[] = R"ASSET(<!DOCTYPE html>
 <script src="/js/vendor/highlight.min.js"></script>
 <script src="/js/vendor/marked.min.js"></script>
 <script src="/js/vendor/purify.min.js"></script>
+<script src="/js/vendor/mermaid.min.js"></script>
+<script src="/js/vendor/vega.min.js"></script>
+<script src="/js/vendor/vega-lite.min.js"></script>
+<script src="/js/vendor/vega-embed.min.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>
@@ -84,7 +88,7 @@ const char kLoginHtml[] = R"ASSET(<!DOCTYPE html>
     <div class="login-card">
       <h1>Welcome back</h1>
       <p class="login-subtitle">Sign in to continue</p>
-      <form id="login-form" autocomplete="on">
+      <form id="login-form" autocomplete="on" method="POST" action="/login">
         <div class="form-group">
           <label for="username">Username</label>
           <input type="text" id="username" name="username"
@@ -101,6 +105,7 @@ const char kLoginHtml[] = R"ASSET(<!DOCTYPE html>
     </div>
   </div>
 
+  <script src="/js/login.js"></script>
   <script>
     document.getElementById('login-form').addEventListener('submit', async function(e) {
       e.preventDefault();
@@ -161,7 +166,7 @@ const char kChangePasswordHtml[] = R"ASSET(<!DOCTYPE html>
       <p class="login-subtitle" id="subtitle">
         You must set a new password before continuing.
       </p>
-      <form id="cp-form" autocomplete="off">
+      <form id="cp-form" autocomplete="off" method="POST" action="/api/change-password">
         <div class="form-group" id="current-group">
           <label for="current-password">Current Password</label>
           <input type="password" id="current-password" name="current-password"
@@ -171,7 +176,7 @@ const char kChangePasswordHtml[] = R"ASSET(<!DOCTYPE html>
           <label for="new-password">New Password</label>
           <input type="password" id="new-password" name="new-password"
                  autocomplete="new-password" autofocus required
-                 placeholder="Minimum 8 characters">
+                 placeholder="Minimum 10 characters">
         </div>
         <div class="form-group">
           <label for="confirm-password">Confirm New Password</label>
@@ -184,6 +189,7 @@ const char kChangePasswordHtml[] = R"ASSET(<!DOCTYPE html>
     </div>
   </div>
 
+  <script src="/js/change-password.js"></script>
   <script>
     // Check if this is a forced reset (no current password needed) by peeking
     // at the URL param or the login redirect.  The server indicates forced reset
@@ -206,8 +212,8 @@ const char kChangePasswordHtml[] = R"ASSET(<!DOCTYPE html>
 
       errEl.style.display = 'none';
 
-      if (newPw.length < 8) {
-        errEl.textContent   = 'Password must be at least 8 characters.';
+      if (newPw.length < 10) {
+        errEl.textContent   = 'Password must be at least 10 characters.';
         errEl.style.display = 'block';
         return;
       }
@@ -249,6 +255,114 @@ const char kChangePasswordHtml[] = R"ASSET(<!DOCTYPE html>
   </script>
 </body>
 </html>
+)ASSET";
+
+const char kLoginJs[] = R"ASSET('use strict';
+
+document.getElementById('login-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+
+  const btn = document.getElementById('login-btn');
+  const errEl = document.getElementById('login-error');
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+
+  btn.disabled = true;
+  btn.textContent = 'Signing in...';
+  errEl.style.display = 'none';
+
+  try {
+    const resp = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      if (data.force_password_reset) {
+        sessionStorage.setItem('force_password_reset', 'true');
+        window.location.href = '/change-password';
+      } else {
+        window.location.href = '/';
+      }
+    } else {
+      errEl.textContent = data.error || 'Login failed.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    }
+  } catch (err) {
+    errEl.textContent = 'Network error - is the server running?';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+});
+)ASSET";
+
+const char kChangePasswordJs[] = R"ASSET('use strict';
+
+let forced = sessionStorage.getItem('force_password_reset') === 'true';
+if (forced) {
+  document.getElementById('current-group').style.display = 'none';
+  document.getElementById('subtitle').textContent =
+    'Please set a new password before continuing.';
+  sessionStorage.removeItem('force_password_reset');
+}
+
+document.getElementById('cp-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+
+  const btn = document.getElementById('cp-btn');
+  const errEl = document.getElementById('cp-error');
+  const current = document.getElementById('current-password').value;
+  const newPw = document.getElementById('new-password').value;
+  const confirm = document.getElementById('confirm-password').value;
+
+  errEl.style.display = 'none';
+
+  if (newPw.length < 10) {
+    errEl.textContent = 'Password must be at least 10 characters.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (newPw !== confirm) {
+    errEl.textContent = 'Passwords do not match.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Updating...';
+
+  try {
+    const body = { new_password: newPw };
+    if (!forced) body.current_password = current;
+
+    const resp = await fetch('/api/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      window.location.href = '/';
+    } else {
+      errEl.textContent = data.error || 'Failed to update password.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Update Password';
+    }
+  } catch (err) {
+    errEl.textContent = 'Network error - please try again.';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Update Password';
+  }
+});
 )ASSET";
 
 const char kBaseCss[] = R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
@@ -515,6 +629,41 @@ html, body {
   line-height: 1.5;
 }
 
+.thinking-block summary::before { content: ">"; font-size: 10px; }
+.thinking-block[open] summary::before { content: "v"; }
+.thinking-block.thinking-live {
+  box-shadow: inset 0 0 0 1px var(--color-accent-thinking);
+}
+.thinking-block.thinking-live summary::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent-thinking);
+  animation: blink 0.9s ease-in-out infinite;
+}
+
+/* Diagrams and charts */
+.diagram-block {
+  width: 100%;
+  overflow-x: auto;
+  margin: 0.75em 0;
+  padding: 10px;
+  border: 1px solid var(--color-border-main);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-main);
+}
+.diagram-block svg,
+.diagram-block canvas {
+  max-width: 100%;
+}
+.diagram-error {
+  color: var(--color-text-error);
+}
+.diagram-error pre {
+  margin-top: 8px;
+}
+
 /* Streaming indicator */
 .streaming-cursor {
   display: inline-block;
@@ -688,7 +837,8 @@ html, body {
 }
 .login-btn:hover { background: var(--color-bg-button-hover); }
 .login-btn:disabled { opacity: 0.5; cursor: default; }
-#login-error {
+#login-error,
+#cp-error {
   margin-top: 14px;
   padding: 9px 12px;
   background: #fef2f2;
@@ -718,6 +868,19 @@ marked.setOptions({
   breaks: true,
   gfm: true,
 });
+
+if (window.mermaid) {
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    theme: 'default',
+    flowchart: {
+      htmlLabels: false,
+    },
+  });
+}
+
+let diagramRenderId = 0;
 
 // ── State ─────────────────────────────────────────────────────────────────
 let state = {
@@ -765,28 +928,152 @@ async function api(method, path, body) {
 }
 
 // ── Markdown rendering ────────────────────────────────────────────────────
-function renderMarkdown(text) {
-  if (!text) return '';
-  // Extract <thinking>...</thinking> blocks before markdown parsing
-  const thinkingBlocks = [];
-  let processed = text.replace(/<thinking>([\s\S]*?)<\/thinking>/gi, (match, content) => {
-    const idx = thinkingBlocks.length;
-    thinkingBlocks.push(content.trim());
-    return `\x00THINKING_BLOCK_${idx}\x00`;
-  });
-  const raw = marked.parse(processed);
+function renderMarkdown(text, options = {}) {
+  const extracted = extractThinkingBlocks(text || '', !!options.streaming);
+  const raw = marked.parse(extracted.markdown);
   let result = DOMPurify.sanitize(raw, {
     ADD_TAGS: ['details', 'summary'],
+    ADD_ATTR: ['open'],
     FORBID_ATTR: ['onerror', 'onload'],
   });
-  // Replace placeholders with collapsible thinking blocks
-  thinkingBlocks.forEach((content, idx) => {
-    const placeholder = `\x00THINKING_BLOCK_${idx}\x00`;
-    const block = `<details class="thinking-block"><summary>Thinking…</summary><pre class="thinking-content">${escapeHtml(content)}</pre></details>`;
-    result = result.replace(placeholder, block);
-  });
+
+  for (const block of extracted.blocks) {
+    result = replacePlaceholder(result, block.placeholder,
+      renderThinkingBlock(block.content, block.open, !!options.streaming));
+  }
   return result;
 }
+
+function extractThinkingBlocks(text, streaming) {
+  const blocks = [];
+  let markdown = text.replace(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi,
+    function(_match, content) {
+      const placeholder = 'THINKING_BLOCK_' + blocks.length + '_PLACEHOLDER';
+      blocks.push({ placeholder, content: content.trim(), open: streaming });
+      return '\n\n' + placeholder + '\n\n';
+    });
+
+  const openMatch = /<think(?:ing)?>/i.exec(markdown);
+  if (openMatch) {
+    const placeholder = 'THINKING_BLOCK_' + blocks.length + '_PLACEHOLDER';
+    const contentStart = openMatch.index + openMatch[0].length;
+    const content = markdown.slice(contentStart).replace(/<\/think(?:ing)?>/ig, '');
+    blocks.push({ placeholder, content: content.trim(), open: true });
+    markdown = markdown.slice(0, openMatch.index) + '\n\n' + placeholder + '\n\n';
+  }
+
+  markdown = markdown.replace(/<\/think(?:ing)?>/ig, '');
+  return { markdown, blocks };
+}
+
+function renderThinkingBlock(content, open, streaming) {
+  const classes = 'thinking-block' + (streaming ? ' thinking-live' : '');
+  const state = streaming ? 'Thinking now' : 'Thinking';
+  const body = content && content.trim() ? content.trim() : 'Thinking...';
+  return '<details class="' + classes + '"' + (open ? ' open' : '') + '>' +
+    '<summary>' + state + '</summary>' +
+    '<div class="thinking-content">' + escapeHtml(body) + '</div>' +
+    '</details>';
+}
+
+function replacePlaceholder(html, placeholder, replacement) {
+  const escaped = escapeRegExp(placeholder);
+  html = html.replace(new RegExp('<p>\\s*' + escaped + '\\s*</p>', 'g'), replacement);
+  return html.replace(new RegExp(escaped, 'g'), replacement);
+}
+
+function postProcessMessageBubble(bubble, options = {}) {
+  const renderDiagrams = options.renderDiagrams !== false;
+  if (renderDiagrams) {
+    renderMermaidBlocks(bubble);
+    renderVegaBlocks(bubble);
+  }
+  bubble.querySelectorAll('pre code:not(.hljs)').forEach(el => {
+    if (!isDiagramLanguage(getCodeLanguage(el))) {
+      hljs.highlightElement(el);
+    }
+  });
+}
+
+function getCodeLanguage(codeEl) {
+  for (const cls of codeEl.classList) {
+    if (cls.indexOf('language-') === 0) return cls.slice(9).toLowerCase();
+    if (cls.indexOf('lang-') === 0) return cls.slice(5).toLowerCase();
+  }
+  return '';
+}
+
+function isDiagramLanguage(lang) {
+  return lang === 'mermaid' || lang === 'vega-lite' ||
+    lang === 'vegalite' || lang === 'vega';
+}
+
+function renderMermaidBlocks(container) {
+  if (!window.mermaid) return;
+  container.querySelectorAll('pre code').forEach(codeEl => {
+    if (getCodeLanguage(codeEl) !== 'mermaid') return;
+    const pre = codeEl.closest('pre');
+    if (!pre || pre.dataset.diagramRendered) return;
+    pre.dataset.diagramRendered = '1';
+    const source = codeEl.textContent.trim();
+    if (!source) return;
+
+    const host = document.createElement('div');
+    host.className = 'diagram-block mermaid-diagram';
+    host.textContent = 'Rendering Mermaid diagram...';
+    pre.replaceWith(host);
+
+    const id = 'mermaid-diagram-' + (++diagramRenderId);
+    try {
+      mermaid.render(id, source).then(result => {
+        host.innerHTML = DOMPurify.sanitize(result.svg, {
+          USE_PROFILES: { svg: true, svgFilters: true },
+        });
+      }).catch(err => showDiagramError(host, 'Mermaid', err, source));
+    } catch (err) {
+      showDiagramError(host, 'Mermaid', err, source);
+    }
+  });
+}
+
+function renderVegaBlocks(container) {
+  if (!window.vegaEmbed) return;
+  container.querySelectorAll('pre code').forEach(codeEl => {
+    const lang = getCodeLanguage(codeEl);
+    if (lang !== 'vega-lite' && lang !== 'vegalite' && lang !== 'vega') return;
+    const pre = codeEl.closest('pre');
+    if (!pre || pre.dataset.diagramRendered) return;
+    pre.dataset.diagramRendered = '1';
+    const source = codeEl.textContent.trim();
+    if (!source) return;
+
+    const host = document.createElement('div');
+    host.className = 'diagram-block vega-diagram';
+    host.textContent = 'Rendering chart...';
+    pre.replaceWith(host);
+
+    let spec;
+    try {
+      spec = JSON.parse(source);
+    } catch (err) {
+      showDiagramError(host, 'Vega-Lite', err, source);
+      return;
+    }
+
+    vegaEmbed(host, spec, { actions: false, renderer: 'svg' })
+      .catch(err => showDiagramError(host, 'Vega-Lite', err, source));
+  });
+}
+
+function showDiagramError(host, kind, err, source) {
+  host.classList.add('diagram-error');
+  const message = err && err.message ? err.message : String(err || 'Render failed');
+  host.innerHTML = '<strong>' + kind + ' render failed.</strong>' +
+    '<div>' + escapeHtml(message) + '</div>' +
+    '<pre><code>' + escapeHtml(source) + '</code></pre>';
+}
+)ASSET"
+    R"ASSET(
 
 // ── Message rendering ─────────────────────────────────────────────────────
 function renderMessages(messages) {
@@ -812,7 +1099,7 @@ function buildMessageRow(role, content) {
 
   if (role === 'assistant') {
     bubble.innerHTML = renderMarkdown(content);
-    bubble.querySelectorAll('pre code:not(.hljs)').forEach(el => hljs.highlightElement(el));
+    postProcessMessageBubble(bubble);
   } else {
     const p = document.createElement('p');
     p.style.whiteSpace = 'pre-wrap';
@@ -849,10 +1136,11 @@ function createStreamingRow() {
 
   function updateText(delta) {
     accumulated += delta;
-    // Show raw accumulated text while streaming (fast, no re-parse each token)
-    bubble.textContent = accumulated;
-    bubble.appendChild(Object.assign(document.createElement('span'),
-      { className: 'streaming-cursor' }));
+    bubble.innerHTML = renderMarkdown(accumulated, { streaming: true });
+    postProcessMessageBubble(bubble, { renderDiagrams: false });
+    bubble.appendChild(Object.assign(document.createElement('span'), {
+      className: 'streaming-cursor',
+    }));
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
@@ -862,7 +1150,7 @@ function createStreamingRow() {
     bubble.classList.remove('streaming');
     const text = finalText !== undefined ? finalText : accumulated;
     bubble.innerHTML = renderMarkdown(text);
-    bubble.querySelectorAll('pre code:not(.hljs)').forEach(el => hljs.highlightElement(el));
+    postProcessMessageBubble(bubble);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     return text;
   }
@@ -1283,8 +1571,13 @@ function setInputEnabled(enabled) {
 
 // ── Utilities ─────────────────────────────────────────────────────────────
 function escapeHtml(str) {
+  str = str == null ? '' : String(str);
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;')
             .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ── Initialisation ────────────────────────────────────────────────────────

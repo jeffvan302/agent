@@ -17,6 +17,19 @@ marked.setOptions({
   gfm: true,
 });
 
+if (window.mermaid) {
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    theme: 'default',
+    flowchart: {
+      htmlLabels: false,
+    },
+  });
+}
+
+let diagramRenderId = 0;
+
 // ── State ─────────────────────────────────────────────────────────────────
 let state = {
   projects:          [],
@@ -60,12 +73,149 @@ async function api(method, path, body) {
 }
 
 // ── Markdown rendering ────────────────────────────────────────────────────
-function renderMarkdown(text) {
-  const raw = marked.parse(text || '');
-  return DOMPurify.sanitize(raw, {
+function renderMarkdown(text, options = {}) {
+  const extracted = extractThinkingBlocks(text || '', !!options.streaming);
+  const raw = marked.parse(extracted.markdown);
+  let result = DOMPurify.sanitize(raw, {
     ADD_TAGS: ['details', 'summary'],
+    ADD_ATTR: ['open'],
     FORBID_ATTR: ['onerror', 'onload'],
   });
+
+  for (const block of extracted.blocks) {
+    result = replacePlaceholder(result, block.placeholder,
+      renderThinkingBlock(block.content, block.open, !!options.streaming));
+  }
+  return result;
+}
+
+function extractThinkingBlocks(text, streaming) {
+  const blocks = [];
+  let markdown = text.replace(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi,
+    function(_match, content) {
+      const placeholder = 'THINKING_BLOCK_' + blocks.length + '_PLACEHOLDER';
+      blocks.push({ placeholder, content: content.trim(), open: streaming });
+      return '\n\n' + placeholder + '\n\n';
+    });
+
+  const openMatch = /<think(?:ing)?>/i.exec(markdown);
+  if (openMatch) {
+    const placeholder = 'THINKING_BLOCK_' + blocks.length + '_PLACEHOLDER';
+    const contentStart = openMatch.index + openMatch[0].length;
+    const content = markdown.slice(contentStart).replace(/<\/think(?:ing)?>/ig, '');
+    blocks.push({ placeholder, content: content.trim(), open: true });
+    markdown = markdown.slice(0, openMatch.index) + '\n\n' + placeholder + '\n\n';
+  }
+
+  markdown = markdown.replace(/<\/think(?:ing)?>/ig, '');
+  return { markdown, blocks };
+}
+
+function renderThinkingBlock(content, open, streaming) {
+  const classes = 'thinking-block' + (streaming ? ' thinking-live' : '');
+  const state = streaming ? 'Thinking now' : 'Thinking';
+  const body = content && content.trim() ? content.trim() : 'Thinking...';
+  return '<details class="' + classes + '"' + (open ? ' open' : '') + '>' +
+    '<summary>' + state + '</summary>' +
+    '<div class="thinking-content">' + escapeHtml(body) + '</div>' +
+    '</details>';
+}
+
+function replacePlaceholder(html, placeholder, replacement) {
+  const escaped = escapeRegExp(placeholder);
+  html = html.replace(new RegExp('<p>\\s*' + escaped + '\\s*</p>', 'g'), replacement);
+  return html.replace(new RegExp(escaped, 'g'), replacement);
+}
+
+function postProcessMessageBubble(bubble, options = {}) {
+  const renderDiagrams = options.renderDiagrams !== false;
+  if (renderDiagrams) {
+    renderMermaidBlocks(bubble);
+    renderVegaBlocks(bubble);
+  }
+  bubble.querySelectorAll('pre code:not(.hljs)').forEach(el => {
+    if (!isDiagramLanguage(getCodeLanguage(el))) {
+      hljs.highlightElement(el);
+    }
+  });
+}
+
+function getCodeLanguage(codeEl) {
+  for (const cls of codeEl.classList) {
+    if (cls.indexOf('language-') === 0) return cls.slice(9).toLowerCase();
+    if (cls.indexOf('lang-') === 0) return cls.slice(5).toLowerCase();
+  }
+  return '';
+}
+
+function isDiagramLanguage(lang) {
+  return lang === 'mermaid' || lang === 'vega-lite' ||
+    lang === 'vegalite' || lang === 'vega';
+}
+
+function renderMermaidBlocks(container) {
+  if (!window.mermaid) return;
+  container.querySelectorAll('pre code').forEach(codeEl => {
+    if (getCodeLanguage(codeEl) !== 'mermaid') return;
+    const pre = codeEl.closest('pre');
+    if (!pre || pre.dataset.diagramRendered) return;
+    pre.dataset.diagramRendered = '1';
+    const source = codeEl.textContent.trim();
+    if (!source) return;
+
+    const host = document.createElement('div');
+    host.className = 'diagram-block mermaid-diagram';
+    host.textContent = 'Rendering Mermaid diagram...';
+    pre.replaceWith(host);
+
+    const id = 'mermaid-diagram-' + (++diagramRenderId);
+    try {
+      mermaid.render(id, source).then(result => {
+        host.innerHTML = DOMPurify.sanitize(result.svg, {
+          USE_PROFILES: { svg: true, svgFilters: true },
+        });
+      }).catch(err => showDiagramError(host, 'Mermaid', err, source));
+    } catch (err) {
+      showDiagramError(host, 'Mermaid', err, source);
+    }
+  });
+}
+
+function renderVegaBlocks(container) {
+  if (!window.vegaEmbed) return;
+  container.querySelectorAll('pre code').forEach(codeEl => {
+    const lang = getCodeLanguage(codeEl);
+    if (lang !== 'vega-lite' && lang !== 'vegalite' && lang !== 'vega') return;
+    const pre = codeEl.closest('pre');
+    if (!pre || pre.dataset.diagramRendered) return;
+    pre.dataset.diagramRendered = '1';
+    const source = codeEl.textContent.trim();
+    if (!source) return;
+
+    const host = document.createElement('div');
+    host.className = 'diagram-block vega-diagram';
+    host.textContent = 'Rendering chart...';
+    pre.replaceWith(host);
+
+    let spec;
+    try {
+      spec = JSON.parse(source);
+    } catch (err) {
+      showDiagramError(host, 'Vega-Lite', err, source);
+      return;
+    }
+
+    vegaEmbed(host, spec, { actions: false, renderer: 'svg' })
+      .catch(err => showDiagramError(host, 'Vega-Lite', err, source));
+  });
+}
+
+function showDiagramError(host, kind, err, source) {
+  host.classList.add('diagram-error');
+  const message = err && err.message ? err.message : String(err || 'Render failed');
+  host.innerHTML = '<strong>' + kind + ' render failed.</strong>' +
+    '<div>' + escapeHtml(message) + '</div>' +
+    '<pre><code>' + escapeHtml(source) + '</code></pre>';
 }
 
 // ── Message rendering ─────────────────────────────────────────────────────
@@ -92,7 +242,7 @@ function buildMessageRow(role, content) {
 
   if (role === 'assistant') {
     bubble.innerHTML = renderMarkdown(content);
-    bubble.querySelectorAll('pre code:not(.hljs)').forEach(el => hljs.highlightElement(el));
+    postProcessMessageBubble(bubble);
   } else {
     const p = document.createElement('p');
     p.style.whiteSpace = 'pre-wrap';
@@ -129,10 +279,11 @@ function createStreamingRow() {
 
   function updateText(delta) {
     accumulated += delta;
-    // Show raw accumulated text while streaming (fast, no re-parse each token)
-    bubble.textContent = accumulated;
-    bubble.appendChild(Object.assign(document.createElement('span'),
-      { className: 'streaming-cursor' }));
+    bubble.innerHTML = renderMarkdown(accumulated, { streaming: true });
+    postProcessMessageBubble(bubble, { renderDiagrams: false });
+    bubble.appendChild(Object.assign(document.createElement('span'), {
+      className: 'streaming-cursor',
+    }));
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
@@ -142,7 +293,7 @@ function createStreamingRow() {
     bubble.classList.remove('streaming');
     const text = finalText !== undefined ? finalText : accumulated;
     bubble.innerHTML = renderMarkdown(text);
-    bubble.querySelectorAll('pre code:not(.hljs)').forEach(el => hljs.highlightElement(el));
+    postProcessMessageBubble(bubble);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     return text;
   }
@@ -559,8 +710,13 @@ function setInputEnabled(enabled) {
 
 // ── Utilities ─────────────────────────────────────────────────────────────
 function escapeHtml(str) {
+  str = str == null ? '' : String(str);
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;')
             .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ── Initialisation ────────────────────────────────────────────────────────

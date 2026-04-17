@@ -25,7 +25,9 @@
 #include "web_server.h"
 #include "web_assets_default.h"
 
+#include "mcp_manager.h"
 #include "openai_client.h"
+#include "rag_tool_bridge.h"
 #include "util.h"
 #include <nlohmann/json.hpp>
 
@@ -49,6 +51,306 @@
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
+
+static std::string NowIso();
+
+namespace {
+
+bool HeaderContains(std::string value, const std::string& needle) {
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value.find(needle) != std::string::npos;
+}
+
+bool IsFormUrlEncoded(const httplib::Request& req) {
+    return HeaderContains(req.get_header_value("Content-Type"),
+                          "application/x-www-form-urlencoded");
+}
+
+int HexNibble(char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+    if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+    return -1;
+}
+
+std::string DecodeFormComponent(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == '+') {
+            out.push_back(' ');
+        } else if (value[i] == '%' && i + 2 < value.size()) {
+            const int hi = HexNibble(value[i + 1]);
+            const int lo = HexNibble(value[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+            } else {
+                out.push_back(value[i]);
+            }
+        } else {
+            out.push_back(value[i]);
+        }
+    }
+    return out;
+}
+
+json ParseFormUrlEncoded(const std::string& body) {
+    json result = json::object();
+    size_t pos = 0;
+    while (pos <= body.size()) {
+        const size_t amp = body.find('&', pos);
+        const std::string part = body.substr(
+            pos, amp == std::string::npos ? std::string::npos : amp - pos);
+        const size_t eq = part.find('=');
+        const std::string key = DecodeFormComponent(
+            eq == std::string::npos ? part : part.substr(0, eq));
+        const std::string value = eq == std::string::npos
+            ? std::string()
+            : DecodeFormComponent(part.substr(eq + 1));
+
+        if (!key.empty()) result[key] = value;
+        if (amp == std::string::npos) break;
+        pos = amp + 1;
+    }
+    return result;
+}
+
+std::optional<json> ParseJsonOrFormBody(const httplib::Request& req) {
+    if (!IsFormUrlEncoded(req)) {
+        try {
+            return json::parse(req.body);
+        } catch (...) {
+            // Fall through and try form decoding for browser fallback submits.
+        }
+    }
+
+    if (IsFormUrlEncoded(req) || req.body.find('=') != std::string::npos) {
+        json form = ParseFormUrlEncoded(req.body);
+        if (!form.empty()) return form;
+    }
+
+    return std::nullopt;
+}
+
+void SendRedirect(httplib::Response* res, const std::string& location) {
+    res->status = 302;
+    res->set_header("Location", location);
+}
+
+std::vector<ChatToolDefinition> BuildMcpToolDefinitions(
+    const std::vector<McpExposedTool>& exposed_tools) {
+    std::vector<ChatToolDefinition> definitions;
+    definitions.reserve(exposed_tools.size());
+    for (const auto& exposed : exposed_tools) {
+        ChatToolDefinition definition;
+        definition.name = exposed.alias;
+        definition.description = exposed.description.empty()
+            ? ("MCP tool from server \"" + exposed.server_name + "\" named \"" +
+               exposed.tool_name + "\".")
+            : (exposed.description + " (MCP server: " + exposed.server_name +
+               ", tool: " + exposed.tool_name + ")");
+        definition.parameters_json = exposed.input_schema_json;
+        definitions.push_back(std::move(definition));
+    }
+    return definitions;
+}
+
+void EnsureProjectMcpConnections(McpManager* mcp_manager,
+                                 const std::string& project_id) {
+    if (!mcp_manager || project_id.empty()) return;
+
+    for (const auto& config : mcp_manager->configs()) {
+        if (!config.enabled ||
+            !mcp_manager->IsServerSelectedForProject(project_id, config.id)) {
+            continue;
+        }
+
+        std::string ignored_error;
+        mcp_manager->ConnectServer(config.id, project_id, &ignored_error);
+    }
+}
+
+std::string BuildMcpProjectContext(McpManager* mcp_manager,
+                                   AppStorage* storage,
+                                   const std::string& project_id) {
+    if (!mcp_manager || project_id.empty()) return {};
+
+    const auto bindings = mcp_manager->GetProjectBindings(project_id);
+    if (bindings.empty()) return {};
+
+    std::unordered_map<std::string, std::string> values;
+    for (const auto& binding : bindings) {
+        for (const auto& variable : binding.variables) {
+            const std::string name = Trim(variable.name);
+            const std::string value = Trim(variable.value);
+            if (!name.empty() && !value.empty()) values[name] = value;
+        }
+    }
+    if (storage) {
+        const auto project_settings = storage->LoadProjectSettings(project_id);
+        for (const auto& variable : project_settings.project_variables) {
+            const std::string name = Trim(variable.name);
+            const std::string value = Trim(variable.value);
+            if (!name.empty() && !value.empty()) values[name] = value;
+        }
+    }
+    if (values.empty()) return {};
+
+    struct ContextVariable {
+        std::string name;
+        std::string value;
+        std::string description;
+    };
+
+    std::vector<ContextVariable> context_values;
+    std::vector<std::string> emitted_names;
+    const auto add_variable = [&](const McpServerVariable& variable) {
+        if (!variable.inject_into_context || variable.name.empty()) return;
+        if (std::find(emitted_names.begin(), emitted_names.end(), variable.name)
+                != emitted_names.end()) {
+            return;
+        }
+
+        const auto value_it = values.find(variable.name);
+        if (value_it == values.end() || Trim(value_it->second).empty()) return;
+
+        ContextVariable context_variable;
+        context_variable.name = variable.name;
+        context_variable.value = value_it->second;
+        context_variable.description = Trim(variable.description);
+        context_values.push_back(std::move(context_variable));
+        emitted_names.push_back(variable.name);
+    };
+
+    for (const auto& variable : mcp_manager->global_variables()) {
+        add_variable(variable);
+    }
+
+    const auto& configs = mcp_manager->configs();
+    for (const auto& binding : bindings) {
+        const auto config_it = std::find_if(configs.begin(), configs.end(),
+            [&](const McpServerConfig& config) {
+                return config.id == binding.server_id;
+            });
+        if (config_it == configs.end()) continue;
+        for (const auto& variable : config_it->variables) {
+            add_variable(variable);
+        }
+    }
+
+    if (context_values.empty()) return {};
+
+    std::ostringstream stream;
+    stream << "MCP Project Context:\n";
+    stream << "These project variable values are current for this chat. Use them "
+              "when choosing paths, working directories, command locations, and "
+              "MCP tool arguments.\n";
+    for (const auto& variable : context_values) {
+        stream << "- " << variable.name << ": " << variable.value;
+        if (!variable.description.empty()) {
+            stream << " (description: " << variable.description << ")";
+        }
+        stream << "\n";
+    }
+    return stream.str();
+}
+
+std::string BuildWebFormattingContext() {
+    return
+        "Web Chat Formatting Capabilities:\n"
+        "This response is being rendered in the web chat. Mermaid and Vega-Lite "
+        "libraries are available for visual output.\n"
+        "- Use fenced code blocks tagged `mermaid` for flowcharts, sequence diagrams, "
+        "state diagrams, class diagrams, timelines, and similar diagrams.\n"
+        "- Use fenced code blocks tagged `vega-lite` with JSON for charts and data graphics. "
+        "Keep Vega-Lite specs self-contained with inline data when possible.\n"
+        "- Prefer these formats when a diagram, graph, or flow chart would make "
+        "the answer clearer.";
+}
+
+void AppendAssistantToolRequest(std::vector<MessageRecord>& messages,
+                                const ChatCompletionResult& completion) {
+    MessageRecord assistant_msg;
+    assistant_msg.role = "assistant";
+    assistant_msg.content = completion.assistant_text;
+    assistant_msg.created_at = NowIso();
+
+    if (!completion.raw_message_json.empty()) {
+        try {
+            const auto message_json = json::parse(completion.raw_message_json);
+            if (message_json.contains("tool_calls")) {
+                assistant_msg.tool_calls_json = message_json["tool_calls"].dump();
+            }
+        } catch (...) {}
+    }
+
+    if (assistant_msg.tool_calls_json.empty()) {
+        json tool_calls_json = json::array();
+        for (const auto& tool_call : completion.tool_calls) {
+            tool_calls_json.push_back({
+                {"id", tool_call.id},
+                {"type", "function"},
+                {"function", {
+                    {"name", tool_call.name},
+                    {"arguments", tool_call.arguments_json},
+                }},
+            });
+        }
+        assistant_msg.tool_calls_json = tool_calls_json.dump();
+    }
+
+    messages.push_back(std::move(assistant_msg));
+}
+
+McpToolCallResult InvalidToolArgumentsResult(const ChatToolCall& tool_call) {
+    McpToolCallResult result;
+    result.success = false;
+    result.is_tool_error = true;
+    std::ostringstream message;
+    message << "Tool call was not executed because the model returned invalid "
+            << "JSON arguments for \"" << tool_call.name << "\". Tool arguments "
+            << "must be a valid JSON object.";
+    if (!tool_call.arguments_error.empty()) {
+        message << "\nParser error: " << tool_call.arguments_error;
+    }
+    if (!tool_call.original_arguments_json.empty()) {
+        message << "\nOriginal arguments: " << tool_call.original_arguments_json;
+    }
+    result.content_text = message.str();
+    result.raw_result_json = json{
+        {"error", result.content_text},
+        {"invalid_arguments", tool_call.original_arguments_json},
+    }.dump(2);
+    return result;
+}
+
+McpToolCallResult ToolUnavailableResult(const ChatToolCall& tool_call) {
+    McpToolCallResult result;
+    result.success = false;
+    result.is_tool_error = true;
+    result.content_text = "Tool is not available for this project or server: " + tool_call.name;
+    result.raw_result_json = json{
+        {"error", result.content_text},
+        {"tool", tool_call.name},
+    }.dump(2);
+    return result;
+}
+
+void AppendToolResultMessage(std::vector<MessageRecord>& messages,
+                             const ChatToolCall& tool_call,
+                             const McpToolCallResult& result) {
+    MessageRecord tool_msg;
+    tool_msg.role = "tool";
+    tool_msg.name = tool_call.name;
+    tool_msg.tool_call_id = tool_call.id;
+    tool_msg.content = result.content_text;
+    tool_msg.created_at = NowIso();
+    messages.push_back(std::move(tool_msg));
+}
+
+} // namespace
 
 // ──────────────────────────────────────────────────────────────────────────────
 // OpenSSL initialization — must happen before any OpenSSL calls.
@@ -149,9 +451,13 @@ void WebServerConfig::SaveToFile(const fs::path& path) const {
 WebServer::WebServer(AppStorage*       storage,
                      WebUserStore*     user_store,
                      WebServerConfig   config,
-                     fs::path          app_root)
+                     fs::path          app_root,
+                     McpManager*       mcp_manager,
+                     RagService*       rag_service)
     : storage_(storage)
     , user_store_(user_store)
+    , mcp_manager_(mcp_manager)
+    , rag_service_(rag_service)
     , config_(std::move(config))
     , app_root_(std::move(app_root))
     , impl_(std::make_unique<WebServerImpl>())
@@ -159,6 +465,16 @@ WebServer::WebServer(AppStorage*       storage,
 
 WebServer::~WebServer() {
     Stop();
+}
+
+void WebServer::SetContentChangedCallback(ContentChangedCallback callback) {
+    content_changed_callback_ = std::move(callback);
+}
+
+void WebServer::NotifyContentChanged() const {
+    if (content_changed_callback_) {
+        content_changed_callback_();
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -424,11 +740,12 @@ WebServer::RequireAuth(const void* req_ptr, void* res_ptr) {
         return std::nullopt;
     }
 
-    // If user needs password reset, block all routes except change-password
+    // If user needs password reset, block routes except reset and identity checks.
     if (session->needs_password_reset) {
         const std::string path = req->path;
         const bool is_change_password =
-            (path == "/change-password" || path == "/api/change-password");
+            (path == "/change-password" || path == "/api/change-password"
+             || path == "/api/me");
         if (!is_change_password) {
             auto* res = static_cast<httplib::Response*>(res_ptr);
             res->status = 302;
@@ -556,6 +873,14 @@ void WebServer::HandleStaticOrPage(const void* req_ptr, void* res_ptr) {
               "https://cdnjs.cloudflare.com/ajax/libs/marked/11.2.0/marked.min.js" },
             { "js/vendor/purify.min.js",
               "https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js" },
+            { "js/vendor/mermaid.min.js",
+              "https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js" },
+            { "js/vendor/vega.min.js",
+              "https://cdnjs.cloudflare.com/ajax/libs/vega/5.28.0/vega.min.js" },
+            { "js/vendor/vega-lite.min.js",
+              "https://cdnjs.cloudflare.com/ajax/libs/vega-lite/5.18.1/vega-lite.min.js" },
+            { "js/vendor/vega-embed.min.js",
+              "https://cdnjs.cloudflare.com/ajax/libs/vega-embed/6.25.0/vega-embed.min.js" },
         };
         const auto it = kVendorCdn.find(url_path);
         if (it != kVendorCdn.end()) {
@@ -584,10 +909,12 @@ void WebServer::HandleLogin(const void* req_ptr, void* res_ptr) {
         SendError(res_ptr, 429, "Too many failed attempts — try again later"); return;
     }
 
-    json body_j;
-    try { body_j = json::parse(req->body); } catch (...) {
-        SendError(res_ptr, 400, "Invalid JSON"); return;
+    const bool form_post = IsFormUrlEncoded(*req);
+    const auto body_opt = ParseJsonOrFormBody(*req);
+    if (!body_opt) {
+        SendError(res_ptr, 400, "Invalid login request"); return;
     }
+    const json& body_j = *body_opt;
 
     const std::string username = body_j.value("username", "");
     const std::string password = body_j.value("password", "");
@@ -612,7 +939,7 @@ void WebServer::HandleLogin(const void* req_ptr, void* res_ptr) {
     const std::string token = CreateSession(*user_opt, ip);
     AppendAuditLog(ip, "login_success", "user=" + username);
 
-    // If user needs password reset, update session and redirect to change-password page
+    // If user needs password reset, update session and route to change-password.
     if (user_opt->force_password_reset) {
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
@@ -622,8 +949,16 @@ void WebServer::HandleLogin(const void* req_ptr, void* res_ptr) {
         const std::string cookie = "session=" + token
             + "; Path=/; HttpOnly; SameSite=Strict";
         res->set_header("Set-Cookie", cookie);
-        res->status = 302;
-        res->set_header("Location", "/change-password");
+        if (form_post) {
+            SendRedirect(res, "/change-password");
+        } else {
+            json resp = {
+                {"ok",                   true},
+                {"force_password_reset", true},
+                {"display_name",         user_opt->display_name},
+            };
+            SendJson(res_ptr, 200, resp.dump());
+        }
         return;
     }
 
@@ -631,6 +966,11 @@ void WebServer::HandleLogin(const void* req_ptr, void* res_ptr) {
     const std::string cookie = "session=" + token
         + "; Path=/; HttpOnly; SameSite=Strict";
     res->set_header("Set-Cookie", cookie);
+
+    if (form_post) {
+        SendRedirect(res, "/");
+        return;
+    }
 
     json resp = {
         {"ok",                    true},
@@ -665,13 +1005,17 @@ void WebServer::HandleChangePassword(const void* req_ptr, void* res_ptr) {
     if (!session) return;
 
     const auto* req = static_cast<const httplib::Request*>(req_ptr);
-    json body_j;
-    try { body_j = json::parse(req->body); } catch (...) {
-        SendError(res_ptr, 400, "Invalid JSON"); return;
+    const bool form_post = IsFormUrlEncoded(*req);
+    const auto body_opt = ParseJsonOrFormBody(*req);
+    if (!body_opt) {
+        SendError(res_ptr, 400, "Invalid password change request"); return;
     }
+    const json& body_j = *body_opt;
 
-    const std::string current  = body_j.value("current_password", "");
-    const std::string new_pass = body_j.value("new_password", "");
+    const std::string current  = body_j.value("current_password",
+                                  body_j.value("current-password", ""));
+    const std::string new_pass = body_j.value("new_password",
+                                  body_j.value("new-password", ""));
     // Password policy: ≥10 chars, at least one uppercase, one lowercase, one digit
     if (new_pass.size() < 10) {
         SendError(res_ptr, 400, "Password must be at least 10 characters"); return;
@@ -714,7 +1058,11 @@ void WebServer::HandleChangePassword(const void* req_ptr, void* res_ptr) {
         }
     }
 
-    SendJson(res_ptr, 200, R"({"ok":true})");
+    if (form_post) {
+        SendRedirect(static_cast<httplib::Response*>(res_ptr), "/");
+    } else {
+        SendJson(res_ptr, 200, R"({"ok":true})");
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -793,6 +1141,7 @@ void WebServer::HandleCreateChat(const void* req_ptr, void* res_ptr) {
     AppendAuditLog(GetRemoteAddr(req_ptr), "chat_created",
                    "user=" + session->username + " project=" + project_id
                    + " chat=" + chat.id);
+    NotifyContentChanged();
     json resp = {{"id", chat.id}, {"name", chat.name}};
     SendJson(res_ptr, 201, resp.dump());
 }
@@ -819,6 +1168,7 @@ void WebServer::HandleDeleteChat(const void* req_ptr, void* res_ptr) {
             storage_->DeleteChat(proj.info.id, chat_id);
             AppendAuditLog(GetRemoteAddr(req_ptr), "chat_deleted",
                            "user=" + session->username + " chat=" + chat_id);
+            NotifyContentChanged();
             SendJson(res_ptr, 200, R"({"ok":true})");
             return;
         }
@@ -867,6 +1217,7 @@ void WebServer::HandleRenameChat(const void* req_ptr, void* res_ptr) {
             AppendAuditLog(GetRemoteAddr(req_ptr), "chat_renamed",
                            "user=" + session->username + " chat=" + chat_id
                            + " -> " + new_name);
+            NotifyContentChanged();
             json resp = {{"id", chat_id}, {"name", new_name}};
             SendJson(res_ptr, 200, resp.dump());
             return;
@@ -890,6 +1241,11 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
             const auto messages = storage_->LoadMessages(proj.info.id, chat_id);
             json arr = json::array();
             for (const auto& m : messages) {
+                if (m.role == "tool") continue;
+                if (m.role == "assistant" &&
+                    (m.content.empty() || !m.tool_calls_json.empty())) {
+                    continue;
+                }
                 arr.push_back({{"role", m.role}, {"content", m.content},
                                {"created_at", m.created_at}});
             }
@@ -1069,6 +1425,30 @@ WebServer::CallModel(const std::string& project_id,
         }
         if (!instr.empty()) system_prompt = "Project Instructions:\n" + instr;
     }
+    if (mcp_manager_) {
+        EnsureProjectMcpConnections(mcp_manager_, project_id);
+        const std::string mcp_context =
+            BuildMcpProjectContext(mcp_manager_, storage_, project_id);
+        if (!mcp_context.empty()) {
+            if (!system_prompt.empty()) system_prompt += "\n\n";
+            system_prompt += mcp_context;
+        }
+    }
+    if (rag_service_) {
+        const std::string rag_context =
+            rag_tools::BuildRagProjectContext(rag_service_, project_id);
+        if (!rag_context.empty()) {
+            if (!system_prompt.empty()) system_prompt += "\n\n";
+            system_prompt += rag_context;
+        }
+    }
+    {
+        const std::string web_formatting_context = BuildWebFormattingContext();
+        if (!web_formatting_context.empty()) {
+            if (!system_prompt.empty()) system_prompt += "\n\n";
+            system_prompt += web_formatting_context;
+        }
+    }
 
     // Load existing message history
     auto messages = storage_->LoadMessages(project_id, chat_id);
@@ -1090,13 +1470,123 @@ WebServer::CallModel(const std::string& project_id,
     opts.max_tokens   = 1024;
     opts.messages     = messages;
 
-    // Call model (synchronous, no streaming for Phase 0)
+    const auto exposed_tools = (mcp_manager_ && selected_model.supports_tools)
+        ? mcp_manager_->GetExposedToolsForProject(project_id)
+        : std::vector<McpExposedTool>{};
+    auto tool_definitions = BuildMcpToolDefinitions(exposed_tools);
+    const auto rag_tool_set = (rag_service_ && selected_model.supports_tools)
+        ? rag_tools::BuildRagToolSet(rag_service_, project_id)
+        : rag_tools::RagToolSet{};
+    tool_definitions.insert(
+        tool_definitions.end(),
+        rag_tool_set.definitions.begin(),
+        rag_tool_set.definitions.end());
+
+    if (!tool_definitions.empty()) {
+        constexpr int kMaxToolRounds = 8;
+        bool success = false;
+
+        for (int round = 0; round < kMaxToolRounds; ++round) {
+            ChatRequestOptions loop_opts = opts;
+            loop_opts.messages = messages;
+
+            const auto completion =
+                OpenAIClient::CreateToolAwareCompletion(loop_opts, tool_definitions);
+            if (!completion.success) {
+                result.error = completion.error.empty()
+                    ? "Model call failed"
+                    : completion.error;
+                storage_->SaveMessages(project_id, chat_id, messages);
+                NotifyContentChanged();
+                return result;
+            }
+
+            if (!completion.tool_calls.empty()) {
+                AppendAssistantToolRequest(messages, completion);
+                for (const auto& tool_call : completion.tool_calls) {
+                    McpToolCallResult tool_result;
+                    if (!tool_call.arguments_valid) {
+                        tool_result = InvalidToolArgumentsResult(tool_call);
+                    } else if (rag_tools::IsRagToolName(tool_call.name, &rag_tool_set.routes)) {
+                        tool_result = rag_tools::CallRagTool(
+                            rag_service_,
+                            mcp_manager_,
+                            project_id,
+                            tool_call.name,
+                            tool_call.arguments_json,
+                            &rag_tool_set.routes);
+                    } else if (mcp_manager_) {
+                        tool_result = mcp_manager_->CallExposedTool(
+                            project_id, tool_call.name, tool_call.arguments_json);
+                    } else {
+                        tool_result = ToolUnavailableResult(tool_call);
+                    }
+                    AppendToolResultMessage(messages, tool_call, tool_result);
+                }
+                continue;
+            }
+
+            if (!completion.assistant_text.empty()) {
+                MessageRecord asst_msg;
+                asst_msg.role       = "assistant";
+                asst_msg.content    = completion.assistant_text;
+                asst_msg.created_at = NowIso();
+                messages.push_back(asst_msg);
+                result.assistant_text = completion.assistant_text;
+            }
+            success = true;
+            break;
+        }
+
+        if (!success) {
+            ChatRequestOptions final_opts = opts;
+            final_opts.messages = messages;
+            if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
+            final_opts.system_prompt +=
+                "The MCP tool-call round limit has been reached. Do not call or "
+                "request any more tools. Use the tool results already present in "
+                "the conversation to write the final answer. If the requested work "
+                "succeeded, say so and summarize the important output. If it did "
+                "not fully succeed, explain the last observed state and what remains.";
+
+            const auto final_completion =
+                OpenAIClient::CreateSimpleCompletion(final_opts);
+            if (final_completion.success && !final_completion.assistant_text.empty()) {
+                MessageRecord asst_msg;
+                asst_msg.role       = "assistant";
+                asst_msg.content    = final_completion.assistant_text;
+                asst_msg.created_at = NowIso();
+                messages.push_back(asst_msg);
+                storage_->SaveMessages(project_id, chat_id, messages);
+                NotifyContentChanged();
+                result.success = true;
+                result.assistant_text = final_completion.assistant_text;
+                return result;
+            }
+
+            result.error = final_completion.error.empty()
+                ? "The model exceeded the MCP tool-call loop limit."
+                : "The model exceeded the MCP tool-call loop limit, and the final summary failed: " +
+                      final_completion.error;
+            storage_->SaveMessages(project_id, chat_id, messages);
+            NotifyContentChanged();
+            return result;
+        }
+
+        storage_->SaveMessages(project_id, chat_id, messages);
+        NotifyContentChanged();
+        result.success = true;
+        return result;
+    }
+
+    // Call model without tools when none are connected for the project.
     const auto call_result = OpenAIClient::CreateSimpleCompletion(opts);
 
     if (!call_result.success) {
         result.error = call_result.error.empty() ? "Model call failed" : call_result.error;
         // Still save the user message so the chat shows it
         storage_->SaveMessages(project_id, chat_id, messages);
+        NotifyContentChanged();
         return result;
     }
 
@@ -1109,6 +1599,7 @@ WebServer::CallModel(const std::string& project_id,
 
     // Persist
     storage_->SaveMessages(project_id, chat_id, messages);
+    NotifyContentChanged();
 
     result.success        = true;
     result.assistant_text = call_result.assistant_text;
@@ -1246,6 +1737,30 @@ std::string WebServer::StreamModel(const std::string& project_id,
         }
         if (!instr.empty()) system_prompt = "Project Instructions:\n" + instr;
     }
+    if (mcp_manager_) {
+        EnsureProjectMcpConnections(mcp_manager_, project_id);
+        const std::string mcp_context =
+            BuildMcpProjectContext(mcp_manager_, storage_, project_id);
+        if (!mcp_context.empty()) {
+            if (!system_prompt.empty()) system_prompt += "\n\n";
+            system_prompt += mcp_context;
+        }
+    }
+    if (rag_service_) {
+        const std::string rag_context =
+            rag_tools::BuildRagProjectContext(rag_service_, project_id);
+        if (!rag_context.empty()) {
+            if (!system_prompt.empty()) system_prompt += "\n\n";
+            system_prompt += rag_context;
+        }
+    }
+    {
+        const std::string web_formatting_context = BuildWebFormattingContext();
+        if (!web_formatting_context.empty()) {
+            if (!system_prompt.empty()) system_prompt += "\n\n";
+            system_prompt += web_formatting_context;
+        }
+    }
 
     // Load history and append user message (with any attached file content injected)
     auto messages = storage_->LoadMessages(project_id, chat_id);
@@ -1258,6 +1773,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
 
     // Persist user message immediately so it's visible if the stream aborts
     storage_->SaveMessages(project_id, chat_id, messages);
+    NotifyContentChanged();
 
     // Build request (streaming = true)
     ChatRequestOptions opts;
@@ -1267,6 +1783,139 @@ std::string WebServer::StreamModel(const std::string& project_id,
     opts.temperature   = 0.2;
     opts.max_tokens    = 4096;  // allow longer outputs when streaming
     opts.messages      = messages;
+
+    const auto exposed_tools = (mcp_manager_ && selected_model.supports_tools)
+        ? mcp_manager_->GetExposedToolsForProject(project_id)
+        : std::vector<McpExposedTool>{};
+    auto tool_definitions = BuildMcpToolDefinitions(exposed_tools);
+    const auto rag_tool_set = (rag_service_ && selected_model.supports_tools)
+        ? rag_tools::BuildRagToolSet(rag_service_, project_id)
+        : rag_tools::RagToolSet{};
+    tool_definitions.insert(
+        tool_definitions.end(),
+        rag_tool_set.definitions.begin(),
+        rag_tool_set.definitions.end());
+
+    if (!tool_definitions.empty()) {
+        constexpr int kMaxToolRounds = 8;
+        std::string accumulated;
+        bool aborted = false;
+        bool success = false;
+
+        for (int round = 0; round < kMaxToolRounds; ++round) {
+            ChatRequestOptions loop_opts = opts;
+            loop_opts.messages = messages;
+
+            const auto completion = OpenAIClient::StreamToolAwareCompletion(
+                loop_opts, tool_definitions,
+                [&](const std::string& delta) {
+                    accumulated += delta;
+                    if (!on_delta(delta)) {
+                        aborted = true;
+                    }
+                });
+
+            if (!completion.success && !aborted) {
+                return completion.error.empty()
+                    ? "Streaming model call failed."
+                    : completion.error;
+            }
+
+            if (aborted) {
+                if (!accumulated.empty()) {
+                    MessageRecord asst_msg;
+                    asst_msg.role = "assistant";
+                    asst_msg.content = accumulated;
+                    asst_msg.created_at = NowIso();
+                    messages.push_back(asst_msg);
+                    storage_->SaveMessages(project_id, chat_id, messages);
+                    NotifyContentChanged();
+                }
+                return {};
+            }
+
+            if (!completion.tool_calls.empty()) {
+                AppendAssistantToolRequest(messages, completion);
+                for (const auto& tool_call : completion.tool_calls) {
+                    McpToolCallResult tool_result;
+                    if (!tool_call.arguments_valid) {
+                        tool_result = InvalidToolArgumentsResult(tool_call);
+                    } else if (rag_tools::IsRagToolName(tool_call.name, &rag_tool_set.routes)) {
+                        tool_result = rag_tools::CallRagTool(
+                            rag_service_,
+                            mcp_manager_,
+                            project_id,
+                            tool_call.name,
+                            tool_call.arguments_json,
+                            &rag_tool_set.routes);
+                    } else if (mcp_manager_) {
+                        tool_result = mcp_manager_->CallExposedTool(
+                            project_id, tool_call.name, tool_call.arguments_json);
+                    } else {
+                        tool_result = ToolUnavailableResult(tool_call);
+                    }
+                    AppendToolResultMessage(messages, tool_call, tool_result);
+                }
+                storage_->SaveMessages(project_id, chat_id, messages);
+                NotifyContentChanged();
+                continue;
+            }
+
+            if (!completion.assistant_text.empty()) {
+                MessageRecord asst_msg;
+                asst_msg.role = "assistant";
+                asst_msg.content = completion.assistant_text;
+                asst_msg.created_at = NowIso();
+                messages.push_back(asst_msg);
+                storage_->SaveMessages(project_id, chat_id, messages);
+                NotifyContentChanged();
+            }
+            success = true;
+            break;
+        }
+
+        if (!success) {
+            ChatRequestOptions final_opts = opts;
+            final_opts.messages = messages;
+            if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
+            final_opts.system_prompt +=
+                "The MCP tool-call round limit has been reached. Do not call or "
+                "request any more tools. Use the tool results already present in "
+                "the conversation to write the final answer. If the requested work "
+                "succeeded, say so and summarize the important output. If it did "
+                "not fully succeed, explain the last observed state and what remains.";
+
+            std::string final_text;
+            bool final_aborted = false;
+            const auto final_result = OpenAIClient::StreamChat(
+                final_opts,
+                [&](const std::string& delta) {
+                    final_text += delta;
+                    if (!on_delta(delta)) {
+                        final_aborted = true;
+                    }
+                });
+
+            if (!final_result.success && !final_aborted) {
+                return final_result.error.empty()
+                    ? "The model exceeded the MCP tool-call loop limit."
+                    : "The model exceeded the MCP tool-call loop limit, and the final summary failed: " +
+                          final_result.error;
+            }
+
+            if (!final_text.empty()) {
+                MessageRecord asst_msg;
+                asst_msg.role = "assistant";
+                asst_msg.content = final_text;
+                asst_msg.created_at = NowIso();
+                messages.push_back(asst_msg);
+                storage_->SaveMessages(project_id, chat_id, messages);
+                NotifyContentChanged();
+            }
+            return {};
+        }
+        return {};
+    }
 
     // Accumulate full text so we can save it at the end
     std::string accumulated;
@@ -1294,6 +1943,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
         asst_msg.created_at = NowIso();
         messages.push_back(asst_msg);
         storage_->SaveMessages(project_id, chat_id, messages);
+        NotifyContentChanged();
     }
 
     return {};  // success
@@ -1547,7 +2197,7 @@ void WebServer::RegisterRoutes() {
         {"Referrer-Policy",        "strict-origin-when-cross-origin"},
         {"Content-Security-Policy",
          "default-src 'self'; "
-         "script-src 'self'; "
+         "script-src 'self' 'unsafe-eval'; "
          "style-src 'self' 'unsafe-inline'; "
          "img-src 'self' data:; "
          "connect-src 'self'; "
@@ -1581,6 +2231,9 @@ void WebServer::RegisterRoutes() {
             {"username",     user_opt->username},
             {"display_name", user_opt->display_name.empty()
                              ? user_opt->username : user_opt->display_name},
+            {"force_password_reset", session->force_password_reset
+                                     || session->needs_password_reset
+                                     || user_opt->force_password_reset},
         };
         SendJson(&res, 200, resp.dump());
     });
@@ -1677,6 +2330,8 @@ void WebServer::EnsureDefaultWebAssets() const {
         { "login.html",                    DefaultWebAssets::kLoginHtml          },
         { "change-password.html",          DefaultWebAssets::kChangePasswordHtml },
         { "css/base.css",                  DefaultWebAssets::kBaseCss            },
+        { "js/login.js",                   DefaultWebAssets::kLoginJs            },
+        { "js/change-password.js",         DefaultWebAssets::kChangePasswordJs   },
         { "js/app.js",                     DefaultWebAssets::kAppJs              },
         { "themes/default/style.css",      DefaultWebAssets::kThemeDefaultCss    },
         { "themes/default/theme.json",     DefaultWebAssets::kThemeDefaultJson   },
@@ -1697,7 +2352,7 @@ void WebServer::EnsureDefaultWebAssets() const {
 // ──────────────────────────────────────────────────────────────────────────────
 // EnsureVendorLibs
 //
-// Downloads the four front-end vendor libraries from cdnjs if the cached
+// Downloads the front-end vendor libraries from cdnjs if the cached
 // copies are absent from the web root.  Runs in a detached background thread
 // so Start() returns immediately.  On any failure (no internet, etc.) the
 // missing files stay absent and the CDN-redirect fallback in
@@ -1794,6 +2449,14 @@ void WebServer::EnsureVendorLibs() const {
           "js/vendor/marked.min.js" },
         { L"https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js",
           "js/vendor/purify.min.js" },
+        { L"https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js",
+          "js/vendor/mermaid.min.js" },
+        { L"https://cdnjs.cloudflare.com/ajax/libs/vega/5.28.0/vega.min.js",
+          "js/vendor/vega.min.js" },
+        { L"https://cdnjs.cloudflare.com/ajax/libs/vega-lite/5.18.1/vega-lite.min.js",
+          "js/vendor/vega-lite.min.js" },
+        { L"https://cdnjs.cloudflare.com/ajax/libs/vega-embed/6.25.0/vega-embed.min.js",
+          "js/vendor/vega-embed.min.js" },
     };
 
     // Check if any files are missing before spawning a thread
@@ -1911,7 +2574,7 @@ static bool GenerateSelfSignedCert(const fs::path& cert_path, const fs::path& ke
         Logger::Info("OpenSSL", "GenerateSelfSignedCert: writing cert to " + cert_path.string());
         Logger::Flush();
         errno_t err = _wfopen_s(&f, cert_path.wstring().c_str(), L"w");
-        Logger::Info("OpenSSL", "GenerateSelfSignedCert: cert _wfopen_s returned err=" + std::to_string(err));
+        Logger::Info("OpenSSL", "GenerateSelfSignedCert: cert file open err=" + std::to_string(err));
         Logger::Flush();
         if (err == 0 && f) {
             ok = (PEM_write_X509(f, x509) == 1);
@@ -1919,135 +2582,97 @@ static bool GenerateSelfSignedCert(const fs::path& cert_path, const fs::path& ke
             if (!ok) Logger::Error("OpenSSL", "GenerateSelfSignedCert: PEM_write_X509 failed");
         } else {
             ok = false;
-            Logger::Error("OpenSSL", "GenerateSelfSignedCert: could not open cert file for writing, err=" + std::to_string(err));
+            Logger::Error("OpenSSL", "GenerateSelfSignedCert: could not open cert file for writing");
         }
     }
-    Logger::Flush();
 
     X509_free(x509);
     EVP_PKEY_free(pkey);
-    if (ok) Logger::Info("OpenSSL", "GenerateSelfSignedCert: success");
+
+    if (ok) {
+        Logger::Info("OpenSSL", "GenerateSelfSignedCert: complete — cert=" +
+            cert_path.string() + " key=" + key_path.string());
+    } else {
+        Logger::Error("OpenSSL", "GenerateSelfSignedCert: FAILED");
+    }
     Logger::Flush();
     return ok;
 }
-#endif // CPPHTTPLIB_OPENSSL_SUPPORT
+#endif  // CPPHTTPLIB_OPENSSL_SUPPORT
 
-bool WebServer::ResolveTlsCertAndKey(std::string& out_cert, std::string& out_key) const
+// ──────────────────────────────────────────────────────────────────────────────
+// ResolveTlsCertAndKey
+// Determines the certificate and private-key PEM paths to use based on
+// config_.tls_mode.  Generates a self-signed cert when requested and not yet
+// present.  Returns false if TLS cannot be configured.
+// ──────────────────────────────────────────────────────────────────────────────
+bool WebServer::ResolveTlsCertAndKey(std::string& out_cert,
+                                      std::string& out_key) const
 {
     if (config_.tls_mode.empty()) return false;
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (config_.tls_mode == "self_signed") {
-        const fs::path cert_path = TlsCertsDir() / "server.crt";
-        const fs::path key_path  = TlsCertsDir() / "server.key";
+        const fs::path cert_dir  = TlsCertsDir();
+        const fs::path cert_path = cert_dir / "cert.pem";
+        const fs::path key_path  = cert_dir / "key.pem";
+
         if (!fs::exists(cert_path) || !fs::exists(key_path)) {
-            if (!GenerateSelfSignedCert(cert_path, key_path)) return false;
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+            Logger::Info("WebServer", "Generating self-signed certificate…");
+            if (!GenerateSelfSignedCert(cert_path, key_path)) {
+                Logger::Error("WebServer", "Self-signed cert generation failed.");
+                return false;
+            }
+#else
+            Logger::Error("WebServer",
+                "tls_mode=self_signed but OpenSSL is not compiled in.");
+            return false;
+#endif
         }
         out_cert = cert_path.string();
         out_key  = key_path.string();
         return true;
     }
+
     if (config_.tls_mode == "pem") {
-        if (config_.tls_cert_file.empty() || config_.tls_key_file.empty()) return false;
-        if (!fs::exists(config_.tls_cert_file) || !fs::exists(config_.tls_key_file)) return false;
+        if (!fs::exists(config_.tls_cert_file) ||
+            !fs::exists(config_.tls_key_file)) {
+            Logger::Error("WebServer",
+                "tls_mode=pem: cert or key file not found.");
+            return false;
+        }
         out_cert = config_.tls_cert_file;
         out_key  = config_.tls_key_file;
         return true;
     }
-    if (config_.tls_mode == "pfx") {
-        // Extract PEM from PFX, write to certs dir, return those paths.
-        if (config_.tls_pfx_file.empty() || !fs::exists(config_.tls_pfx_file)) return false;
 
-        const fs::path cert_path = TlsCertsDir() / "pfx_server.crt";
-        const fs::path key_path  = TlsCertsDir() / "pfx_server.key";
-
-        // Re-extract only if PFX is newer than cached PEM files
-        bool need_extract = !fs::exists(cert_path) || !fs::exists(key_path);
-        if (!need_extract) {
-            std::error_code ec;
-            auto pfx_t  = fs::last_write_time(config_.tls_pfx_file, ec);
-            auto cert_t = fs::last_write_time(cert_path, ec);
-            if (pfx_t > cert_t) need_extract = true;
-        }
-
-        if (need_extract) {
-            FILE* f = nullptr;
-            if (_wfopen_s(&f, fs::path(config_.tls_pfx_file).wstring().c_str(), L"rb") != 0 || !f)
-                return false;
-            PKCS12* p12 = d2i_PKCS12_fp(f, nullptr);
-            fclose(f);
-            if (!p12) return false;
-
-            EVP_PKEY* pkey = nullptr; X509* cert = nullptr;
-            const char* pass = config_.tls_pfx_passphrase.empty()
-                               ? nullptr : config_.tls_pfx_passphrase.c_str();
-            int rc = PKCS12_parse(p12, pass, &pkey, &cert, nullptr);
-            PKCS12_free(p12);
-            if (!rc || !pkey || !cert) { EVP_PKEY_free(pkey); X509_free(cert); return false; }
-
-            std::error_code ec;
-            fs::create_directories(TlsCertsDir(), ec);
-            bool ok = true;
-            {
-                FILE* wf = nullptr;
-                if (_wfopen_s(&wf, key_path.wstring().c_str(), L"w") == 0 && wf) {
-                    ok = (PEM_write_PrivateKey(wf, pkey, nullptr, nullptr, 0, nullptr, nullptr) == 1);
-                    fclose(wf);
-                } else ok = false;
-            }
-            if (ok) {
-                FILE* wf = nullptr;
-                if (_wfopen_s(&wf, cert_path.wstring().c_str(), L"w") == 0 && wf) {
-                    ok = (PEM_write_X509(wf, cert) == 1);
-                    fclose(wf);
-                } else ok = false;
-            }
-            EVP_PKEY_free(pkey); X509_free(cert);
-            if (!ok) return false;
-        }
-
-        out_cert = cert_path.string();
-        out_key  = key_path.string();
-        return true;
-    }
-#else
-    (void)out_cert; (void)out_key;
-#endif
+    // "pfx" / unknown modes
+    Logger::Error("WebServer",
+        "Unsupported tls_mode: " + config_.tls_mode);
     return false;
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// GetCertExpiryDays
+// Returns days until the configured certificate expires, or -1 if unknown.
+// ──────────────────────────────────────────────────────────────────────────────
 int WebServer::GetCertExpiryDays() const
 {
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-    Logger::Info("OpenSSL", "GetCertExpiryDays: starting");
-    Logger::Flush();
     std::string cert_path, key_path;
-    if (!ResolveTlsCertAndKey(cert_path, key_path)) {
-        Logger::Error("OpenSSL", "GetCertExpiryDays: ResolveTlsCertAndKey failed");
-        Logger::Flush();
-        return -1;
-    }
-    Logger::Flush();
-    Logger::Info("OpenSSL", "GetCertExpiryDays: cert_path=" + cert_path);
+    if (!ResolveTlsCertAndKey(cert_path, key_path)) return -1;
 
     FILE* f = nullptr;
-    if (_wfopen_s(&f, fs::path(cert_path).wstring().c_str(), L"r") != 0 || !f) {
-        Logger::Error("OpenSSL", "GetCertExpiryDays: could not open cert file");
+    if (_wfopen_s(&f, fs::path(cert_path).wstring().c_str(), L"r") != 0 || !f)
         return -1;
-    }
-    X509* cert = PEM_read_X509(f, nullptr, nullptr, nullptr);
-    fclose(f);
-    if (!cert) {
-        Logger::Error("OpenSSL", "GetCertExpiryDays: PEM_read_X509 failed");
-        return -1;
-    }
-    Logger::Info("OpenSSL", "GetCertExpiryDays: X509 parsed successfully");
 
-    const ASN1_TIME* not_after = X509_get0_notAfter(cert);
+    X509* x509 = PEM_read_X509(f, nullptr, nullptr, nullptr);
+    fclose(f);
+    if (!x509) return -1;
+
     int days = 0, secs = 0;
-    ASN1_TIME_diff(&days, &secs, nullptr, not_after);
-    X509_free(cert);
-    Logger::Info("OpenSSL", "GetCertExpiryDays: days=" + std::to_string(days));
+    ASN1_TIME_diff(&days, &secs, nullptr, X509_get0_notAfter(x509));
+    X509_free(x509);
     return days;
 #else
     return -1;
@@ -2055,119 +2680,159 @@ int WebServer::GetCertExpiryDays() const
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Start / Stop
+// Start
+// Creates the httplib server (SSL or plain), registers routes, and launches
+// the listener thread(s).  Returns true if the server started successfully.
+// Safe to call while already running — returns true immediately.
 // ──────────────────────────────────────────────────────────────────────────────
-bool WebServer::Start() {
+bool WebServer::Start()
+{
     if (running_.load()) return true;
 
-    // Bootstrap any missing default web assets before binding the port
-    EnsureDefaultWebAssets();
-    // Kick off background download of vendor JS/CSS libraries if not cached
-    EnsureVendorLibs();
-
-    // Recreate the impl (allows restart after Stop)
-    impl_ = std::make_unique<WebServerImpl>();
-
-    // ── Create main server (HTTPS or HTTP) ────────────────────────────────
-    bool use_tls = !config_.tls_mode.empty();
-    if (use_tls) {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        std::string cert, key;
-        if (!ResolveTlsCertAndKey(cert, key)) {
-            // TLS configured but certs unavailable — fall back to HTTP
-            use_tls = false;
-            AppendAuditLog("system", "tls_fallback",
-                "TLS cert/key resolution failed; starting HTTP");
-            impl_->server = std::make_unique<httplib::Server>();
-        } else {
-            Logger::Info("OpenSSL", "Start: Creating SSLServer with cert=" + cert);
-            impl_->server = std::make_unique<httplib::SSLServer>(
-                cert.c_str(), key.c_str());
-            Logger::Info("OpenSSL", "Start: SSLServer created");
-            AppendAuditLog("system", "tls_start",
-                "HTTPS started with cert: " + cert);
-        }
-#else
-        // OpenSSL not compiled in — ignore TLS config and start plain HTTP
-        use_tls = false;
-        AppendAuditLog("system", "tls_unavailable",
-            "TLS configured but CPPHTTPLIB_OPENSSL_SUPPORT not defined; using HTTP");
-        impl_->server = std::make_unique<httplib::Server>();
-#endif
-    } else {
-        impl_->server = std::make_unique<httplib::Server>();
+    // A listener can exit by itself (for example, a bind failure on a worker
+    // thread) while leaving std::thread joinable. Join any previous listener
+    // before assigning a new thread, or std::thread will call std::terminate.
+    if (server_thread_.joinable() || redirect_thread_.joinable()) {
+        Stop();
     }
 
-    RegisterRoutes();
+    impl_ = std::make_unique<WebServerImpl>();
 
-    impl_->srv().new_task_queue = [this]() -> httplib::TaskQueue* {
-        return new httplib::ThreadPool(
-            static_cast<size_t>(std::max(1, config_.thread_pool_size)));
-    };
+    // ── Build httplib::Server instance ───────────────────────────────────────
+    std::string cert_path, key_path;
+    const bool  has_tls = ResolveTlsCertAndKey(cert_path, key_path);
 
-    // Bind first to detect port conflicts before launching thread
-    if (!impl_->srv().bind_to_port(config_.bind_address.c_str(), config_.port)) {
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    if (has_tls) {
+        Logger::Info("WebServer",
+            "Starting HTTPS server on port " + std::to_string(config_.port) +
+            " (cert=" + cert_path + ")");
+        impl_->server =
+            std::make_unique<httplib::SSLServer>(cert_path.c_str(), key_path.c_str());
+    } else {
+        Logger::Info("WebServer",
+            "Starting HTTP server on port " + std::to_string(config_.port));
+        impl_->server = std::make_unique<httplib::Server>();
+    }
+#else
+    if (has_tls) {
+        Logger::Error("WebServer",
+            "TLS requested but OpenSSL is not compiled in — falling back to HTTP.");
+    }
+    Logger::Info("WebServer",
+        "Starting HTTP server on port " + std::to_string(config_.port));
+    impl_->server = std::make_unique<httplib::Server>();
+#endif
+
+    if (!impl_->server || !impl_->server->is_valid()) {
+        Logger::Error("WebServer", "Failed to create httplib server.");
         return false;
     }
 
-    // ── Optional HTTP→HTTPS redirect listener ─────────────────────────────
-    if (use_tls && config_.http_redirect_port > 0 &&
-        config_.http_redirect_port != config_.port)
-    {
-        impl_->redirect_srv = std::make_unique<httplib::Server>();
-        const std::string redirect_base = config_.base_url.empty()
-            ? "https://localhost:" + std::to_string(config_.port)
-            : config_.base_url;
+    // Thread-pool size
+    const int pool = std::max(1, config_.thread_pool_size);
+    impl_->server->new_task_queue = [pool]() {
+        return new httplib::ThreadPool(pool);
+    };
 
-        impl_->redirect_srv->Get(".*", [redirect_base](const httplib::Request& req,
-                                                         httplib::Response& res) {
-            res.status = 301;
-            res.set_header("Location", redirect_base + req.path);
-            res.set_content("Redirecting to HTTPS", "text/plain");
-        });
-        impl_->redirect_srv->Post(".*", [redirect_base](const httplib::Request& req,
-                                                          httplib::Response& res) {
-            res.status = 301;
-            res.set_header("Location", redirect_base + req.path);
-            res.set_content("Redirecting to HTTPS", "text/plain");
-        });
+    // Routes + default assets
+    RegisterRoutes();
+    EnsureDefaultWebAssets();
+    EnsureVendorLibs();
 
-        if (impl_->redirect_srv->bind_to_port(
-                config_.bind_address.c_str(), config_.http_redirect_port))
-        {
-            redirect_thread_ = std::thread([this]() {
-                impl_->redirect_srv->listen_after_bind();
-            });
-        }
+    // ── Listener thread ───────────────────────────────────────────────────────
+    const std::string bind_addr = config_.bind_address;
+    const int         port      = config_.port;
+
+    if (!impl_->server->bind_to_port(bind_addr.c_str(), port)) {
+        Logger::Error("WebServer",
+            "Failed to bind listener on " + bind_addr + ":" +
+            std::to_string(port));
+        return false;
     }
 
     running_.store(true);
-    server_thread_ = std::thread([this]() {
-        impl_->srv().listen_after_bind();
+
+    server_thread_ = std::thread([this, bind_addr, port]() {
+        (void)bind_addr;
+        (void)port;
+        impl_->server->listen_after_bind();
         running_.store(false);
+        Logger::Info("WebServer", "Listener thread exited.");
     });
 
+    // ── Optional HTTP→HTTPS redirect server ──────────────────────────────────
+    if (has_tls && config_.http_redirect_port > 0 &&
+        config_.http_redirect_port != port) {
+        impl_->redirect_srv = std::make_unique<httplib::Server>();
+
+        // Build the base HTTPS URL for the Location header.
+        std::string base = config_.base_url;
+        if (base.empty()) {
+            base = "https://" + bind_addr + ":" + std::to_string(port);
+        }
+
+        impl_->redirect_srv->Get(".*",
+            [base](const httplib::Request& req, httplib::Response& res) {
+                res.status = 301;
+                res.set_header("Location", base + req.path);
+            });
+
+        const int rport = config_.http_redirect_port;
+        if (impl_->redirect_srv->bind_to_port(bind_addr.c_str(), rport)) {
+            redirect_thread_ = std::thread([this]() {
+                impl_->redirect_srv->listen_after_bind();
+                Logger::Info("WebServer", "Redirect listener thread exited.");
+            });
+            Logger::Info("WebServer",
+                "HTTP→HTTPS redirect running on port " + std::to_string(rport));
+        } else {
+            Logger::Error("WebServer",
+                "Failed to bind redirect listener on " + bind_addr + ":" +
+                std::to_string(rport));
+        }
+    }
+
+    Logger::Info("WebServer",
+        std::string("Server started — ") +
+        (has_tls ? "https" : "http") + "://" +
+        bind_addr + ":" + std::to_string(port));
     return true;
 }
 
-void WebServer::Stop() {
-    if (!running_.load()) return;
-
-    // Stop redirect server first (doesn't own running_ flag)
-    if (impl_ && impl_->redirect_srv) {
-        impl_->redirect_srv->stop();
-        if (redirect_thread_.joinable()) redirect_thread_.join();
+// ──────────────────────────────────────────────────────────────────────────────
+// Stop
+// Signals both listener threads to exit and waits for them to join.
+// Safe to call when already stopped.
+// ──────────────────────────────────────────────────────────────────────────────
+void WebServer::Stop()
+{
+    // Signal httplib to stop accepting new connections.
+    if (impl_) {
+        if (impl_->server)      impl_->server->stop();
+        if (impl_->redirect_srv) impl_->redirect_srv->stop();
     }
 
-    impl_->srv().stop();
-    if (server_thread_.joinable()) server_thread_.join();
+    // Join threads — critical to avoid std::terminate() in the destructor.
+    if (server_thread_.joinable())   server_thread_.join();
+    if (redirect_thread_.joinable()) redirect_thread_.join();
+
     running_.store(false);
-    PurgeExpiredSessions();
+    Logger::Info("WebServer", "Server stopped.");
 }
 
-void WebServer::Reconfigure(const WebServerConfig& new_config) {
-    const bool was_running = IsRunning();
-    if (was_running) Stop();
+// ──────────────────────────────────────────────────────────────────────────────
+// Reconfigure
+// Stops the server (if running), replaces the config and httplib impl, then
+// restarts if it was previously running.
+// ──────────────────────────────────────────────────────────────────────────────
+void WebServer::Reconfigure(const WebServerConfig& new_config)
+{
+    const bool was_running = running_.load();
+    Stop();
+
     config_ = new_config;
+    impl_   = std::make_unique<WebServerImpl>();  // fresh impl — clears old routes
+
     if (was_running) Start();
 }

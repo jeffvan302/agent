@@ -30,6 +30,9 @@
 #include <unordered_map>
 #include <vector>
 
+class McpManager;
+class RagService;
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Configuration — loaded from / saved to web_settings.json
 // ──────────────────────────────────────────────────────────────────────────────
@@ -82,10 +85,14 @@ struct WebServerImpl;   // defined in web_server.cpp; owns the httplib::Server
 
 class WebServer {
 public:
+    using ContentChangedCallback = std::function<void()>;
+
     WebServer(AppStorage* storage,
               WebUserStore* user_store,
               WebServerConfig config,
-              std::filesystem::path app_root);
+              std::filesystem::path app_root,
+              McpManager* mcp_manager = nullptr,
+              RagService* rag_service = nullptr);
     ~WebServer();
 
     // Non-copyable, non-movable (owns threads + mutex)
@@ -108,6 +115,7 @@ public:
 
     // ── Audit log ─────────────────────────────────────────────────────────
     void SetAuditLogPath(const std::filesystem::path& path);
+    void SetContentChangedCallback(ContentChangedCallback callback);
 
     // ── TLS status (public — used by Web Config dialog) ───────────────────
     // Returns the directory used for auto-generated certs (<app_root>/certs/).
@@ -212,6 +220,8 @@ private:
                             const std::string& user_content,
                             const std::vector<std::string>& attachments) const;
 
+    void NotifyContentChanged() const;
+
     // ── Rate limiting ─────────────────────────────────────────────────────
     // Tracks per-IP failed login attempts.  After kMaxLoginFailures failures
     // the IP is locked out for kLockoutMinutes minutes.
@@ -252,7 +262,7 @@ private:
     void EnsureDefaultWebAssets() const;
 
     // ── Vendor library caching ────────────────────────────────────────────
-    // Downloads highlight.js / marked / DOMPurify from CDN into
+    // Downloads highlight.js / marked / DOMPurify / Mermaid / Vega from CDN into
     // <web_root>/js/vendor/ and <web_root>/css/vendor/ on first start.
     // Runs in a detached thread so it never blocks Start().
     // If files already exist or download fails, it is a silent no-op.
@@ -265,17 +275,20 @@ private:
     bool ResolveTlsCertAndKey(std::string& out_cert, std::string& out_key) const;
 
 
-    // ── Members ───────────────────────────────────────────────────────────
-    AppStorage*    storage_;
-    WebUserStore*  user_store_;
-    WebServerConfig config_;
-    std::filesystem::path app_root_;
+    // ── Members ──────────────────────────────────────────────────────────────
+    AppStorage*                       storage_;
+    WebUserStore*                     user_store_;
+    McpManager*                       mcp_manager_;
+    RagService*                       rag_service_;
+    WebServerConfig                   config_;
+    std::filesystem::path             app_root_;
+    std::unique_ptr<WebServerImpl>    impl_;
+    ContentChangedCallback            content_changed_callback_;
 
-    std::unique_ptr<WebServerImpl> impl_;
-    std::thread   server_thread_;
-    std::thread   redirect_thread_;     // HTTP→HTTPS redirect listener (optional)
-    std::atomic<bool> running_{false};
+    std::atomic<bool>                 running_{false};
+    std::thread                       server_thread_;
+    std::thread                       redirect_thread_;
 
-    mutable std::mutex sessions_mutex_;
+    mutable std::mutex                sessions_mutex_;
     std::unordered_map<std::string, Session> sessions_;
 };

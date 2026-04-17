@@ -187,7 +187,6 @@ void Logger::Initialize(const std::filesystem::path& log_dir, LogLevel level) {
 void Logger::Shutdown() {
     std::lock_guard<std::mutex> lock(g_log_mutex);
     if (!g_initialized) return;
-    Flush();
     g_initialized = false;
 }
 

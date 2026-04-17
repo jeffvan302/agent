@@ -29,6 +29,34 @@
       "source_description": "Test RAG",
       "started_at": "2026-04-13T03:39:02Z",
       "status": "completed"
+    },
+    {
+      "chunks_added": 107,
+      "errors": [],
+      "files_ingested": 1,
+      "files_skipped": 0,
+      "finished_at": "2026-04-17T07:08:24Z",
+      "id": "job_rag_1776_1776409703219",
+      "kind": "files",
+      "rag_id": "rag_1776409676886_9",
+      "rag_name": "rag_1776409676886_9",
+      "source_description": "RasingRules.pdf",
+      "started_at": "2026-04-17T07:08:23Z",
+      "status": "completed"
+    },
+    {
+      "chunks_added": 1,
+      "errors": [],
+      "files_ingested": 1,
+      "files_skipped": 0,
+      "finished_at": "2026-04-17T07:10:25Z",
+      "id": "job_rag_1776_1776409825104",
+      "kind": "files",
+      "rag_id": "rag_1776409676886_9",
+      "rag_name": "rag_1776409676886_9",
+      "source_description": "Baby Formula Cost Comparison.xlsx",
+      "started_at": "2026-04-17T07:10:25Z",
+      "status": "completed"
     }
   ]
 }

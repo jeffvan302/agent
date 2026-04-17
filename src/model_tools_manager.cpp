@@ -204,11 +204,8 @@ static void NormalizeRagRow(RagRow& row) {
     if (!row.can_read) { row.can_write = row.expose_as_tool = row.can_delete = row.can_export = row.default_ingest_target = false; }
     if (!row.can_write) { row.can_delete = row.default_ingest_target = false; }
 
-    // inject_on_start only makes sense when retrieval mode includes passive search
-    if (row.retrieval_mode == RagRetrievalMode::ActiveToolOnly ||
-        row.retrieval_mode == RagRetrievalMode::Disabled) {
-        row.inject_on_start = false;
-    }
+    // Passive/pre-search RAG injection is inactive in this phase.
+    row.inject_on_start = false;
 }
 
 // Build a sanitized tool name for agent_ prefix (mirrors SanitizeToolName in main.cpp)
@@ -244,22 +241,18 @@ static std::string BuildCallerContextText(const ModelToolConfig& tool,
         ? ("Sub-agent: " + tool.name)
         : tool.description;
 
-    // Collect passive/both-mode RAGs (the ones the calling model should know about)
-    std::vector<std::string> passive_rag_names;
-    std::vector<std::string> inject_rag_names;
+    std::vector<std::string> rag_names;
     for (const auto& binding : tool.rag_bindings) {
         if (!binding.enabled) continue;
-        if (binding.retrieval_mode == RagRetrievalMode::Both ||
-            binding.retrieval_mode == RagRetrievalMode::PassiveOnly) {
+        if (binding.can_read && binding.expose_as_tool &&
+            binding.retrieval_mode != RagRetrievalMode::PassiveOnly &&
+            binding.retrieval_mode != RagRetrievalMode::Disabled) {
             // Find the display name
             std::string rag_name = binding.rag_id;
             for (const auto& lib : available_rags) {
                 if (lib.id == binding.rag_id) { rag_name = lib.name; break; }
             }
-            passive_rag_names.push_back(rag_name);
-            if (binding.inject_on_start) {
-                inject_rag_names.push_back(rag_name);
-            }
+            rag_names.push_back(rag_name);
         }
     }
 
@@ -283,35 +276,27 @@ static std::string BuildCallerContextText(const ModelToolConfig& tool,
         }
         notes += ".";
     }
-    if (!passive_rag_names.empty()) {
-        notes += " Automatically searches knowledge base(s): ";
-        for (size_t i = 0; i < passive_rag_names.size(); ++i) {
+    if (!rag_names.empty()) {
+        notes += " Has access to RAG MCP server(s): ";
+        for (size_t i = 0; i < rag_names.size(); ++i) {
             if (i) notes += ", ";
-            notes += passive_rag_names[i];
+            notes += rag_names[i];
         }
         notes += ".";
-    }
-    if (!inject_rag_names.empty()) {
-        notes += " Pre-injects context from: ";
-        for (size_t i = 0; i < inject_rag_names.size(); ++i) {
-            if (i) notes += ", ";
-            notes += inject_rag_names[i];
-        }
-        notes += " before starting.";
     }
 
     // Build param description
     std::string instructions_desc = "Detailed task instructions for this agent. Describe exactly what you want accomplished.";
-    if (!mcp_names.empty() || !passive_rag_names.empty()) {
+    if (!mcp_names.empty() || !rag_names.empty()) {
         instructions_desc += " Available capabilities:";
         if (!mcp_names.empty()) {
             instructions_desc += " tools from [";
             for (size_t i = 0; i < mcp_names.size(); ++i) { if (i) instructions_desc += ", "; instructions_desc += mcp_names[i]; }
             instructions_desc += "]";
         }
-        if (!passive_rag_names.empty()) {
-            instructions_desc += " and knowledge from [";
-            for (size_t i = 0; i < passive_rag_names.size(); ++i) { if (i) instructions_desc += ", "; instructions_desc += passive_rag_names[i]; }
+        if (!rag_names.empty()) {
+            instructions_desc += " and RAG MCP servers [";
+            for (size_t i = 0; i < rag_names.size(); ++i) { if (i) instructions_desc += ", "; instructions_desc += rag_names[i]; }
             instructions_desc += "]";
         }
         instructions_desc += ". Example: 'Search for X, then write a summary to Y.'";
@@ -396,10 +381,10 @@ static std::string BuildToolContextText(const ModelToolConfig& tool,
 
             auto mode_str = [](RagRetrievalMode m) -> const char* {
                 switch (m) {
-                    case RagRetrievalMode::PassiveOnly:    return "Passive only";
+                    case RagRetrievalMode::PassiveOnly:    return "Passive only (inactive)";
                     case RagRetrievalMode::ActiveToolOnly: return "Active tool only";
                     case RagRetrievalMode::Disabled:       return "Disabled";
-                    default:                               return "Both (passive + tool)";
+                    default:                               return "Tool access (passive later)";
                 }
             };
 
@@ -414,13 +399,8 @@ static std::string BuildToolContextText(const ModelToolConfig& tool,
                 << binding.default_min_confidence << " - "
                 << binding.default_max_confidence << "]\n";
 
-            if (binding.inject_on_start &&
-                (binding.retrieval_mode == RagRetrievalMode::Both ||
-                 binding.retrieval_mode == RagRetrievalMode::PassiveOnly)) {
-                out << "    ⚡ INJECT ON START: This library will be searched using the\n"
-                    << "       task instructions before the first model call.  Results\n"
-                    << "       will be prepended to the system prompt.\n";
-            }
+            out << "    Passive/pre-search injection is inactive in this phase.\n";
+
         }
     }
 
@@ -766,7 +746,7 @@ private:
         rag_delete_check_   = CreateWindowExW(0, L"BUTTON", L"Delete",        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0,0,0,0, hwnd_, reinterpret_cast<HMENU>(kRagDeleteCheck),   nullptr, nullptr);
         rag_export_check_   = CreateWindowExW(0, L"BUTTON", L"Write file",    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0,0,0,0, hwnd_, reinterpret_cast<HMENU>(kRagExportCheck),   nullptr, nullptr);
         rag_default_ingest_ = CreateWindowExW(0, L"BUTTON", L"Default ingest",WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0,0,0,0, hwnd_, reinterpret_cast<HMENU>(kRagDefaultIngest), nullptr, nullptr);
-        rag_inject_onstart_ = CreateWindowExW(0, L"BUTTON", L"Inject on start",WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0,0,0,0, hwnd_, reinterpret_cast<HMENU>(kRagInjectOnStart), nullptr, nullptr);
+        rag_inject_onstart_ = CreateWindowExW(0, L"BUTTON", L"Inject on start (inactive)",WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0,0,0,0, hwnd_, reinterpret_cast<HMENU>(kRagInjectOnStart), nullptr, nullptr);
         rag_priority_lbl_   = CreateWindowExW(0, L"STATIC", L"Priority:",     WS_CHILD | WS_VISIBLE, 0,0,0,0, hwnd_, reinterpret_cast<HMENU>(kRagPriorityLbl), nullptr, nullptr);
         rag_priority_edit_  = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER, 0,0,0,0, hwnd_, reinterpret_cast<HMENU>(kRagPriorityEdit), nullptr, nullptr);
         rag_maxchunks_lbl_  = CreateWindowExW(0, L"STATIC", L"Max chunks:",   WS_CHILD | WS_VISIBLE, 0,0,0,0, hwnd_, reinterpret_cast<HMENU>(kRagMaxChunksLbl), nullptr, nullptr);
@@ -781,8 +761,8 @@ private:
         rag_retmode_combo_  = CreateWindowExW(0, L"COMBOBOX", nullptr,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
             0,0,0,0, hwnd_, reinterpret_cast<HMENU>(kRagRetModeCombo), nullptr, nullptr);
-        ComboBox_AddString(rag_retmode_combo_, L"Both (passive + tool)");
-        ComboBox_AddString(rag_retmode_combo_, L"Passive only");
+        ComboBox_AddString(rag_retmode_combo_, L"Tool access (passive later)");
+        ComboBox_AddString(rag_retmode_combo_, L"Passive only (inactive)");
         ComboBox_AddString(rag_retmode_combo_, L"Active tool only");
         ComboBox_AddString(rag_retmode_combo_, L"Disabled");
 
@@ -1504,10 +1484,7 @@ private:
         Button_SetCheck(rag_inject_onstart_, row.inject_on_start     ? BST_CHECKED : BST_UNCHECKED);
         EnableWindow(rag_exportpath_edit_, row.can_export);
 
-        // inject_on_start only valid when retrieval mode is passive/both
-        const bool can_inject = (row.retrieval_mode == RagRetrievalMode::Both ||
-                                 row.retrieval_mode == RagRetrievalMode::PassiveOnly);
-        EnableWindow(rag_inject_onstart_, ok && can_inject);
+        EnableWindow(rag_inject_onstart_, FALSE);
 
         SetWindowTextW(rag_priority_edit_,   std::to_wstring(row.retrieval_priority).c_str());
         SetWindowTextW(rag_maxchunks_edit_,  std::to_wstring(row.max_chunks).c_str());

@@ -5,9 +5,8 @@
 // embedded web server.
 //
 // Shows current server status (running / stopped + active session count),
-// Start/Stop toggle, and all WebServerConfig fields.  On OK the caller
-// receives a new config; if the server was running before OK is clicked it is
-// restarted with the new config automatically.
+// Start/Stop toggle, and all WebServerConfig fields.  Save applies and
+// persists settings immediately; OK applies settings and closes the dialog.
 // ──────────────────────────────────────────────────────────────────────────────
 
 #include "web_server.h"
@@ -15,8 +14,8 @@
 #include <filesystem>
 #include <windows.h>
 
-// Returns true if the user pressed OK (and config was potentially updated).
-// Returns false on Cancel or window close.
+// Returns true if settings were saved/applied in the dialog.
+// Returns false on Cancel or window close without saving.
 //
 // If server != nullptr the dialog shows live status and the Start/Stop button
 // works in real time.  Passing nullptr is allowed (e.g. for unit tests /

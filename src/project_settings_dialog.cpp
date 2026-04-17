@@ -415,8 +415,8 @@ private:
         rag_export_path_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagExportPathEdit), nullptr, nullptr);
         rag_retrieval_mode_label_ = CreateWindowExW(0, L"STATIC", L"Retrieval mode:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagRetrievalModeLabel), nullptr, nullptr);
         rag_retrieval_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagRetrievalModeCombo), nullptr, nullptr);
-        ComboBox_AddString(rag_retrieval_mode_combo_, L"Both (passive + tool)");
-        ComboBox_AddString(rag_retrieval_mode_combo_, L"Passive only");
+        ComboBox_AddString(rag_retrieval_mode_combo_, L"Tool access (passive later)");
+        ComboBox_AddString(rag_retrieval_mode_combo_, L"Passive only (inactive)");
         ComboBox_AddString(rag_retrieval_mode_combo_, L"Active tool only");
         ComboBox_AddString(rag_retrieval_mode_combo_, L"Disabled");
         // Project variables section

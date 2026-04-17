@@ -13,6 +13,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <exception>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -74,6 +75,7 @@ enum ControlId : int {
     kTlsExpiryLabel     = 8075,
     kTlsExpiryValue     = 8076,
     kTlsGenCertBtn      = 8077,
+    kSaveBtn            = 8078,
 
     // Footer
     kOkBtn          = IDOK,
@@ -89,8 +91,39 @@ struct DlgState {
     // Resolved web_root at dialog open (used to scan themes/)
     std::filesystem::path web_root_resolved;
 
-    bool result_ok = false;   // set to true on OK press
+    bool result_ok = false;   // set to true once settings are saved/applied
 };
+
+static void RunModalLoop(HWND dlg, HWND owner)
+{
+    const bool owner_was_enabled =
+        owner && IsWindow(owner) && IsWindowEnabled(owner);
+    if (owner_was_enabled) EnableWindow(owner, FALSE);
+
+    ShowWindow(dlg, SW_SHOW);
+    UpdateWindow(dlg);
+
+    MSG msg = {};
+    bool got_quit = false;
+    while (IsWindow(dlg)) {
+        const BOOL rc = GetMessageW(&msg, nullptr, 0, 0);
+        if (rc <= 0) {
+            got_quit = (rc == 0);
+            break;
+        }
+        if (!IsWindow(dlg)) break;
+        if (!IsDialogMessageW(dlg, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+
+    if (owner_was_enabled && IsWindow(owner)) {
+        EnableWindow(owner, TRUE);
+        SetForegroundWindow(owner);
+    }
+    if (got_quit) PostQuitMessage(static_cast<int>(msg.wParam));
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -347,6 +380,41 @@ static WebServerConfig ReadFields(HWND dlg, DlgState* st)
     }
 
     return c;
+}
+
+static bool SaveFields(HWND dlg, DlgState* st, bool notify)
+{
+    if (!st || !st->cfg) return false;
+
+    WebServerConfig newCfg = ReadFields(dlg, st);
+    const auto settings_path = st->app_root / "web_settings.json";
+
+    try {
+        newCfg.SaveToFile(settings_path);
+    } catch (const std::exception& ex) {
+        std::wstring msg = L"Could not save web server settings.\n\n";
+        msg += Utf8ToWide(ex.what());
+        MessageBoxW(dlg, msg.c_str(), L"Web Server Configuration",
+                    MB_OK | MB_ICONERROR);
+        return false;
+    } catch (...) {
+        MessageBoxW(dlg, L"Could not save web server settings.",
+                    L"Web Server Configuration", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    *st->cfg = newCfg;
+    if (st->server) {
+        st->server->Reconfigure(newCfg);
+    }
+    st->result_ok = true;
+    UpdateStatus(dlg, st);
+
+    if (notify) {
+        MessageBoxW(dlg, L"Web server settings saved.",
+                    L"Web Server Configuration", MB_OK | MB_ICONINFORMATION);
+    }
+    return true;
 }
 
 // ── Layout constants ──────────────────────────────────────────────────────────
@@ -801,17 +869,23 @@ static LRESULT CALLBACK WebConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
         // ── Footer buttons ────────────────────────────────────────────────────
         {
-            int fx = kDlgW - kMarL - kBtnW * 2 - 8;
+            int fx = kDlgW - kMarL - kBtnW * 3 - 16;
             int fy = kDlgH - kBtnH - 12;   // fixed distance from window bottom
+            HWND btnSave = CreateWindowExW(0, L"BUTTON", L"Save",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                fx, fy, kBtnW, kBtnH,
+                dlg, reinterpret_cast<HMENU>(kSaveBtn), nullptr, nullptr);
+            SendMessageW(btnSave, WM_SETFONT, (WPARAM)hFont, TRUE);
+
             HWND btnOk = CreateWindowExW(0, L"BUTTON", L"OK",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                fx, fy, kBtnW, kBtnH,
+                fx + kBtnW + 8, fy, kBtnW, kBtnH,
                 dlg, reinterpret_cast<HMENU>(kOkBtn), nullptr, nullptr);
             SendMessageW(btnOk, WM_SETFONT, (WPARAM)hFont, TRUE);
 
             HWND btnCan = CreateWindowExW(0, L"BUTTON", L"Cancel",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                fx + kBtnW + 8, fy, kBtnW, kBtnH,
+                fx + (kBtnW + 8) * 2, fy, kBtnW, kBtnH,
                 dlg, reinterpret_cast<HMENU>(kCancelBtn), nullptr, nullptr);
             SendMessageW(btnCan, WM_SETFONT, (WPARAM)hFont, TRUE);
         }
@@ -934,6 +1008,11 @@ static LRESULT CALLBACK WebConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
 
+        if (id == kSaveBtn) {
+            SaveFields(dlg, st, true);
+            return 0;
+        }
+
         if (id == kOkBtn) {
             *st->cfg = ReadFields(dlg, st);
 
@@ -948,7 +1027,6 @@ static LRESULT CALLBACK WebConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         }
 
         if (id == kCancelBtn || id == IDCANCEL) {
-            st->result_ok = false;
             DestroyWindow(dlg);
             return 0;
         }
@@ -961,7 +1039,6 @@ static LRESULT CALLBACK WebConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_DESTROY:
-        PostQuitMessage(0);
         return 0;
     }
 
@@ -1023,21 +1100,11 @@ bool ShowWebConfigDialog(HWND                        owner,
         return false;
     }
 
-    Logger::Info("WebConfig", "About to call ShowWindow");
-    ShowWindow(dlg, SW_SHOW);
-    Logger::Info("WebConfig", "About to call UpdateWindow");
-    UpdateWindow(dlg);
-    Logger::Info("WebConfig", "Dialog displayed on screen");
+    Logger::Info("WebConfig", "About to run modal dialog loop");
+    RunModalLoop(dlg, owner);
+    Logger::Info("WebConfig", "Dialog closed");
     Logger::Flush();
 
-    // Modal message loop — runs until WM_DESTROY posts WM_QUIT
-    MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!IsDialogMessageW(dlg, &msg)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
-    // state.result_ok was set to true iff the user pressed OK
+    // state.result_ok is set once settings are saved or applied.
     return state.result_ok;
 }

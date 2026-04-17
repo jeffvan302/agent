@@ -57,6 +57,49 @@ static std::string GetEditText(HWND dlg, int id)
     return WideToUtf8(buf);
 }
 
+// ── Modal-dialog helper ───────────────────────────────────────────────────────
+// Shared message-loop used by the admin dialogs. The owner is disabled while
+// the child is open, and the loop exits when the dialog window is destroyed.
+// Child dialogs must not use PostQuitMessage; only the main window owns the
+// process-level quit signal.
+static void RunModalLoop(HWND hw, HWND owner)
+{
+    const bool owner_was_enabled =
+        owner && IsWindow(owner) && IsWindowEnabled(owner);
+    if (owner_was_enabled) EnableWindow(owner, FALSE);
+
+    ShowWindow(hw, SW_SHOW);
+    UpdateWindow(hw);
+
+    // Pre-focus the first edit control (ID 101 for two-field dialogs, 1 for
+    // single-field ones).
+    HWND firstEdit = GetDlgItem(hw, 101);
+    if (!firstEdit) firstEdit = GetDlgItem(hw, 1);
+    if (firstEdit) SetFocus(firstEdit);
+
+    MSG msg = {};
+    bool got_quit = false;
+    while (IsWindow(hw)) {
+        const BOOL rc = GetMessageW(&msg, nullptr, 0, 0);
+        if (rc <= 0) {
+            got_quit = (rc == 0);
+            break;
+        }
+        if (!IsWindow(hw)) break;
+        if (!IsDialogMessageW(hw, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        if (!IsWindow(hw)) break;
+    }
+
+    if (owner_was_enabled && IsWindow(owner)) {
+        EnableWindow(owner, TRUE);
+        SetForegroundWindow(owner);
+    }
+    if (got_quit) PostQuitMessage(static_cast<int>(msg.wParam));
+}
+
 // Simple input dialog (single text field).
 // Returns std::nullopt on Cancel.
 static std::optional<std::string> PromptInput(HWND owner,
@@ -64,15 +107,11 @@ static std::optional<std::string> PromptInput(HWND owner,
                                                const wchar_t* prompt,
                                                const std::string& initial = {})
 {
-    // We use a small bespoke dialog.
     struct State {
         const wchar_t* prompt;
         std::string    initial;
         std::optional<std::string> result;
-        bool           password = false;
     };
-
-    // Heap-allocate so the WNDPROC lambda can capture it via CREATESTRUCT.
     auto* s = new State{ prompt, initial, std::nullopt };
 
     static bool reg = false;
@@ -87,29 +126,29 @@ static std::optional<std::string> PromptInput(HWND owner,
                 st = reinterpret_cast<State*>(cs->lpCreateParams);
                 SetWindowLongPtrW(hw, GWLP_USERDATA, (LONG_PTR)st);
                 HFONT f = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-                // Label
                 HWND lbl = CreateWindowExW(0, L"STATIC", st->prompt,
-                    WS_CHILD|WS_VISIBLE, 10, 10, 300, 16, hw, nullptr, nullptr, nullptr);
+                    WS_CHILD|WS_VISIBLE, 10, 10, 300, 16,
+                    hw, nullptr, nullptr, nullptr);
                 SendMessageW(lbl, WM_SETFONT, (WPARAM)f, TRUE);
-                // Edit
-                DWORD es = WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER;
-                if (st->password) es |= ES_PASSWORD;
-                HWND edt = CreateWindowExW(0, L"EDIT",
+                HWND edt = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT",
                     Utf8ToWide(st->initial).c_str(),
-                    es, 10, 30, 300, 22, hw,
+                    WS_CHILD|WS_VISIBLE|WS_TABSTOP,
+                    10, 30, 300, 22, hw,
                     reinterpret_cast<HMENU>(1), nullptr, nullptr);
                 SendMessageW(edt, WM_SETFONT, (WPARAM)f, TRUE);
-                // OK / Cancel
                 HWND btnOk = CreateWindowExW(0, L"BUTTON", L"OK",
                     WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
-                    120, 62, 80, 24, hw, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+                    120, 62, 80, 24, hw,
+                    reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
                 SendMessageW(btnOk, WM_SETFONT, (WPARAM)f, TRUE);
                 HWND btnCan = CreateWindowExW(0, L"BUTTON", L"Cancel",
                     WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
-                    210, 62, 80, 24, hw, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+                    210, 62, 80, 24, hw,
+                    reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
                 SendMessageW(btnCan, WM_SETFONT, (WPARAM)f, TRUE);
                 return 0;
             }
+            if (!st) return DefWindowProcW(hw, msg, wp, lp);
             if (msg == WM_COMMAND) {
                 int id = LOWORD(wp);
                 if (id == IDOK) {
@@ -120,9 +159,10 @@ static std::optional<std::string> PromptInput(HWND owner,
                 } else if (id == IDCANCEL) {
                     DestroyWindow(hw);
                 }
+                return 0;
             }
-            if (msg == WM_CLOSE) DestroyWindow(hw);
-            if (msg == WM_DESTROY) PostQuitMessage(0);
+            if (msg == WM_CLOSE)   { DestroyWindow(hw); return 0; }
+            if (msg == WM_DESTROY) { return 0; }
             return DefWindowProcW(hw, msg, wp, lp);
         };
         wc.hInstance     = GetModuleHandleW(nullptr);
@@ -136,27 +176,22 @@ static std::optional<std::string> PromptInput(HWND owner,
     RECT or_ = {};
     if (owner) GetWindowRect(owner, &or_);
     int ox = or_.left + (or_.right - or_.left - 330) / 2;
-    int oy = or_.top  + (or_.bottom - or_.top  - 100) / 2;
+    int oy = or_.top  + (or_.bottom - or_.top  - 105) / 2;
+    if (ox < 0) ox = 0;
+    if (oy < 0) oy = 0;
 
     HWND hw = CreateWindowExW(WS_EX_DLGMODALFRAME, kCls, title,
         WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
-        ox, oy, 330, 100, owner, nullptr, GetModuleHandleW(nullptr), s);
-    ShowWindow(hw, SW_SHOW);
-    UpdateWindow(hw);
+        ox, oy, 330, 105, owner, nullptr, GetModuleHandleW(nullptr), s);
 
-    MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!IsDialogMessageW(hw, &msg)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
+    RunModalLoop(hw, owner);
+
     auto result = s->result;
     delete s;
     return result;
 }
 
-// Variant for password input
+// Single password-field dialog — used for simple confirmation prompts.
 static std::optional<std::string> PromptPassword(HWND owner,
                                                    const wchar_t* title,
                                                    const wchar_t* prompt)
@@ -164,7 +199,6 @@ static std::optional<std::string> PromptPassword(HWND owner,
     struct State {
         const wchar_t* prompt;
         std::optional<std::string> result;
-        bool password = true;
     };
     auto* s = new State{ prompt, std::nullopt };
 
@@ -181,10 +215,11 @@ static std::optional<std::string> PromptPassword(HWND owner,
                 SetWindowLongPtrW(hw, GWLP_USERDATA, (LONG_PTR)st);
                 HFONT f = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
                 HWND lbl = CreateWindowExW(0, L"STATIC", st->prompt,
-                    WS_CHILD|WS_VISIBLE, 10, 10, 300, 16, hw, nullptr, nullptr, nullptr);
+                    WS_CHILD|WS_VISIBLE, 10, 10, 300, 16,
+                    hw, nullptr, nullptr, nullptr);
                 SendMessageW(lbl, WM_SETFONT, (WPARAM)f, TRUE);
-                HWND edt = CreateWindowExW(0, L"EDIT", L"",
-                    WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|ES_PASSWORD,
+                HWND edt = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                    WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_PASSWORD,
                     10, 30, 300, 22, hw, (HMENU)1, nullptr, nullptr);
                 SendMessageW(edt, WM_SETFONT, (WPARAM)f, TRUE);
                 HWND btnOk = CreateWindowExW(0, L"BUTTON", L"OK",
@@ -197,19 +232,22 @@ static std::optional<std::string> PromptPassword(HWND owner,
                 SendMessageW(btnCan, WM_SETFONT, (WPARAM)f, TRUE);
                 return 0;
             }
+            if (!st) return DefWindowProcW(hw, msg, wp, lp);
             if (msg == WM_COMMAND) {
                 int id = LOWORD(wp);
                 if (id == IDOK) {
                     wchar_t buf[512] = {};
                     GetDlgItemTextW(hw, 1, buf, 512);
                     st->result = WideToUtf8(buf);
+                    SecureZeroMemory(buf, sizeof(buf));
                     DestroyWindow(hw);
                 } else if (id == IDCANCEL) {
                     DestroyWindow(hw);
                 }
+                return 0;
             }
-            if (msg == WM_CLOSE) DestroyWindow(hw);
-            if (msg == WM_DESTROY) PostQuitMessage(0);
+            if (msg == WM_CLOSE)   { DestroyWindow(hw); return 0; }
+            if (msg == WM_DESTROY) { return 0; }
             return DefWindowProcW(hw, msg, wp, lp);
         };
         wc.hInstance     = GetModuleHandleW(nullptr);
@@ -223,21 +261,136 @@ static std::optional<std::string> PromptPassword(HWND owner,
     RECT or_ = {};
     if (owner) GetWindowRect(owner, &or_);
     int ox = or_.left + (or_.right  - or_.left - 330) / 2;
-    int oy = or_.top  + (or_.bottom - or_.top  - 100) / 2;
+    int oy = or_.top  + (or_.bottom - or_.top  - 105) / 2;
+    if (ox < 0) ox = 0;
+    if (oy < 0) oy = 0;
 
     HWND hw = CreateWindowExW(WS_EX_DLGMODALFRAME, kCls, title,
         WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
-        ox, oy, 330, 100, owner, nullptr, GetModuleHandleW(nullptr), s);
-    ShowWindow(hw, SW_SHOW);
-    UpdateWindow(hw);
+        ox, oy, 330, 105, owner, nullptr, GetModuleHandleW(nullptr), s);
 
-    MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!IsDialogMessageW(hw, &msg)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
+    RunModalLoop(hw, owner);
+
+    auto result = s->result;
+    delete s;
+    return result;
+}
+
+// Two-field password-reset dialog: "New password" + "Confirm password".
+// Validates minimum length (8) and that both fields match before accepting.
+// Returns std::nullopt on Cancel.
+static std::optional<std::string> PromptResetPassword(HWND owner)
+{
+    struct State {
+        std::optional<std::string> result;
+    };
+    auto* s = new State{ std::nullopt };
+
+    static bool reg = false;
+    static constexpr wchar_t kCls[] = L"AgentResetPasswordDlg";
+    if (!reg) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = [](HWND hw, UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
+            State* st = (State*)GetWindowLongPtrW(hw, GWLP_USERDATA);
+            HFONT f = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            if (msg == WM_CREATE) {
+                auto* cs = (CREATESTRUCTW*)lp;
+                st = (State*)cs->lpCreateParams;
+                SetWindowLongPtrW(hw, GWLP_USERDATA, (LONG_PTR)st);
+
+                auto AddRow = [&](int y, int id, const wchar_t* label) {
+                    HWND lbl = CreateWindowExW(0, L"STATIC", label,
+                        WS_CHILD|WS_VISIBLE|SS_RIGHT, 10, y + 3, 120, 16,
+                        hw, nullptr, nullptr, nullptr);
+                    SendMessageW(lbl, WM_SETFONT, (WPARAM)f, TRUE);
+                    HWND edt = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                        WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_PASSWORD,
+                        138, y, 168, 22, hw, (HMENU)(INT_PTR)id, nullptr, nullptr);
+                    SendMessageW(edt, WM_SETFONT, (WPARAM)f, TRUE);
+                };
+                AddRow(14,  101, L"New password:");
+                AddRow(46,  102, L"Confirm password:");
+
+                // Policy hint
+                HWND hint = CreateWindowExW(0, L"STATIC",
+                    L"At least 8 characters. Both fields must match.",
+                    WS_CHILD|WS_VISIBLE|SS_LEFT,
+                    10, 80, 310, 16, hw, nullptr, nullptr, nullptr);
+                SendMessageW(hint, WM_SETFONT, (WPARAM)f, TRUE);
+
+                HWND btnOk = CreateWindowExW(0, L"BUTTON", L"OK",
+                    WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
+                    80, 106, 80, 26, hw, (HMENU)IDOK, nullptr, nullptr);
+                SendMessageW(btnOk, WM_SETFONT, (WPARAM)f, TRUE);
+                HWND btnCan = CreateWindowExW(0, L"BUTTON", L"Cancel",
+                    WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
+                    170, 106, 80, 26, hw, (HMENU)IDCANCEL, nullptr, nullptr);
+                SendMessageW(btnCan, WM_SETFONT, (WPARAM)f, TRUE);
+                return 0;
+            }
+            if (!st) return DefWindowProcW(hw, msg, wp, lp);
+            if (msg == WM_COMMAND) {
+                int id = LOWORD(wp);
+                if (id == IDOK) {
+                    wchar_t p1[256] = {}, p2[256] = {};
+                    GetDlgItemTextW(hw, 101, p1, 256);
+                    GetDlgItemTextW(hw, 102, p2, 256);
+                    if (wcslen(p1) < 8) {
+                        MessageBoxW(hw,
+                            L"Password must be at least 8 characters.",
+                            L"Validation", MB_OK|MB_ICONWARNING);
+                        SetFocus(GetDlgItem(hw, 101));
+                        return 0;
+                    }
+                    if (wcscmp(p1, p2) != 0) {
+                        MessageBoxW(hw,
+                            L"The passwords do not match. Please try again.",
+                            L"Validation", MB_OK|MB_ICONWARNING);
+                        SetDlgItemTextW(hw, 101, L"");
+                        SetDlgItemTextW(hw, 102, L"");
+                        SecureZeroMemory(p1, sizeof(p1));
+                        SecureZeroMemory(p2, sizeof(p2));
+                        SetFocus(GetDlgItem(hw, 101));
+                        return 0;
+                    }
+                    st->result = WideToUtf8(p1);
+                    SecureZeroMemory(p1, sizeof(p1));
+                    SecureZeroMemory(p2, sizeof(p2));
+                    DestroyWindow(hw);
+                } else if (id == IDCANCEL) {
+                    DestroyWindow(hw);
+                }
+                return 0;
+            }
+            if (msg == WM_CLOSE)   { DestroyWindow(hw); return 0; }
+            if (msg == WM_DESTROY) { return 0; }
+            return DefWindowProcW(hw, msg, wp, lp);
+        };
+        wc.hInstance     = GetModuleHandleW(nullptr);
+        wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE+1);
+        wc.lpszClassName = kCls;
+        RegisterClassExW(&wc);
+        reg = true;
     }
+
+    RECT or_ = {};
+    if (owner) GetWindowRect(owner, &or_);
+    // Client area needed: buttons at y=106+26=132, + 14px bottom padding = 146.
+    // Caption + borders ≈ 30px → total window height = 176.
+    constexpr int kW = 340, kH = 176;
+    int ox = or_.left + (or_.right  - or_.left - kW) / 2;
+    int oy = or_.top  + (or_.bottom - or_.top  - kH) / 2;
+    if (ox < 0) ox = 0;
+    if (oy < 0) oy = 0;
+
+    HWND hw = CreateWindowExW(WS_EX_DLGMODALFRAME, kCls, L"Reset Password",
+        WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
+        ox, oy, kW, kH, owner, nullptr, GetModuleHandleW(nullptr), s);
+
+    RunModalLoop(hw, owner);
+
     auto result = s->result;
     delete s;
     return result;
@@ -289,10 +442,10 @@ enum ControlId : int {
     // Groups tab
     kGroupList        = 8120,
     kGroupAdd         = 8121,
-    kGroupDelete      = 8122,
-    kMemberList       = 8123,
-    kMemberAdd        = 8124,
-    kMemberRemove     = 8125,
+    kGroupEdit        = 8122,
+    kGroupDelete      = 8123,
+    kGroupNameEdit    = 8124,
+    kGroupUserCheckList = 8125,
 
     // Bindings tab
     kProjectList      = 8130,
@@ -326,22 +479,23 @@ struct AdminState {
     std::vector<WebProjectBinding> bindings;
     std::vector<ProjectRecord>     projects;
 
+    std::string displayed_binding_project_id;
     int active_tab = 0;
 };
 
 // ── Forward declarations ──────────────────────────────────────────────────────
 static void RefreshUserList(HWND dlg, AdminState* st);
 static void RefreshGroupList(HWND dlg, AdminState* st);
-static void RefreshMemberList(HWND dlg, AdminState* st);
+static void RefreshGroupEditPanel(HWND dlg, AdminState* st);
 static void RefreshProjectList(HWND dlg, AdminState* st);
 static void RefreshBindGroups(HWND dlg, AdminState* st);
 static void ShowTab(HWND dlg, AdminState* st, int tab);
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
-constexpr int kDlgW  = 600;
-constexpr int kDlgH  = 500;
+constexpr int kDlgW  = 700;
+constexpr int kDlgH  = 600;
 constexpr int kTabT  = 40;   // y where tab control starts
-constexpr int kTabH  = kDlgH - kTabT - 50; // tab control height
+constexpr int kTabH  = kDlgH - kTabT - 70; // tab control height
 constexpr int kPanL  = 8;    // panel content left margin (relative to panel)
 constexpr int kPanT  = 6;    // panel content top margin
 constexpr int kBtnW  = 90;
@@ -399,33 +553,52 @@ static void RefreshGroupList(HWND dlg, AdminState* st)
 
     SendMessageW(lb, LB_RESETCONTENT, 0, 0);
     for (auto& g : st->groups) {
-        std::wstring wn = Utf8ToWide(g.name);
+        std::string label = g.name + " (" + std::to_string(g.user_ids.size()) + ")";
+        std::wstring wn = Utf8ToWide(label);
         ListBox_AddString(lb, wn.c_str());
     }
     if (!st->groups.empty()) {
         if (sel < 0 || sel >= (int)st->groups.size()) sel = 0;
         ListBox_SetCurSel(lb, sel);
     }
-    RefreshMemberList(dlg, st);
+    RefreshGroupEditPanel(dlg, st);
 }
 
-static void RefreshMemberList(HWND /*dlg*/, AdminState* st)
+static void RefreshGroupEditPanel(HWND /*dlg*/, AdminState* st)
 {
+    HWND nameEdit = GetDlgItem(st->panel_groups, kGroupNameEdit);
+    HWND clb = GetDlgItem(st->panel_groups, kGroupUserCheckList);
     HWND lb_grp = GetDlgItem(st->panel_groups, kGroupList);
-    HWND lb_mem = GetDlgItem(st->panel_groups, kMemberList);
-    if (!lb_grp || !lb_mem) return;
+    if (!nameEdit || !clb || !lb_grp) return;
 
-    SendMessageW(lb_mem, LB_RESETCONTENT, 0, 0);
+    // Load fresh data
+    st->users = st->user_store->GetUsers();
+    st->groups = st->user_store->GetGroups();
+
     int gsel = ListBox_GetCurSel(lb_grp);
-    if (gsel < 0 || gsel >= (int)st->groups.size()) return;
 
-    const WebGroup& grp = st->groups[gsel];
-    // Resolve user names from IDs
-    for (auto& uid : grp.user_ids) {
-        auto u = st->user_store->FindUserById(uid);
-        std::string name = u ? u->username : ("<" + uid + ">");
-        std::wstring wn = Utf8ToWide(name);
-        ListBox_AddString(lb_mem, wn.c_str());
+    // Set group name or clear
+    if (gsel >= 0 && gsel < (int)st->groups.size()) {
+        SetWindowTextW(nameEdit, Utf8ToWide(st->groups[gsel].name).c_str());
+    } else {
+        SetWindowTextW(nameEdit, L"");
+    }
+
+    // Populate user checklist
+    SendMessageW(clb, LB_RESETCONTENT, 0, 0);
+    for (size_t i = 0; i < st->users.size(); ++i) {
+        const auto& u = st->users[i];
+        std::wstring wn = Utf8ToWide(u.username);
+        int idx = ListBox_AddString(clb, wn.c_str());
+
+        // Check if user is a member of selected group
+        bool is_member = false;
+        if (gsel >= 0 && gsel < (int)st->groups.size()) {
+            for (const auto& uid : st->groups[gsel].user_ids) {
+                if (uid == u.id) { is_member = true; break; }
+            }
+        }
+        SendMessageW(clb, LB_SETITEMDATA, idx, is_member ? 1 : 0);
     }
 }
 
@@ -468,12 +641,14 @@ static void RefreshBindGroups(HWND /*dlg*/, AdminState* st)
 
     int psel = ListBox_GetCurSel(lb_proj);
     if (psel < 0 || psel >= (int)st->projects.size()) {
+        st->displayed_binding_project_id.clear();
         if (chk) EnableWindow(chk, FALSE);
         if (edt) EnableWindow(edt, FALSE);
         return;
     }
 
     const std::string& pid = st->projects[psel].info.id;
+    st->displayed_binding_project_id = pid;
 
     // Find binding
     const WebProjectBinding* pb = nullptr;
@@ -514,22 +689,16 @@ static void RefreshBindGroups(HWND /*dlg*/, AdminState* st)
     if (btn) EnableWindow(btn, folder_en);
 }
 
-// Save group checks back to user_store for the selected project
+// Save group checks back to user_store for the project currently displayed.
 static void SaveBindGroups(AdminState* st)
 {
-    HWND lb_proj = GetDlgItem(st->panel_binds, kProjectList);
     HWND clb     = GetDlgItem(st->panel_binds, kBindGroupList);
     HWND chk     = GetDlgItem(st->panel_binds, kFolderCheck);
     HWND edt     = GetDlgItem(st->panel_binds, kFolderEdit);
-    if (!lb_proj || !clb) return;
-
-    int psel = ListBox_GetCurSel(lb_proj);
-    if (psel < 0 || psel >= (int)st->projects.size()) return;
-
-    const std::string& pid = st->projects[psel].info.id;
+    if (!clb || st->displayed_binding_project_id.empty()) return;
 
     WebProjectBinding b;
-    b.project_id = pid;
+    b.project_id = st->displayed_binding_project_id;
 
     int cnt = ListBox_GetCount(clb);
     for (int i = 0; i < cnt && i < (int)st->groups.size(); ++i) {
@@ -551,16 +720,40 @@ static void SaveBindGroups(AdminState* st)
 
 // ── Tab panel creation ────────────────────────────────────────────────────────
 
+static HWND CreateAdminPanel(HWND dlg, int left, int top, int w, int h)
+{
+    static bool reg = false;
+    static constexpr wchar_t kCls[] = L"AgentAdminPanel";
+    if (!reg) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = [](HWND hw, UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
+            HWND parent = reinterpret_cast<HWND>(GetWindowLongPtrW(hw, GWLP_USERDATA));
+            if (msg == WM_COMMAND || msg == WM_NOTIFY ||
+                msg == WM_DRAWITEM || msg == WM_MEASUREITEM) {
+                if (parent) SendMessageW(parent, msg, wp, lp);
+                return 0;
+            }
+            return DefWindowProcW(hw, msg, wp, lp);
+        };
+        wc.hInstance     = GetModuleHandleW(nullptr);
+        wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+        wc.lpszClassName = kCls;
+        RegisterClassExW(&wc);
+        reg = true;
+    }
+    HWND hw = CreateWindowExW(0, kCls, L"",
+        WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+        left, top, w, h, dlg, nullptr, GetModuleHandleW(nullptr), nullptr);
+    SetWindowLongPtrW(hw, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(dlg));
+    return hw;
+}
+
 static HWND CreateUsersPanel(HWND parent, RECT area, AdminState* st)
 {
-    HWND panel = CreateWindowExW(0, L"STATIC", L"",
-        WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
-        area.left, area.top, area.right - area.left, area.bottom - area.top,
-        parent, nullptr, GetModuleHandleW(nullptr), nullptr);
-
-    // Repurpose STATIC with WS_CLIPCHILDREN so children paint correctly
-    SetWindowLongPtrW(panel, GWL_STYLE,
-        GetWindowLongPtrW(panel, GWL_STYLE) | WS_CLIPCHILDREN);
+    HWND panel = CreateAdminPanel(parent,
+        area.left, area.top, area.right - area.left, area.bottom - area.top);
 
     HFONT hf = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     int pw = area.right - area.left;
@@ -616,71 +809,69 @@ static HWND CreateUsersPanel(HWND parent, RECT area, AdminState* st)
 
 static HWND CreateGroupsPanel(HWND parent, RECT area, AdminState* st)
 {
-    HWND panel = CreateWindowExW(0, L"STATIC", L"",
-        WS_CHILD | WS_VISIBLE,
-        area.left, area.top, area.right - area.left, area.bottom - area.top,
-        parent, nullptr, GetModuleHandleW(nullptr), nullptr);
-    SetWindowLongPtrW(panel, GWL_STYLE,
-        GetWindowLongPtrW(panel, GWL_STYLE) | WS_CLIPCHILDREN);
+    HWND panel = CreateAdminPanel(parent,
+        area.left, area.top, area.right - area.left, area.bottom - area.top);
 
     HFONT hf = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     int pw = area.right - area.left;
     int ph = area.bottom - area.top;
 
-    int half = (pw - kPanL*2 - kBtnW*2 - 16) / 2;
-
-    // Groups label
-    HWND lbl1 = CreateWindowExW(0, L"STATIC", L"Groups:",
+    // Left side: Groups list
+    HWND lblGrp = CreateWindowExW(0, L"STATIC", L"Groups:",
         WS_CHILD|WS_VISIBLE, kPanL, kPanT, 80, 16,
         panel, nullptr, nullptr, nullptr);
-    SendMessageW(lbl1, WM_SETFONT, (WPARAM)hf, TRUE);
+    SendMessageW(lblGrp, WM_SETFONT, (WPARAM)hf, TRUE);
 
-    // Groups ListBox
+    int listW = pw / 3;
     HWND lbG = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
         WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_VSCROLL|LBS_NOTIFY,
-        kPanL, kPanT+18, half, ph - kPanT*2 - 18,
+        kPanL, kPanT+18, listW, ph - kPanT*2 - 50,
         panel, reinterpret_cast<HMENU>(kGroupList), nullptr, nullptr);
     SendMessageW(lbG, WM_SETFONT, (WPARAM)hf, TRUE);
 
-    // Group buttons
-    int gx = kPanL + half + 4;
-    int gy = kPanT + 18;
+    // Group buttons below list
+    int btnX = kPanL;
+    int btnY = kPanT + 18 + (ph - kPanT*2 - 50) + 8;
     auto AddBtnG = [&](int id, const wchar_t* lbl) {
         HWND b = CreateWindowExW(0, L"BUTTON", lbl,
             WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
-            gx, gy, kBtnW, kBtnH, panel, (HMENU)(INT_PTR)id, nullptr, nullptr);
+            btnX, btnY, kBtnW, kBtnH, panel, (HMENU)(INT_PTR)id, nullptr, nullptr);
         SendMessageW(b, WM_SETFONT, (WPARAM)hf, TRUE);
-        gy += kBtnH + 4;
+        btnX += kBtnW + 4;
     };
-    AddBtnG(kGroupAdd,    L"New Group…");
-    AddBtnG(kGroupDelete, L"Delete Group");
+    AddBtnG(kGroupAdd,    L"New…");
+    AddBtnG(kGroupEdit,   L"Edit");
+    AddBtnG(kGroupDelete, L"Delete");
 
-    // Members label
-    int mx = gx + kBtnW + 8;
-    HWND lbl2 = CreateWindowExW(0, L"STATIC", L"Members:",
-        WS_CHILD|WS_VISIBLE, mx, kPanT, 80, 16,
+    // Right side: Group edit panel
+    int rpX = kPanL + listW + 16;
+    int rpW = pw - rpX - kPanL;
+
+    // Group name field
+    HWND lblName = CreateWindowExW(0, L"STATIC", L"Group name:",
+        WS_CHILD|WS_VISIBLE, rpX, kPanT, 100, 16,
         panel, nullptr, nullptr, nullptr);
-    SendMessageW(lbl2, WM_SETFONT, (WPARAM)hf, TRUE);
+    SendMessageW(lblName, WM_SETFONT, (WPARAM)hf, TRUE);
 
-    // Members ListBox
-    HWND lbM = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
-        WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_VSCROLL|LBS_NOTIFY,
-        mx, kPanT+18, half, ph - kPanT*2 - 18,
-        panel, reinterpret_cast<HMENU>(kMemberList), nullptr, nullptr);
-    SendMessageW(lbM, WM_SETFONT, (WPARAM)hf, TRUE);
+    HWND nameEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER,
+        rpX, kPanT+18, rpW, 22,
+        panel, reinterpret_cast<HMENU>(kGroupNameEdit), nullptr, nullptr);
+    SendMessageW(nameEdit, WM_SETFONT, (WPARAM)hf, TRUE);
 
-    // Member buttons
-    int mbx = mx + half + 4;
-    int mby = kPanT + 18;
-    auto AddBtnM = [&](int id, const wchar_t* lbl) {
-        HWND b = CreateWindowExW(0, L"BUTTON", lbl,
-            WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
-            mbx, mby, kBtnW, kBtnH, panel, (HMENU)(INT_PTR)id, nullptr, nullptr);
-        SendMessageW(b, WM_SETFONT, (WPARAM)hf, TRUE);
-        mby += kBtnH + 4;
-    };
-    AddBtnM(kMemberAdd,    L"Add Member…");
-    AddBtnM(kMemberRemove, L"Remove");
+    // User assignment checklist
+    HWND lblUsers = CreateWindowExW(0, L"STATIC", L"Members assigned (check users):",
+        WS_CHILD|WS_VISIBLE, rpX, kPanT+48, rpW, 16,
+        panel, nullptr, nullptr, nullptr);
+    SendMessageW(lblUsers, WM_SETFONT, (WPARAM)hf, TRUE);
+
+    HWND clb = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
+        WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_VSCROLL|
+        LBS_NOTIFY|LBS_OWNERDRAWFIXED|LBS_HASSTRINGS,
+        rpX, kPanT+66, rpW, ph - (kPanT + 66) - kPanT,
+        panel, reinterpret_cast<HMENU>(kGroupUserCheckList), nullptr, nullptr);
+    SendMessageW(clb, WM_SETFONT, (WPARAM)hf, TRUE);
+    SendMessageW(clb, LB_SETITEMHEIGHT, 0, 18);
 
     (void)st;
     return panel;
@@ -688,12 +879,8 @@ static HWND CreateGroupsPanel(HWND parent, RECT area, AdminState* st)
 
 static HWND CreateBindingsPanel(HWND parent, RECT area, AdminState* st)
 {
-    HWND panel = CreateWindowExW(0, L"STATIC", L"",
-        WS_CHILD | WS_VISIBLE,
-        area.left, area.top, area.right - area.left, area.bottom - area.top,
-        parent, nullptr, GetModuleHandleW(nullptr), nullptr);
-    SetWindowLongPtrW(panel, GWL_STYLE,
-        GetWindowLongPtrW(panel, GWL_STYLE) | WS_CLIPCHILDREN);
+    HWND panel = CreateAdminPanel(parent,
+        area.left, area.top, area.right - area.left, area.bottom - area.top);
 
     HFONT hf = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     int pw = area.right - area.left;
@@ -867,9 +1054,10 @@ static bool ShowUserEditDialog(HWND owner, UserEditState& ues)
                 } else if (id == IDCANCEL) {
                     DestroyWindow(hw);
                 }
+                return 0;
             }
-            if (msg == WM_CLOSE) DestroyWindow(hw);
-            if (msg == WM_DESTROY) PostQuitMessage(0);
+            if (msg == WM_CLOSE) { DestroyWindow(hw); return 0; }
+            if (msg == WM_DESTROY) return 0;
             return DefWindowProcW(hw, msg, wp, lp);
         };
         wc.hInstance     = GetModuleHandleW(nullptr);
@@ -891,17 +1079,121 @@ static bool ShowUserEditDialog(HWND owner, UserEditState& ues)
         WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
         ox, oy, 380, h,
         owner, nullptr, GetModuleHandleW(nullptr), &ues);
-    ShowWindow(hw, SW_SHOW);
-    UpdateWindow(hw);
 
-    MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!IsDialogMessageW(hw, &msg)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
+    RunModalLoop(hw, owner);
     return ues.ok;
+}
+
+// ── New Group sub-dialog ──────────────────────────────────────────────────────
+// Dedicated modal dialog for entering a new group name.
+// Uses the shared HWND-sentinel modal loop. WM_DESTROY must not post WM_QUIT;
+// that message is reserved for shutting down the main application loop.
+// Returns the trimmed group name on OK, or nullopt on Cancel / empty.
+
+struct NewGroupState {
+    std::wstring name;
+    bool ok = false;
+};
+
+static std::optional<std::string> ShowNewGroupDialog(HWND owner)
+{
+    static bool reg = false;
+    static constexpr wchar_t kCls[] = L"AgentNewGroupDlg";
+    if (!reg) {
+        WNDCLASSEXW wc   = {};
+        wc.cbSize        = sizeof(wc);
+        wc.lpfnWndProc   = [](HWND hw, UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
+            NewGroupState* st =
+                reinterpret_cast<NewGroupState*>(GetWindowLongPtrW(hw, GWLP_USERDATA));
+            HFONT hf = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+
+            if (msg == WM_CREATE) {
+                auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+                st = reinterpret_cast<NewGroupState*>(cs->lpCreateParams);
+                SetWindowLongPtrW(hw, GWLP_USERDATA, (LONG_PTR)st);
+
+                // Label
+                HWND lbl = CreateWindowExW(0, L"STATIC", L"Group name:",
+                    WS_CHILD|WS_VISIBLE|SS_RIGHT,
+                    10, 17, 88, 16, hw, nullptr, nullptr, nullptr);
+                SendMessageW(lbl, WM_SETFONT, (WPARAM)hf, TRUE);
+
+                // Edit control
+                HWND edt = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                    WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL,
+                    104, 13, 194, 22, hw, (HMENU)(INT_PTR)101, nullptr, nullptr);
+                SendMessageW(edt, WM_SETFONT, (WPARAM)hf, TRUE);
+                SetFocus(edt);
+
+                // OK button
+                HWND btnOk = CreateWindowExW(0, L"BUTTON", L"OK",
+                    WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
+                    104, 48, 80, 24, hw, (HMENU)(INT_PTR)IDOK, nullptr, nullptr);
+                SendMessageW(btnOk, WM_SETFONT, (WPARAM)hf, TRUE);
+
+                // Cancel button
+                HWND btnCancel = CreateWindowExW(0, L"BUTTON", L"Cancel",
+                    WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
+                    194, 48, 80, 24, hw, (HMENU)(INT_PTR)IDCANCEL, nullptr, nullptr);
+                SendMessageW(btnCancel, WM_SETFONT, (WPARAM)hf, TRUE);
+
+                return 0;
+            }
+
+            if (!st) return DefWindowProcW(hw, msg, wp, lp);
+
+            if (msg == WM_COMMAND) {
+                int cid = LOWORD(wp);
+                if (cid == IDOK) {
+                    wchar_t buf[256] = {};
+                    GetDlgItemTextW(hw, 101, buf, 256);
+                    // Trim leading/trailing whitespace
+                    std::wstring raw(buf);
+                    size_t s = raw.find_first_not_of(L" \t");
+                    size_t e = raw.find_last_not_of(L" \t");
+                    if (s == std::wstring::npos) {
+                        MessageBoxW(hw, L"Group name cannot be empty.",
+                                    L"New Group", MB_OK|MB_ICONWARNING);
+                        SetFocus(GetDlgItem(hw, 101));
+                        return 0;
+                    }
+                    st->name = raw.substr(s, e - s + 1);
+                    st->ok   = true;
+                    DestroyWindow(hw);
+                } else if (cid == IDCANCEL) {
+                    DestroyWindow(hw);
+                }
+                return 0;
+            }
+            if (msg == WM_CLOSE)   { DestroyWindow(hw); return 0; }
+            if (msg == WM_DESTROY) { return 0; }
+            return DefWindowProcW(hw, msg, wp, lp);
+        };
+        wc.hInstance     = GetModuleHandleW(nullptr);
+        wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = kCls;
+        RegisterClassExW(&wc);
+        reg = true;
+    }
+
+    static constexpr int kW = 320, kH = 120;
+    RECT or_ = {};
+    if (owner) GetWindowRect(owner, &or_);
+    int ox = or_.left + (or_.right  - or_.left - kW) / 2;
+    int oy = or_.top  + (or_.bottom - or_.top  - kH) / 2;
+
+    NewGroupState state{};
+    HWND hw = CreateWindowExW(WS_EX_DLGMODALFRAME, kCls, L"New Group",
+        WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
+        ox, oy, kW, kH,
+        owner, nullptr, GetModuleHandleW(nullptr), &state);
+
+    RunModalLoop(hw, owner);
+
+    if (state.ok && !state.name.empty())
+        return WideToUtf8(state.name);
+    return std::nullopt;
 }
 
 // ── WndProc for the main admin dialog ────────────────────────────────────────
@@ -910,13 +1202,16 @@ static bool ShowUserEditDialog(HWND owner, UserEditState& ues)
 static void DrawCheckItem(DRAWITEMSTRUCT* dis)
 {
     if (!dis) return;
+    if (dis->itemID == static_cast<UINT>(-1)) return;
     HWND lb = dis->hwndItem;
     bool checked = (SendMessageW(lb, LB_GETITEMDATA, dis->itemID, 0) != 0);
     bool selected = (dis->itemState & ODS_SELECTED) != 0;
 
     // Background
     COLORREF bg = selected ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_WINDOW);
-    FillRect(dis->hDC, &dis->rcItem, CreateSolidBrush(bg));
+    HBRUSH bg_brush = CreateSolidBrush(bg);
+    FillRect(dis->hDC, &dis->rcItem, bg_brush);
+    DeleteObject(bg_brush);
 
     // Checkbox (drawn as a small framed square with a checkmark)
     RECT cr = dis->rcItem;
@@ -1013,10 +1308,10 @@ static LRESULT CALLBACK AdminConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
         return 0;
     }
 
-    // WM_DRAWITEM for the CheckListBox on the Bindings panel
+    // WM_DRAWITEM for CheckListBoxes on Bindings and Groups panels
     case WM_DRAWITEM: {
         auto* dis = (DRAWITEMSTRUCT*)lp;
-        if (dis && dis->CtlID == kBindGroupList)
+        if (dis && (dis->CtlID == kBindGroupList || dis->CtlID == kGroupUserCheckList))
             DrawCheckItem(dis);
         return TRUE;
     }
@@ -1093,14 +1388,17 @@ static LRESULT CALLBACK AdminConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
         if (id == kUserResetPwd) {
             int idx = GetSelectedUser(st);
             if (idx < 0) return 0;
-            auto pwd = PromptPassword(dlg, L"Reset Password", L"New password:");
-            if (pwd && !pwd->empty()) {
+            auto pwd = PromptResetPassword(dlg);
+            if (pwd) {
                 st->user_store->SetPassword(st->users[idx].id, *pwd);
-                // Mark force reset
+                // Mark user for forced password change on next login
                 WebUser u = st->users[idx];
                 u.force_password_reset = true;
                 st->user_store->UpdateUser(u);
                 st->changed = true;
+                MessageBoxW(dlg, L"Password has been reset. The user will be\n"
+                                 L"required to change it on next login.",
+                            L"Password Reset", MB_OK|MB_ICONINFORMATION);
             }
             return 0;
         }
@@ -1117,7 +1415,7 @@ static LRESULT CALLBACK AdminConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
 
         // ── Groups tab ────────────────────────────────────────────────────────
         if (id == kGroupAdd) {
-            auto name = PromptInput(dlg, L"New Group", L"Group name:");
+            auto name = ShowNewGroupDialog(dlg);
             if (name && !name->empty()) {
                 WebGroup g;
                 g.name = *name;
@@ -1143,68 +1441,71 @@ static LRESULT CALLBACK AdminConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
             return 0;
         }
 
-        if (id == kGroupList && ntf == LBN_SELCHANGE) {
-            RefreshMemberList(dlg, st);
-            return 0;
-        }
-
-        if (id == kMemberAdd) {
+        if (id == kGroupEdit) {
             HWND lb_grp = GetDlgItem(st->panel_groups, kGroupList);
             int gsel = lb_grp ? ListBox_GetCurSel(lb_grp) : -1;
             if (gsel < 0 || gsel >= (int)st->groups.size()) return 0;
-
-            // List users not yet in this group
-            auto all_users = st->user_store->GetUsers();
-            const WebGroup& grp = st->groups[gsel];
-            std::vector<std::string> candidates;
-            for (auto& u : all_users) {
-                bool already = false;
-                for (auto& uid : grp.user_ids)
-                    if (uid == u.id) { already = true; break; }
-                if (!already) candidates.push_back(u.username);
+            HWND name_edit = GetDlgItem(st->panel_groups, kGroupNameEdit);
+            if (name_edit) {
+                SetFocus(name_edit);
+                SendMessageW(name_edit, EM_SETSEL, 0, -1);
             }
-            if (candidates.empty()) {
-                MessageBoxW(dlg, L"No users available to add.",
-                            L"Add Member", MB_OK|MB_ICONINFORMATION);
-                return 0;
-            }
-
-            // Build a pick-list string and prompt
-            std::string opts;
-            for (auto& c : candidates) opts += c + "\n";
-            auto picked = PromptInput(dlg, L"Add Member",
-                L"Enter username to add:", {});
-            if (!picked || picked->empty()) return 0;
-
-            // Find user by name
-            auto found = st->user_store->FindUserByUsername(*picked);
-            if (!found) {
-                MessageBoxW(dlg, L"User not found.", L"Add Member",
-                            MB_OK|MB_ICONWARNING);
-                return 0;
-            }
-            WebGroup updated = grp;
-            updated.user_ids.push_back(found->id);
-            st->user_store->UpdateGroup(updated);
-            st->changed = true;
-            RefreshGroupList(dlg, st);
             return 0;
         }
 
-        if (id == kMemberRemove) {
+        if (id == kGroupList && ntf == LBN_SELCHANGE) {
+            RefreshGroupEditPanel(dlg, st);
+            return 0;
+        }
+
+        if (id == kGroupNameEdit && ntf == EN_KILLFOCUS) {
             HWND lb_grp = GetDlgItem(st->panel_groups, kGroupList);
-            HWND lb_mem = GetDlgItem(st->panel_groups, kMemberList);
             int gsel = lb_grp ? ListBox_GetCurSel(lb_grp) : -1;
-            int msel = lb_mem ? ListBox_GetCurSel(lb_mem) : -1;
-            if (gsel < 0 || msel < 0) return 0;
-            if (gsel >= (int)st->groups.size()) return 0;
+            if (gsel >= 0 && gsel < (int)st->groups.size()) {
+                wchar_t buf[256] = {};
+                GetWindowTextW(GetDlgItem(st->panel_groups, kGroupNameEdit), buf, 256);
+                std::string new_name = WideToUtf8(buf);
+                if (!new_name.empty() && new_name != st->groups[gsel].name) {
+                    WebGroup updated = st->groups[gsel];
+                    updated.name = new_name;
+                    st->user_store->UpdateGroup(updated);
+                    st->changed = true;
+                    RefreshGroupList(dlg, st);
+                }
+            }
+            return 0;
+        }
+
+        if (id == kGroupUserCheckList && ntf == LBN_SELCHANGE) {
+            HWND clb = GetDlgItem(st->panel_groups, kGroupUserCheckList);
+            HWND lb_grp = GetDlgItem(st->panel_groups, kGroupList);
+            int idx = ListBox_GetCurSel(clb);
+            int gsel = lb_grp ? ListBox_GetCurSel(lb_grp) : -1;
+            if (idx < 0 || gsel < 0 || gsel >= (int)st->groups.size()) return 0;
+            if (idx >= (int)st->users.size()) return 0;
 
             WebGroup updated = st->groups[gsel];
-            if (msel < (int)updated.user_ids.size()) {
-                updated.user_ids.erase(updated.user_ids.begin() + msel);
-                st->user_store->UpdateGroup(updated);
-                st->changed = true;
-                RefreshGroupList(dlg, st);
+            const std::string& uid = st->users[idx].id;
+            auto it = std::find(updated.user_ids.begin(), updated.user_ids.end(), uid);
+            if (it != updated.user_ids.end()) {
+                updated.user_ids.erase(it);
+            } else {
+                updated.user_ids.push_back(uid);
+            }
+            st->user_store->UpdateGroup(updated);
+            st->groups[gsel] = updated;
+            st->changed = true;
+            SendMessageW(clb, LB_SETITEMDATA, idx,
+                (std::find(updated.user_ids.begin(), updated.user_ids.end(), uid) != updated.user_ids.end()) ? 1 : 0);
+            InvalidateRect(clb, nullptr, FALSE);
+
+            HWND lb = GetDlgItem(st->panel_groups, kGroupList);
+            if (lb) {
+                std::string label = updated.name + " (" + std::to_string(updated.user_ids.size()) + ")";
+                std::wstring wlabel = Utf8ToWide(label);
+                SendMessageW(lb, LB_DELETESTRING, gsel, 0);
+                SendMessageW(lb, LB_INSERTSTRING, gsel, reinterpret_cast<LPARAM>(wlabel.c_str()));
+                ListBox_SetCurSel(lb, gsel);
             }
             return 0;
         }
@@ -1280,7 +1581,6 @@ static LRESULT CALLBACK AdminConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
         return 0;
 
     case WM_DESTROY:
-        PostQuitMessage(0);
         return 0;
     }
 
@@ -1295,11 +1595,8 @@ bool ShowAdminConfigDialog(HWND          owner,
                            WebUserStore* user_store,
                            AppStorage*   storage)
 {
-    INITCOMMONCONTROLSEX icex = { sizeof(icex), ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES };
-    InitCommonControlsEx(&icex);
-
-    static bool registered = false;
-    if (!registered) {
+    static bool reg = false;
+    if (!reg) {
         WNDCLASSEXW wc = {};
         wc.cbSize        = sizeof(wc);
         wc.lpfnWndProc   = AdminConfigProc;
@@ -1307,9 +1604,8 @@ bool ShowAdminConfigDialog(HWND          owner,
         wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
         wc.lpszClassName = kAdminClassName;
-        wc.hIcon         = LoadIconW(nullptr, IDI_APPLICATION);
         RegisterClassExW(&wc);
-        registered = true;
+        reg = true;
     }
 
     AdminState state;
@@ -1317,31 +1613,27 @@ bool ShowAdminConfigDialog(HWND          owner,
     state.user_store = user_store;
     state.storage    = storage;
 
+    constexpr DWORD kStyle = WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU;
+    constexpr DWORD kExStyle = WS_EX_DLGMODALFRAME;
+    RECT window_rect = {0, 0, kDlgW, kDlgH};
+    AdjustWindowRectEx(&window_rect, kStyle, FALSE, kExStyle);
+    const int win_w = window_rect.right - window_rect.left;
+    const int win_h = window_rect.bottom - window_rect.top;
+
     RECT or_ = {};
     if (owner) GetWindowRect(owner, &or_);
-    int ox = or_.left + (or_.right  - or_.left - kDlgW) / 2;
-    int oy = or_.top  + (or_.bottom - or_.top  - kDlgH) / 2;
-    if (!owner) { ox = 180; oy = 120; }
+    int ox = or_.left + (or_.right  - or_.left - win_w) / 2;
+    int oy = or_.top  + (or_.bottom - or_.top  - win_h) / 2;
+    if (ox < 0) ox = 0;
+    if (oy < 0) oy = 0;
 
-    HWND dlg = CreateWindowExW(
-        WS_EX_DLGMODALFRAME,
-        kAdminClassName,
+    HWND hw = CreateWindowExW(kExStyle, kAdminClassName,
         L"Web Server Administration",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-        ox, oy, kDlgW, kDlgH,
+        kStyle,
+        ox, oy, win_w, win_h,
         owner, nullptr, GetModuleHandleW(nullptr), &state);
 
-    if (!dlg) return false;
+    RunModalLoop(hw, owner);
 
-    ShowWindow(dlg, SW_SHOW);
-    UpdateWindow(dlg);
-
-    MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!IsDialogMessageW(dlg, &msg)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
     return state.changed;
 }

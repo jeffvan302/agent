@@ -11,6 +11,8 @@ namespace DefaultWebAssets {
     extern const char kLoginHtml[];
     extern const char kChangePasswordHtml[];
     extern const char kBaseCss[];
+    extern const char kLoginJs[];
+    extern const char kChangePasswordJs[];
     extern const char kAppJs[];
     extern const char kThemeDefaultCss[];
     extern const char kThemeDefaultJson[];
