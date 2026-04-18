@@ -9,6 +9,8 @@
       "server_id": "mcp_server_1775829469413_4",
       "variables": [
         {
+          "description": "",
+          "inject_into_context": false,
           "name": "ProjectFolder",
           "value": "K:\\tester"
         }
@@ -34,12 +36,14 @@
   "model_tool_ids": [],
   "preferred_model_id": "codex-MiniMax-M2.7",
   "preferred_provider_id": "provider_1775726633372_1",
-  "project_instructions": "",
+  "project_instructions": "Use the user's name to identify them in the chats.  In addition to that, when preparing content make sure the user gets the credit.\r\nThe user's name is \"$USER$\".\r\n\r\nUser \"Sample RAG Document\" as a first source of information.  If the returned confidence it below 0.4 on all information returned and there are no relavent sources of information; then search the web for more detailed information.\r\n\r\nMake sure to always link and list sources of information.\r\n\r\nThe MCP Server \"file-system\" is the most reliable method of creating files.  As a very last resort the \"desktop_command_mcp\" server can be used.  The best use of the \"desktop_command_mcp\" MCP Server is to execute commands on the Windows system.",
   "project_name": "New Project",
   "project_variables": [
     {
+      "description": "This folder is where the user has their project files.",
+      "inject_into_context": true,
       "name": "ProjectFolder",
-      "value": "K:\\tester\\"
+      "value": "K:\\tester\\$USERNAME$\\$CHATNAME_$\\"
     }
   ],
   "rag_bindings": [

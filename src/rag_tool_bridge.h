@@ -4,6 +4,7 @@
 #include "openai_client.h"
 #include "rag_service.h"
 #include "util.h"
+#include "variable_resolver.h"
 
 #include <nlohmann/json.hpp>
 
@@ -389,33 +390,17 @@ inline std::unordered_map<std::string, std::string> CollectProjectVariableValues
 inline std::optional<std::string> ExpandProjectVariableTemplate(
     std::string text,
     const std::unordered_map<std::string, std::string>& values,
-    std::string* error) {
-    std::vector<std::string> missing;
-    for (const auto& name : FindVariablePlaceholders(text)) {
-        const auto value_it = values.find(name);
-        if (value_it == values.end() || Trim(value_it->second).empty()) {
-            missing.push_back("$<" + name + ">$");
-            continue;
-        }
-        ReplaceAll(text, "$" + name + "$", value_it->second);
-        ReplaceAll(text, "$<" + name + ">$", value_it->second);
+    std::string* error,
+    const std::vector<ProjectMcpVariableValue>& extra_values = {}) {
+    std::vector<ProjectMcpVariableValue> variable_values;
+    for (const auto& item : values) {
+        variable_resolver::UpsertValue(variable_values, item.first, item.second);
     }
-
-    if (!missing.empty()) {
-        std::ostringstream stream;
-        stream << "Missing project variable values for export path: ";
-        for (size_t i = 0; i < missing.size(); ++i) {
-            if (i > 0) {
-                stream << ", ";
-            }
-            stream << missing[i];
-        }
-        if (error) {
-            *error = stream.str();
-        }
-        return std::nullopt;
+    for (const auto& item : extra_values) {
+        variable_resolver::UpsertValue(variable_values, item.name, item.value);
     }
-    return text;
+    if (error) error->clear();
+    return variable_resolver::ExpandTemplate(text, variable_values);
 }
 
 inline std::wstring LowercasePathString(std::filesystem::path path) {
@@ -787,7 +772,10 @@ inline std::string BuildRagProjectContext(RagService* rag_service, const std::st
               "Use the server name and description to choose the correct RAG. "
               "When listing MCP servers, use these library names as the server names; "
               "do not call them RAG (Anonymous) or generic RAG Tools. "
-              "Passive RAG retrieval is inactive in this phase; use the active RAG tools explicitly.\n";
+              "Passive RAG retrieval is inactive in this phase; use the active RAG tools explicitly. "
+              "RAG tool results may include download_url for server-hosted downloads; source_path, "
+              "original_source_uri, and original file paths are provenance only and may refer to another "
+              "computer, another system, or a file that no longer exists.\n";
     for (const auto& item : libraries) {
         const std::string library_name = RagLibraryDisplayName(item.library);
         stream << "- MCP server: " << library_name << "\n";
@@ -848,7 +836,8 @@ inline McpToolCallResult CallRagTool(
     const std::string& exposed_tool_name,
     const std::string& arguments_json,
     const std::unordered_map<std::string, RagToolRoute>* routes = nullptr,
-    std::vector<RagWorkingSetEntry>* working_set_out = nullptr) {
+    std::vector<RagWorkingSetEntry>* working_set_out = nullptr,
+    const std::vector<ProjectMcpVariableValue>& project_variables = {}) {
     if (!rag_service) {
         return MakeRagToolError("RAG service is not available.");
     }
@@ -1062,6 +1051,7 @@ inline McpToolCallResult CallRagTool(
                 {"rag_name", hit.result.rag_name},
                 {"document_id", hit.result.document_id},
                 {"document_title", hit.result.document_title},
+                {"download_url", "/rag/" + project_id + "/" + hit.result.rag_id + "/" + hit.result.document_id},
                 {"source_path", hit.result.source_path},
                 {"chunk_id", hit.result.chunk_id},
                 {"last_indexed_at", hit.result.last_indexed_at},
@@ -1074,6 +1064,7 @@ inline McpToolCallResult CallRagTool(
         }
 
         nlohmann::json notes = nlohmann::json::array();
+        notes.push_back("Use download_url to link users to the server-hosted RAG original. source_path and original_source_uri are provenance only and may not exist on this server.");
         if (!retrieval_mode.empty() && retrieval_mode != "hybrid") {
             notes.push_back("Requested retrieval_mode was accepted for intent, but the current local backend runs hybrid/fallback retrieval and reports actual retrieval_method per result.");
         }
@@ -1147,6 +1138,7 @@ inline McpToolCallResult CallRagTool(
             {"tool", tool_name},
             {"rag_id", rag_id},
             {"rag_name", RagLibraryDisplayName(library->library)},
+            {"download_guidance", "Use document.download_url for web download links. original_source_uri, source paths, and original file names are provenance only and may refer to another computer or a file that no longer exists."},
             {"document", {
                 {"id", document->id},
                 {"display_name", document->display_name},
@@ -1157,6 +1149,7 @@ inline McpToolCallResult CallRagTool(
                 {"extracted_relative_path", document->extracted_relative_path},
                 {"mime_type", document->mime_type},
                 {"file_size", document->file_size},
+                {"download_url", "/rag/" + project_id + "/" + rag_id + "/" + document_id},
                 {"imported_at", document->imported_at},
                 {"last_indexed_at", document->last_indexed_at},
                 {"metadata", ParseJsonOrRaw(document->metadata_json)},
@@ -1206,7 +1199,8 @@ inline McpToolCallResult CallRagTool(
         const auto expanded_folder = ExpandProjectVariableTemplate(
             library->binding.export_path_template,
             CollectProjectVariableValues(mcp_manager, project_id),
-            &expand_error);
+            &expand_error,
+            project_variables);
         if (!expanded_folder) {
             return MakeRagToolError(
                 expand_error.empty() ? "Could not expand the configured write-file folder." : expand_error);

@@ -3554,6 +3554,47 @@ void RagService::SaveImageIngestSettings(const RagImageIngestSettings& settings)
     AppendImageIngestLogNoLock("Saved image ingest settings. Mode: " + NormalizeImageIngestMode(settings.mode) + ".");
 }
 
+RagMarkdownExtractionResult RagService::ExtractFileToMarkdown(const std::filesystem::path& file) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    RagMarkdownExtractionResult result;
+    result.mime_type = MimeTypeForPath(file);
+    try {
+        if (file.empty() || !std::filesystem::exists(file) ||
+            !std::filesystem::is_regular_file(file)) {
+            result.error = "File is not a regular file.";
+            return result;
+        }
+
+        const bool image_document = IsImageExtension(file);
+        const bool rich_document = IsRichExtractionExtension(file);
+        if (!image_document && !rich_document) {
+            if (!FileLooksLikeText(file)) {
+                result.error = "File appears to be binary and no Markdown extractor is available for this file type.";
+                return result;
+            }
+            result.markdown = ReadWholeFile(file);
+            result.extractor_id = "plain_text_stream";
+            result.success = true;
+            result.processed_document = false;
+            return result;
+        }
+
+        std::string extractor_id;
+        result.markdown = image_document
+            ? ExtractImageToMarkdown(file, LoadImageIngestSettingsNoLock(), &extractor_id)
+            : ExtractRichDocumentToMarkdown(file, &extractor_id);
+        result.extractor_id = extractor_id;
+        result.success = true;
+        result.processed_document = true;
+    } catch (const std::exception& ex) {
+        result.error = ex.what();
+    } catch (...) {
+        result.error = "Unexpected Markdown extraction error.";
+    }
+    return result;
+}
+
 RagImageIngestRuntimeStatus RagService::GetImageIngestRuntimeStatus(const RagImageIngestSettings& settings) const {
     std::lock_guard<std::mutex> lock(mutex_);
     RagImageIngestRuntimeStatus status;

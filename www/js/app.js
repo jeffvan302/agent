@@ -583,17 +583,18 @@ async function uploadPendingFiles(chatId) {
   for (const f of state.pendingFiles) {
     const fd = new FormData();
     fd.append('file', f);
-    try {
-      const resp = await fetch(`/api/chats/${chatId}/upload`, {
-        method: 'POST',
-        credentials: 'same-origin',
-        body: fd,
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        uploaded.push(data.filename);
-      }
-    } catch (_) { /* upload failure is non-fatal */ }
+    const resp = await fetch(`/api/chats/${chatId}/upload`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: fd,
+    });
+    if (!resp.ok) {
+      let errMsg = 'Upload failed';
+      try { errMsg = (await resp.json()).error || errMsg; } catch (_) {}
+      throw new Error(`${f.name}: ${errMsg}`);
+    }
+    const data = await resp.json();
+    uploaded.push(data.filename);
   }
   state.pendingFiles = [];
   renderAttachList();
@@ -612,7 +613,18 @@ async function sendMessage() {
   setInputEnabled(false);
 
   // Upload any queued file attachments first
-  const uploadedFiles = await uploadPendingFiles(state.selectedChatId);
+  let uploadedFiles = [];
+  try {
+    uploadedFiles = await uploadPendingFiles(state.selectedChatId);
+  } catch (e) {
+    state.sending = false;
+    messageInput.value = content;
+    resizeTextarea();
+    setInputEnabled(true);
+    messagesEl.appendChild(buildMessageRow('error', 'Upload failed: ' + e.message));
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return;
+  }
 
   // Build display content (append uploaded file names if any)
   let displayContent = content;

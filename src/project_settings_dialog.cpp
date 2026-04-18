@@ -1,7 +1,9 @@
 #include "project_settings_dialog.h"
 
 #include "prompt_dialog.h"
+#include "rag_tool_bridge.h"
 #include "util.h"
+#include "variable_resolver.h"
 
 #include <commdlg.h>
 #include <commctrl.h>
@@ -23,6 +25,8 @@
 
 namespace {
 constexpr wchar_t kProjectSettingsClassName[] = L"AgentProjectSettingsWindow";
+constexpr wchar_t kContextPreviewClassName[] = L"AgentContextPreviewWindow";
+constexpr int kContextPreviewTextBoxId = 9001;
 
 enum ControlId : int {
     // Left panel - MCP servers
@@ -87,8 +91,12 @@ enum ControlId : int {
     kProjVarsNameEdit   = 6455,
     kProjVarsValueLabel = 6456,
     kProjVarsValueEdit  = 6457,
+    kProjVarsDescriptionLabel = 6458,
+    kProjVarsDescriptionEdit = 6459,
+    kProjVarsInjectCheck = 6460,
 
     // Footer
+    kCheckContextButton = 6461,
     kSaveButton = IDOK,
     kCancelButton = IDCANCEL,
 };
@@ -124,6 +132,14 @@ struct RagRow {
     double default_min_confidence = 0.0;
     double default_max_confidence = 1.0;
     RagRetrievalMode retrieval_mode = RagRetrievalMode::Both;
+};
+
+struct ContextPreviewWindowState {
+    std::wstring text;
+    HWND edit = nullptr;
+    HWND close_button = nullptr;
+    HFONT font = nullptr;
+    HFONT mono_font = nullptr;
 };
 
 int Scale(HWND hwnd, int value) {
@@ -170,6 +186,236 @@ std::string ReadWholeFile(const std::filesystem::path& path) {
         content.erase(0, 3);
     }
     return content;
+}
+
+std::string YesNo(bool value) {
+    return value ? "yes" : "no";
+}
+
+std::string RagRetrievalModeLabel(RagRetrievalMode mode) {
+    switch (mode) {
+    case RagRetrievalMode::PassiveOnly:
+        return "passive_only_inactive";
+    case RagRetrievalMode::ActiveToolOnly:
+        return "active_tool_only";
+    case RagRetrievalMode::Disabled:
+        return "disabled";
+    case RagRetrievalMode::Both:
+    default:
+        return "tool_access_passive_later";
+    }
+}
+
+std::string VariableKindLabel(McpVariableKind kind) {
+    switch (kind) {
+    case McpVariableKind::Folder:
+        return "folder";
+    case McpVariableKind::File:
+        return "file";
+    case McpVariableKind::None:
+    default:
+        return "text";
+    }
+}
+
+std::string SanitizeModelToolName(const std::string& name) {
+    std::string result;
+    result.reserve(name.size());
+    for (char ch : name) {
+        if (std::isalnum(static_cast<unsigned char>(ch))) {
+            result.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        } else {
+            result.push_back('_');
+        }
+    }
+
+    std::string collapsed;
+    collapsed.reserve(result.size());
+    bool last_was_under = false;
+    for (char ch : result) {
+        if (ch == '_') {
+            if (!last_was_under && !collapsed.empty()) {
+                collapsed.push_back(ch);
+            }
+            last_was_under = true;
+        } else {
+            collapsed.push_back(ch);
+            last_was_under = false;
+        }
+    }
+    while (!collapsed.empty() && collapsed.back() == '_') {
+        collapsed.pop_back();
+    }
+    return collapsed;
+}
+
+const RagLibraryConfig* FindRagLibrary(
+    const std::vector<RagLibraryConfig>& libraries,
+    const std::string& id) {
+    const auto it = std::find_if(libraries.begin(), libraries.end(),
+        [&](const RagLibraryConfig& library) {
+            return library.id == id;
+        });
+    return it == libraries.end() ? nullptr : &*it;
+}
+
+void RegisterContextPreviewClass(HINSTANCE instance) {
+    static bool registered = false;
+    if (registered) return;
+
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.hInstance = instance;
+    wc.lpfnWndProc = [](HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) -> LRESULT {
+        auto* state = reinterpret_cast<ContextPreviewWindowState*>(
+            GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+            state = reinterpret_cast<ContextPreviewWindowState*>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+        }
+        if (!state) return DefWindowProcW(hwnd, message, w_param, l_param);
+
+        switch (message) {
+        case WM_CREATE: {
+            state->font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+            state->mono_font = CreateFontW(
+                -MulDiv(10, GetDpiForWindow(hwnd), 72),
+                0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+            state->edit = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                L"EDIT",
+                L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                    ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+                0, 0, 0, 0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kContextPreviewTextBoxId)),
+                nullptr,
+                nullptr);
+            state->close_button = CreateWindowExW(
+                0,
+                L"BUTTON",
+                L"Close",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                0, 0, 0, 0,
+                hwnd,
+                reinterpret_cast<HMENU>(IDOK),
+                nullptr,
+                nullptr);
+            SendMessageW(state->edit, WM_SETFONT,
+                         reinterpret_cast<WPARAM>(state->mono_font ? state->mono_font : state->font),
+                         TRUE);
+            SendMessageW(state->edit, EM_SETLIMITTEXT,
+                         static_cast<WPARAM>(10 * 1024 * 1024), 0);
+            SetWindowTextW(state->edit, state->text.c_str());
+            SendMessageW(state->close_button, WM_SETFONT,
+                         reinterpret_cast<WPARAM>(state->font), TRUE);
+            return 0;
+        }
+        case WM_SIZE: {
+            const int width = LOWORD(l_param);
+            const int height = HIWORD(l_param);
+            const int margin = Scale(hwnd, 12);
+            const int gutter = Scale(hwnd, 8);
+            const int button_width = Scale(hwnd, 90);
+            const int button_height = Scale(hwnd, 28);
+            const int buttons_y = height - margin - button_height;
+            MoveWindow(state->edit,
+                       margin,
+                       margin,
+                       std::max(1, width - margin * 2),
+                       std::max(1, buttons_y - margin - gutter),
+                       TRUE);
+            MoveWindow(state->close_button,
+                       width - margin - button_width,
+                       buttons_y,
+                       button_width,
+                       button_height,
+                       TRUE);
+            return 0;
+        }
+        case WM_COMMAND:
+            if (LOWORD(w_param) == IDOK || LOWORD(w_param) == IDCANCEL) {
+                DestroyWindow(hwnd);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        default:
+            break;
+        }
+        return DefWindowProcW(hwnd, message, w_param, l_param);
+    };
+    wc.lpszClassName = kContextPreviewClassName;
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    RegisterClassExW(&wc);
+    registered = true;
+}
+
+void ShowContextPreviewWindow(HWND owner, const std::string& text) {
+    HINSTANCE instance = reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr));
+    RegisterContextPreviewClass(instance);
+
+    ContextPreviewWindowState state;
+    state.text = Utf8ToWide(text);
+
+    const int width = Scale(owner, 980);
+    const int height = Scale(owner, 720);
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    if (owner) {
+        RECT owner_rect{};
+        if (GetWindowRect(owner, &owner_rect)) {
+            const int owner_width = static_cast<int>(owner_rect.right - owner_rect.left);
+            const int owner_height = static_cast<int>(owner_rect.bottom - owner_rect.top);
+            x = owner_rect.left + std::max(0, (owner_width - width) / 2);
+            y = owner_rect.top + std::max(0, (owner_height - height) / 2);
+        }
+        EnableWindow(owner, FALSE);
+    }
+
+    HWND hwnd = CreateWindowExW(
+        WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+        kContextPreviewClassName,
+        L"Check Context Window",
+        WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE | WS_THICKFRAME,
+        x, y, width, height,
+        owner,
+        nullptr,
+        instance,
+        &state);
+
+    if (!hwnd) {
+        if (owner) EnableWindow(owner, TRUE);
+        return;
+    }
+
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+
+    MSG msg{};
+    while (IsWindow(hwnd) && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (!IsDialogMessageW(hwnd, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+
+    if (state.mono_font) {
+        DeleteObject(state.mono_font);
+        state.mono_font = nullptr;
+    }
+    if (owner) {
+        EnableWindow(owner, TRUE);
+        SetActiveWindow(owner);
+    }
 }
 
 std::wstring FormatConfidence(double value) {
@@ -430,6 +676,9 @@ private:
         proj_vars_name_edit_   = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsNameEdit),   nullptr, nullptr);
         proj_vars_value_label_ = CreateWindowExW(0, L"STATIC", L"Value:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsValueLabel), nullptr, nullptr);
         proj_vars_value_edit_  = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsValueEdit),  nullptr, nullptr);
+        proj_vars_description_label_ = CreateWindowExW(0, L"STATIC", L"Description:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsDescriptionLabel), nullptr, nullptr);
+        proj_vars_description_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsDescriptionEdit), nullptr, nullptr);
+        proj_vars_inject_check_ = CreateWindowExW(0, L"BUTTON", L"Inject this variable into the context window", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsInjectCheck), nullptr, nullptr);
 
         instructions_label_ = CreateWindowExW(0, L"STATIC", L"Project Instructions:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstructionsLabel), nullptr, nullptr);
         import_instructions_button_ = CreateWindowExW(0, L"BUTTON", L"Import Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImportInstructions), nullptr, nullptr);
@@ -448,6 +697,7 @@ private:
             nullptr);
 
         // Footer buttons
+        check_context_button_ = CreateWindowExW(0, L"BUTTON", L"Check context window", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCheckContextButton), nullptr, nullptr);
         save_button_ = CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kSaveButton), nullptr, nullptr);
         cancel_button_ = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCancelButton), nullptr, nullptr);
 
@@ -467,8 +717,9 @@ private:
             rag_retrieval_mode_label_, rag_retrieval_mode_combo_,
             proj_vars_header_, proj_vars_list_, proj_vars_add_btn_, proj_vars_remove_btn_,
             proj_vars_name_label_, proj_vars_name_edit_, proj_vars_value_label_, proj_vars_value_edit_,
+            proj_vars_description_label_, proj_vars_description_edit_, proj_vars_inject_check_,
             instructions_label_, import_instructions_button_, instructions_edit_,
-            save_button_, cancel_button_
+            check_context_button_, save_button_, cancel_button_
         };
         for (HWND ctrl : all_controls) {
             SendMessageW(ctrl, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
@@ -499,6 +750,8 @@ private:
         RefreshProjVarsList();
         EnableWindow(proj_vars_name_edit_,   FALSE);
         EnableWindow(proj_vars_value_edit_,  FALSE);
+        EnableWindow(proj_vars_description_edit_, FALSE);
+        EnableWindow(proj_vars_inject_check_, FALSE);
         EnableWindow(proj_vars_remove_btn_,  FALSE);
 
         // Populate model tools checklist
@@ -615,8 +868,8 @@ private:
         // Project variables section
         {
             const int pv_btn_w   = Scale(hwnd_, 30);
-            const int pv_list_h  = Scale(hwnd_, 70);
-            const int pv_lbl_w   = Scale(hwnd_, 50);
+            const int pv_list_h  = Scale(hwnd_, 58);
+            const int pv_lbl_w   = Scale(hwnd_, 82);
             const int pv_edit_h  = Scale(hwnd_, 22);
             const int pv_row_h   = pv_edit_h + Scale(hwnd_, 4);
             const int list_w     = right_width - pv_btn_w - gutter;
@@ -636,6 +889,13 @@ private:
             MoveWindow(proj_vars_value_label_, right_x,            y + Scale(hwnd_, 3), pv_lbl_w,              label_height, TRUE);
             MoveWindow(proj_vars_value_edit_,  right_x + pv_lbl_w, y,                  right_width - pv_lbl_w, pv_edit_h,    TRUE);
             y += pv_row_h + gutter;
+
+            MoveWindow(proj_vars_description_label_, right_x, y + Scale(hwnd_, 3), pv_lbl_w, label_height, TRUE);
+            MoveWindow(proj_vars_description_edit_, right_x + pv_lbl_w, y, right_width - pv_lbl_w, pv_edit_h, TRUE);
+            y += pv_row_h + gutter;
+
+            MoveWindow(proj_vars_inject_check_, right_x + pv_lbl_w, y, right_width - pv_lbl_w, Scale(hwnd_, 20), TRUE);
+            y += Scale(hwnd_, 22) + gutter;
         }
 
         const int import_width = Scale(hwnd_, 130);
@@ -645,8 +905,10 @@ private:
         MoveWindow(instructions_edit_, right_x, y, right_width, std::max(Scale(hwnd_, 120), buttons_y - y - gutter), TRUE);
 
         // Footer buttons
+        const int check_width = Scale(hwnd_, 160);
         MoveWindow(cancel_button_, width - margin - button_width, buttons_y, button_width, button_height, TRUE);
         MoveWindow(save_button_, width - margin - button_width * 2 - gutter, buttons_y, button_width, button_height, TRUE);
+        MoveWindow(check_context_button_, width - margin - button_width * 2 - gutter * 2 - check_width, buttons_y, check_width, button_height, TRUE);
     }
 
     // Reposition dynamically-created variable controls to track the server details panel.
@@ -758,8 +1020,21 @@ private:
                 OnProjVarEditChanged();
             }
             break;
+        case kProjVarsDescriptionEdit:
+            if (notification_code == EN_CHANGE && !updating_proj_var_) {
+                OnProjVarEditChanged();
+            }
+            break;
+        case kProjVarsInjectCheck:
+            if (notification_code == BN_CLICKED && !updating_proj_var_) {
+                OnProjVarEditChanged();
+            }
+            break;
         case kImportInstructions:
             ImportInstructions();
+            break;
+        case kCheckContextButton:
+            ShowContextPreview();
             break;
         case kSaveButton:
             SaveAndClose();
@@ -1232,6 +1507,9 @@ private:
             std::wstring text = Utf8ToWide(pv.name.empty() ? std::string("(unnamed)") : pv.name);
             text += L" = ";
             text += Utf8ToWide(pv.value);
+            if (pv.inject_into_context) {
+                text += L" [context]";
+            }
             ListBox_AddString(proj_vars_list_, text.c_str());
         }
     }
@@ -1243,13 +1521,19 @@ private:
         if (has_sel) {
             SetWindowTextW(proj_vars_name_edit_,  Utf8ToWide(project_variables_[index].name).c_str());
             SetWindowTextW(proj_vars_value_edit_, Utf8ToWide(project_variables_[index].value).c_str());
+            SetWindowTextW(proj_vars_description_edit_, Utf8ToWide(project_variables_[index].description).c_str());
+            Button_SetCheck(proj_vars_inject_check_, project_variables_[index].inject_into_context ? BST_CHECKED : BST_UNCHECKED);
         } else {
             SetWindowTextW(proj_vars_name_edit_,  L"");
             SetWindowTextW(proj_vars_value_edit_, L"");
+            SetWindowTextW(proj_vars_description_edit_, L"");
+            Button_SetCheck(proj_vars_inject_check_, BST_UNCHECKED);
         }
         updating_proj_var_ = false;
         EnableWindow(proj_vars_name_edit_,  has_sel ? TRUE : FALSE);
         EnableWindow(proj_vars_value_edit_, has_sel ? TRUE : FALSE);
+        EnableWindow(proj_vars_description_edit_, has_sel ? TRUE : FALSE);
+        EnableWindow(proj_vars_inject_check_, has_sel ? TRUE : FALSE);
         EnableWindow(proj_vars_remove_btn_, has_sel ? TRUE : FALSE);
     }
 
@@ -1260,6 +1544,8 @@ private:
         auto& pv = project_variables_[selected_proj_var_index_];
         pv.name  = WideToUtf8(GetWindowTextString(proj_vars_name_edit_));
         pv.value = WideToUtf8(GetWindowTextString(proj_vars_value_edit_));
+        pv.description = WideToUtf8(GetWindowTextString(proj_vars_description_edit_));
+        pv.inject_into_context = Button_GetCheck(proj_vars_inject_check_) == BST_CHECKED;
     }
 
     void OnProjVarsSelChange() {
@@ -1303,11 +1589,16 @@ private:
         auto& pv = project_variables_[selected_proj_var_index_];
         pv.name  = WideToUtf8(GetWindowTextString(proj_vars_name_edit_));
         pv.value = WideToUtf8(GetWindowTextString(proj_vars_value_edit_));
+        pv.description = WideToUtf8(GetWindowTextString(proj_vars_description_edit_));
+        pv.inject_into_context = Button_GetCheck(proj_vars_inject_check_) == BST_CHECKED;
         // Refresh label in-place (delete+reinsert keeps selection).
         updating_proj_var_ = true;
         std::wstring text = Utf8ToWide(pv.name.empty() ? std::string("(unnamed)") : pv.name);
         text += L" = ";
         text += Utf8ToWide(pv.value);
+        if (pv.inject_into_context) {
+            text += L" [context]";
+        }
         ListBox_DeleteString(proj_vars_list_, selected_proj_var_index_);
         ListBox_InsertString(proj_vars_list_, selected_proj_var_index_, text.c_str());
         ListBox_SetCurSel(proj_vars_list_, selected_proj_var_index_);
@@ -1327,7 +1618,7 @@ private:
         }
     }
 
-    void SaveAndClose() {
+    ProjectSettingsResult CollectCurrentSettings() {
         // Flush any unsaved variable edits from the currently-visible server.
         SaveCurrentVariableValues();
 
@@ -1372,19 +1663,19 @@ private:
             }
         }
 
+        ProjectSettingsResult result;
+
         // Build MCP bindings
-        std::vector<ProjectMcpServerBinding> mcp_bindings;
         for (size_t i = 0; i < states_.size(); ++i) {
             if (states_[i].selected) {
                 ProjectMcpServerBinding binding;
                 binding.server_id = options_.servers[i].id;
                 binding.variables = states_[i].variables;
-                mcp_bindings.push_back(binding);
+                result.mcp_bindings.push_back(std::move(binding));
             }
         }
 
         // Build RAG bindings
-        std::vector<ProjectRagBinding> rag_bindings;
         for (const auto& row : rag_rows_) {
             if (row.enabled) {
                 ProjectRagBinding binding;
@@ -1402,7 +1693,7 @@ private:
                 binding.default_min_confidence = row.default_min_confidence;
                 binding.default_max_confidence = row.default_max_confidence;
                 binding.retrieval_mode = row.retrieval_mode;
-                rag_bindings.push_back(binding);
+                result.rag_bindings.push_back(std::move(binding));
             }
         }
 
@@ -1426,16 +1717,439 @@ private:
             }
         }
 
-        result_ = ProjectSettingsResult{};
-        result_->project_name = WideToUtf8(options_.project_name);
-        result_->project_instructions = WideToUtf8(GetWindowTextString(instructions_edit_));
-        result_->mcp_bindings = std::move(mcp_bindings);
-        result_->selected_compression_config_id = selected_compression_config_id_;
-        result_->rag_bindings = std::move(rag_bindings);
-        result_->preferred_provider_id = preferred_provider_id;
-        result_->preferred_model_id = preferred_model_id;
-        result_->model_tool_ids = std::move(model_tool_ids);
-        result_->project_variables = project_variables_;
+        result.project_name = WideToUtf8(options_.project_name);
+        result.project_instructions = WideToUtf8(GetWindowTextString(instructions_edit_));
+        result.selected_compression_config_id = selected_compression_config_id_;
+        result.preferred_provider_id = preferred_provider_id;
+        result.preferred_model_id = preferred_model_id;
+        result.model_tool_ids = std::move(model_tool_ids);
+        result.project_variables = project_variables_;
+        return result;
+    }
+
+    std::vector<ProjectMcpVariableValue> BuildPreviewRuntimeVariables(
+        const ProjectSettingsResult& settings) const {
+        std::vector<ProjectMcpVariableValue> values;
+        variable_resolver::UpsertValue(values, "PROJECTNAME", settings.project_name);
+        variable_resolver::UpsertValue(values, "CHATNAME", "My Chat");
+        variable_resolver::UpsertValue(values, "CHATFULLNAME", "My Chat (admin)");
+        variable_resolver::UpsertValue(values, "CHATID", "chat_1776423689503_8");
+        variable_resolver::UpsertValue(values, "USERNAME", "admin");
+        variable_resolver::UpsertValue(values, "USER", "The Admin");
+        variable_resolver::UpsertValue(values, "USEREMAIL", "admin@theadmin.store");
+        variable_resolver::UpsertValue(values, "UserName", "admin");
+        return values;
+    }
+
+    std::vector<ProjectMcpVariableValue> BuildResolvedPreviewVariables(
+        const ProjectSettingsResult& settings) const {
+        std::vector<ProjectMcpVariableValue> values;
+        for (const auto& binding : settings.mcp_bindings) {
+            for (const auto& variable : binding.variables) {
+                variable_resolver::UpsertValue(values, variable.name, variable.value);
+            }
+        }
+        for (const auto& variable : settings.project_variables) {
+            variable_resolver::UpsertValue(values, variable);
+        }
+        for (const auto& variable : BuildPreviewRuntimeVariables(settings)) {
+            variable_resolver::UpsertValue(values, variable.name, variable.value);
+        }
+        return variable_resolver::ResolveValues(values);
+    }
+
+    const McpServerConfig* FindServerConfig(const std::string& server_id) const {
+        const auto it = std::find_if(options_.servers.begin(), options_.servers.end(),
+            [&](const McpServerConfig& server) {
+                return server.id == server_id;
+            });
+        return it == options_.servers.end() ? nullptr : &*it;
+    }
+
+    const ModelToolConfig* FindModelToolConfig(const std::string& tool_id) const {
+        const auto it = std::find_if(options_.model_tools.begin(), options_.model_tools.end(),
+            [&](const ModelToolConfig& tool) {
+                return tool.id == tool_id;
+            });
+        return it == options_.model_tools.end() ? nullptr : &*it;
+    }
+
+    std::pair<const ProviderConfig*, const ModelConfig*> ResolvePreviewModel(
+        const ProjectSettingsResult& settings) const {
+        if (!settings.preferred_provider_id.empty() && !settings.preferred_model_id.empty()) {
+            for (const auto& provider : options_.providers) {
+                if (provider.id != settings.preferred_provider_id) continue;
+                for (const auto& model : provider.models) {
+                    if (model.id == settings.preferred_model_id) {
+                        return {&provider, &model};
+                    }
+                }
+            }
+        }
+        if (!options_.providers.empty() && !options_.providers.front().models.empty()) {
+            return {&options_.providers.front(), &options_.providers.front().models.front()};
+        }
+        return {nullptr, nullptr};
+    }
+
+    std::vector<rag_tools::RagToolLibrary> BuildPreviewRagToolLibraries(
+        const ProjectSettingsResult& settings) const {
+        std::vector<rag_tools::RagToolLibrary> libraries;
+        for (const auto& binding : settings.rag_bindings) {
+            if (!binding.enabled || !binding.expose_as_tool || !binding.can_read) {
+                continue;
+            }
+            if (binding.retrieval_mode == RagRetrievalMode::PassiveOnly ||
+                binding.retrieval_mode == RagRetrievalMode::Disabled) {
+                continue;
+            }
+            const auto* library = FindRagLibrary(options_.available_rags, binding.rag_id);
+            if (!library || !library->enabled) {
+                continue;
+            }
+            libraries.push_back({*library, binding});
+        }
+        return libraries;
+    }
+
+    static void AppendPreviewSection(std::ostringstream& stream, const std::string& title) {
+        stream << "\n============================================================\n";
+        stream << title << "\n";
+        stream << "============================================================\n";
+    }
+
+    std::string BuildMcpProjectContextPreview(
+        const ProjectSettingsResult& settings,
+        const std::vector<ProjectMcpVariableValue>& values) const {
+        struct ContextVariable {
+            std::string name;
+            std::string value;
+            std::string description;
+        };
+
+        std::vector<ContextVariable> context_values;
+        std::vector<std::string> emitted_names;
+        const auto add_variable = [&](const McpServerVariable& variable) {
+            if (!variable.inject_into_context || variable.name.empty()) return;
+            const std::string emitted_key = variable_resolver::ToLookupKey(variable.name);
+            if (std::find(emitted_names.begin(), emitted_names.end(), emitted_key) != emitted_names.end()) {
+                return;
+            }
+            const auto value = variable_resolver::FindValue(values, variable.name);
+
+            ContextVariable context_variable;
+            context_variable.name = variable.name;
+            context_variable.value = value.value_or("");
+            context_variable.description = Trim(variable.description);
+            context_values.push_back(std::move(context_variable));
+            emitted_names.push_back(emitted_key);
+        };
+        const auto add_project_variable = [&](const ProjectMcpVariableValue& variable) {
+            if (!variable.inject_into_context || variable.name.empty()) return;
+            const std::string emitted_key = variable_resolver::ToLookupKey(variable.name);
+            if (std::find(emitted_names.begin(), emitted_names.end(), emitted_key) != emitted_names.end()) {
+                return;
+            }
+            const auto value = variable_resolver::FindValue(values, variable.name);
+            if (!value || Trim(*value).empty()) return;
+
+            ContextVariable context_variable;
+            context_variable.name = variable.name;
+            context_variable.value = *value;
+            context_variable.description = Trim(variable.description);
+            context_values.push_back(std::move(context_variable));
+            emitted_names.push_back(emitted_key);
+        };
+
+        for (const auto& variable : options_.global_variables) {
+            add_variable(variable);
+        }
+        for (const auto& variable : settings.project_variables) {
+            add_project_variable(variable);
+        }
+        for (const auto& binding : settings.mcp_bindings) {
+            const auto* server = FindServerConfig(binding.server_id);
+            if (!server) continue;
+            for (const auto& variable : server->variables) {
+                add_variable(variable);
+            }
+        }
+
+        if (context_values.empty()) return {};
+
+        std::ostringstream stream;
+        stream << "MCP Project Context:\n";
+        stream << "These project variable values are current for this chat. Use them when choosing paths, working directories, command locations, and MCP tool arguments.\n";
+        for (const auto& variable : context_values) {
+            stream << "- " << variable.name << ": " << variable.value;
+            if (!variable.description.empty()) {
+                stream << " (description: " << variable.description << ")";
+            }
+            stream << "\n";
+        }
+        return stream.str();
+    }
+
+    std::string BuildRagProjectContextPreview(
+        const ProjectSettingsResult& settings) const {
+        const auto libraries = BuildPreviewRagToolLibraries(settings);
+        if (libraries.empty()) return {};
+
+        std::ostringstream stream;
+        stream << "Project RAG MCP Servers:\n";
+        stream << "Each RAG library below is exposed as its own MCP-style server. "
+                  "Use the server name and description to choose the correct RAG. "
+                  "When listing MCP servers, use these library names as the server names; "
+                  "do not call them RAG (Anonymous) or generic RAG Tools. "
+                  "Passive RAG retrieval is inactive in this phase; use the active RAG tools explicitly. "
+                  "RAG tool results may include download_url for server-hosted downloads; source_path, "
+                  "original_source_uri, and original file paths are provenance only and may refer to another "
+                  "computer, another system, or a file that no longer exists.\n";
+        for (const auto& item : libraries) {
+            const std::string library_name = rag_tools::RagLibraryDisplayName(item.library);
+            stream << "- MCP server: " << library_name << "\n";
+            stream << "  RAG library id: " << item.library.id << "\n";
+            stream << "  RAG library name: " << library_name << "\n";
+            stream << "  RAG library description: " << rag_tools::RagLibraryDescription(item.library) << "\n";
+            stream << "  Available tools:";
+            stream << " " << rag_tools::kSearchToolName << " (" << rag_tools::BuildRagToolAlias(item.library, rag_tools::kSearchToolName) << ")";
+            stream << ", " << rag_tools::kGetDocumentToolName << " (" << rag_tools::BuildRagToolAlias(item.library, rag_tools::kGetDocumentToolName) << ")";
+            stream << ", " << rag_tools::kListLibrariesToolName << " (" << rag_tools::BuildRagToolAlias(item.library, rag_tools::kListLibrariesToolName) << ")";
+            if (item.binding.can_export && !Trim(item.binding.export_path_template).empty()) {
+                stream << ", " << rag_tools::kWriteDocumentToDriveToolName << " ("
+                       << rag_tools::BuildRagToolAlias(item.library, rag_tools::kWriteDocumentToDriveToolName) << ")";
+            }
+            if (item.binding.can_write) {
+                stream << ", " << rag_tools::kIngestGeneratedDocumentToolName << " ("
+                       << rag_tools::BuildRagToolAlias(item.library, rag_tools::kIngestGeneratedDocumentToolName) << ")";
+            }
+            stream << "\n";
+        }
+        return stream.str();
+    }
+
+    std::string BuildWebFormattingContextPreview() const {
+        return
+            "Web Chat Formatting Capabilities:\n"
+            "This response is being rendered in the web chat. Mermaid and Vega-Lite libraries are available for visual output.\n"
+            "- Use fenced code blocks tagged `mermaid` for flowcharts, sequence diagrams, state diagrams, class diagrams, timelines, and similar diagrams.\n"
+            "- Use fenced code blocks tagged `vega-lite` with JSON for charts and data graphics. Keep Vega-Lite specs self-contained with inline data when possible.\n"
+            "- Prefer these formats when a diagram, graph, or flow chart would make the answer clearer.\n"
+            "\nWeb Download Links:\n"
+            "- You may generate direct download URLs from raw link data by combining the server address with the route. Relative routes also work inside this web chat.\n"
+            "- Project-accessible files can be linked as `server_address/data/{project_id}/{chat_id}/{file_or_relative_path}` or `/data/{project_id}/{chat_id}/{file_or_relative_path}`. The server only serves files inside configured folder variables for the current user and chat.\n"
+            "- RAG originals can be linked as `server_address/rag/{project_id}/{rag_id}/{document_id}` or `/rag/{project_id}/{rag_id}/{document_id}` when a readable exposed RAG tool returns a document_id or download_url.\n"
+            "- For RAG documents, source_path, original_source_uri, and original file names are provenance only. They may refer to another computer or a file that no longer exists. Use download_url or the /rag route for downloadable links.\n"
+            "- Preview project_id uses this project; preview chat_id is chat_1776423689503_8.";
+    }
+
+    std::string BuildInjectedSystemContext(
+        const ProjectSettingsResult& settings,
+        const std::vector<ProjectMcpVariableValue>& resolved_values) const {
+        std::string context;
+
+        const std::string instructions =
+            variable_resolver::ExpandTemplate(settings.project_instructions, resolved_values);
+        if (!Trim(instructions).empty()) {
+            context += "Project Instructions:\n";
+            context += instructions;
+        }
+
+        const std::string mcp_context =
+            BuildMcpProjectContextPreview(settings, resolved_values);
+        if (!mcp_context.empty()) {
+            if (!context.empty()) context += "\n\n";
+            context += mcp_context;
+        }
+
+        const std::string rag_context = BuildRagProjectContextPreview(settings);
+        if (!rag_context.empty()) {
+            if (!context.empty()) context += "\n\n";
+            context += rag_context;
+        }
+
+        const std::string web_formatting_context = BuildWebFormattingContextPreview();
+        if (!web_formatting_context.empty()) {
+            if (!context.empty()) context += "\n\n";
+            context += web_formatting_context;
+        }
+
+        return context;
+    }
+
+    std::string BuildToolAndSetupPreview(
+        const ProjectSettingsResult& settings,
+        const std::vector<ProjectMcpVariableValue>& values) const {
+        std::ostringstream stream;
+        AppendPreviewSection(stream, "TOOL AND SETUP PREVIEW");
+
+        const auto [provider, model] = ResolvePreviewModel(settings);
+        if (provider && model) {
+            stream << "Selected model: " << provider->name << " / " << model->display_name << "\n";
+            stream << "Model supports tool calls: " << YesNo(model->supports_tools) << "\n";
+        } else {
+            stream << "Selected model: none configured\n";
+            stream << "Model supports tool calls: no\n";
+        }
+        stream << "Tool definitions are sent to the model separately from the system context text above.\n\n";
+
+        stream << "Selected MCP servers:\n";
+        if (settings.mcp_bindings.empty()) {
+            stream << "- none\n";
+        } else {
+            for (const auto& binding : settings.mcp_bindings) {
+                const auto* server = FindServerConfig(binding.server_id);
+                if (!server) {
+                    stream << "- Missing server config for id " << binding.server_id << "\n";
+                    continue;
+                }
+                stream << "- " << (server->name.empty() ? server->id : server->name) << "\n";
+                stream << "  id: " << server->id << "\n";
+                stream << "  scope: " << (server->scope == McpServerScope::Shared ? "shared" : "per_project") << "\n";
+                stream << "  enabled: " << YesNo(server->enabled) << "\n";
+                stream << "  auto_connect: " << YesNo(server->auto_connect) << "\n";
+                stream << "  command: " << variable_resolver::ExpandTemplate(server->command, values) << "\n";
+                stream << "  working_directory: " << variable_resolver::ExpandTemplate(server->working_directory, values) << "\n";
+                if (!server->arguments.empty()) {
+                    stream << "  arguments:\n";
+                    for (const auto& argument : server->arguments) {
+                        stream << "    - " << variable_resolver::ExpandTemplate(argument, values) << "\n";
+                    }
+                }
+                if (!server->env_entries.empty()) {
+                    stream << "  environment:\n";
+                    for (const auto& entry : server->env_entries) {
+                        stream << "    - " << variable_resolver::ExpandTemplate(entry, values) << "\n";
+                    }
+                }
+                stream << "  declared variables:\n";
+                std::vector<McpServerVariable> definitions = options_.global_variables;
+                definitions = variable_resolver::MergeDefinitions(definitions, server->variables);
+                for (const auto& variable : definitions) {
+                    const auto value = variable_resolver::FindValue(values, variable.name);
+                    if (!value) continue;
+                    stream << "    - " << variable.name << " = " << *value
+                           << " [" << VariableKindLabel(variable.kind)
+                           << ", inject=" << YesNo(variable.inject_into_context) << "]\n";
+                }
+            }
+        }
+
+        stream << "\nRAG tool servers:\n";
+        const auto libraries = BuildPreviewRagToolLibraries(settings);
+        if (libraries.empty()) {
+            stream << "- none exposed as active tools\n";
+        } else {
+            for (const auto& item : libraries) {
+                const std::string library_name = rag_tools::RagLibraryDisplayName(item.library);
+                stream << "- " << library_name << "\n";
+                stream << "  description: " << rag_tools::RagLibraryDescription(item.library) << "\n";
+                stream << "  retrieval_mode: " << RagRetrievalModeLabel(item.binding.retrieval_mode) << "\n";
+                stream << "  tools:\n";
+                stream << "    - " << rag_tools::BuildRagToolAlias(item.library, rag_tools::kListLibrariesToolName) << " -> " << rag_tools::kListLibrariesToolName << "\n";
+                stream << "    - " << rag_tools::BuildRagToolAlias(item.library, rag_tools::kSearchToolName) << " -> " << rag_tools::kSearchToolName << "\n";
+                stream << "    - " << rag_tools::BuildRagToolAlias(item.library, rag_tools::kGetDocumentToolName) << " -> " << rag_tools::kGetDocumentToolName << "\n";
+                if (item.binding.can_export && !Trim(item.binding.export_path_template).empty()) {
+                    stream << "    - " << rag_tools::BuildRagToolAlias(item.library, rag_tools::kWriteDocumentToDriveToolName) << " -> " << rag_tools::kWriteDocumentToDriveToolName << "\n";
+                    stream << "      write_file_folder: " << variable_resolver::ExpandTemplate(item.binding.export_path_template, values) << "\n";
+                }
+                if (item.binding.can_write) {
+                    stream << "    - " << rag_tools::BuildRagToolAlias(item.library, rag_tools::kIngestGeneratedDocumentToolName) << " -> " << rag_tools::kIngestGeneratedDocumentToolName << "\n";
+                }
+            }
+        }
+
+        stream << "\nEnabled model tools:\n";
+        if (settings.model_tool_ids.empty()) {
+            stream << "- none\n";
+        } else {
+            for (const auto& tool_id : settings.model_tool_ids) {
+                const auto* tool = FindModelToolConfig(tool_id);
+                if (!tool) {
+                    stream << "- Missing model tool config for id " << tool_id << "\n";
+                    continue;
+                }
+                stream << "- agent_" << SanitizeModelToolName(tool->name.empty() ? tool->id : tool->name)
+                       << " (" << (tool->name.empty() ? tool->id : tool->name) << ")\n";
+                stream << "  description: " << tool->description << "\n";
+                const std::string expanded_instructions =
+                    variable_resolver::ExpandTemplate(tool->instructions, values);
+                if (!Trim(expanded_instructions).empty()) {
+                    stream << "  expanded instructions preview:\n";
+                    stream << expanded_instructions << "\n";
+                }
+            }
+        }
+
+        return stream.str();
+    }
+
+    std::string BuildContextPreviewText(const ProjectSettingsResult& settings) const {
+        const auto resolved_values = BuildResolvedPreviewVariables(settings);
+        const std::string injected_context =
+            BuildInjectedSystemContext(settings, resolved_values);
+        const nlohmann::json system_message = {
+            {"role", "system"},
+            {"content", injected_context},
+        };
+        std::ostringstream stream;
+        stream << "Context Window Preview\n";
+        stream << "Project: " << settings.project_name << "\n";
+        stream << "\nPREVIEW NOTES - NOT SENT TO THE MODEL\n";
+        stream << "- This preview excludes the user's actual prompt and message history.\n";
+        stream << "- Tool definitions are sent beside the message list, not inside the system context text.\n";
+        stream << "- The model receives the context as one system-message content string. The readable view below preserves line breaks so humans can inspect it; the one-line JSON view shows the escaped transport shape.\n";
+        stream << "- Sample web chat identity for this preview:\n";
+        stream << "  PROJECTNAME=" << settings.project_name << "\n";
+        stream << "  CHATNAME=My Chat\n";
+        stream << "  CHATFULLNAME=My Chat (admin)\n";
+        stream << "  CHATID=chat_1776423689503_8\n";
+        stream << "  USERNAME=admin\n";
+        stream << "  USER=The Admin\n";
+        stream << "  USEREMAIL=admin@theadmin.store\n";
+
+        AppendPreviewSection(stream, "ACTUAL INJECTED SYSTEM CONTEXT - START");
+        if (injected_context.empty()) {
+            stream << "(empty)\n";
+        } else {
+            stream << injected_context << "\n";
+        }
+        AppendPreviewSection(stream, "ACTUAL INJECTED SYSTEM CONTEXT - END");
+
+        AppendPreviewSection(stream, "SYSTEM MESSAGE JSON - ONE LINE");
+        stream << system_message.dump() << "\n";
+
+        AppendPreviewSection(stream, "SYSTEM MESSAGE JSON - READABLE DISPLAY");
+        stream << system_message.dump(2) << "\n";
+
+        AppendPreviewSection(stream, "READABLE DIAGNOSTICS - NOT SENT TO THE MODEL");
+        stream << "Resolved variables:\n";
+        if (resolved_values.empty()) {
+            stream << "(none)\n";
+        } else {
+            for (const auto& variable : resolved_values) {
+                stream << "- " << variable.name << ": " << variable.value;
+                if (!variable.description.empty()) {
+                    stream << " (description: " << variable.description << ")";
+                }
+                if (variable.inject_into_context) {
+                    stream << " [context]";
+                }
+                stream << "\n";
+            }
+        }
+
+        stream << BuildToolAndSetupPreview(settings, resolved_values);
+        return stream.str();
+    }
+
+    void ShowContextPreview() {
+        const auto settings = CollectCurrentSettings();
+        ShowContextPreviewWindow(hwnd_, BuildContextPreviewText(settings));
+    }
+
+    void SaveAndClose() {
+        result_ = CollectCurrentSettings();
 
         DestroyWindow(hwnd_);
     }
@@ -1508,6 +2222,7 @@ private:
     HWND instructions_label_ = nullptr;
     HWND instructions_edit_ = nullptr;
     HWND import_instructions_button_ = nullptr;
+    HWND check_context_button_ = nullptr;
     HWND save_button_ = nullptr;
     HWND cancel_button_ = nullptr;
 
@@ -1523,6 +2238,9 @@ private:
     HWND proj_vars_name_edit_   = nullptr;
     HWND proj_vars_value_label_ = nullptr;
     HWND proj_vars_value_edit_  = nullptr;
+    HWND proj_vars_description_label_ = nullptr;
+    HWND proj_vars_description_edit_ = nullptr;
+    HWND proj_vars_inject_check_ = nullptr;
 };
 
 }  // namespace

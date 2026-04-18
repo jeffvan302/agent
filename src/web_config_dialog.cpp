@@ -418,8 +418,8 @@ static bool SaveFields(HWND dlg, DlgState* st, bool notify)
 }
 
 // ── Layout constants ──────────────────────────────────────────────────────────
-constexpr int kDlgW  = 520;
-constexpr int kDlgH  = 740;   // tall enough for all TLS controls + footer
+constexpr int kDlgW  = 520;   // desired client width
+constexpr int kDlgH  = 740;   // desired client height; tall enough for TLS controls + footer
 constexpr int kLblW  = 130;
 constexpr int kEdtW  = 290;
 constexpr int kBtnW  = 60;
@@ -1077,19 +1077,26 @@ bool ShowWebConfigDialog(HWND                        owner,
     state.cfg       = config;
     state.app_root  = app_root;
 
+    constexpr DWORD kWindowStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+    constexpr DWORD kWindowExStyle = WS_EX_DLGMODALFRAME;
+    RECT windowRect = { 0, 0, kDlgW, kDlgH };
+    AdjustWindowRectEx(&windowRect, kWindowStyle, FALSE, kWindowExStyle);
+    const int outerW = windowRect.right - windowRect.left;
+    const int outerH = windowRect.bottom - windowRect.top;
+
     // Centre on owner
     RECT ownerRect = {};
     if (owner) GetWindowRect(owner, &ownerRect);
-    int ox = ownerRect.left + (ownerRect.right  - ownerRect.left  - kDlgW) / 2;
-    int oy = ownerRect.top  + (ownerRect.bottom - ownerRect.top   - kDlgH) / 2;
+    int ox = ownerRect.left + (ownerRect.right  - ownerRect.left  - outerW) / 2;
+    int oy = ownerRect.top  + (ownerRect.bottom - ownerRect.top   - outerH) / 2;
     if (!owner) { ox = 200; oy = 150; }
 
     HWND dlg = CreateWindowExW(
-        WS_EX_DLGMODALFRAME,
+        kWindowExStyle,
         kClassName,
         L"Web Server Configuration",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-        ox, oy, kDlgW, kDlgH,
+        kWindowStyle,
+        ox, oy, outerW, outerH,
         owner,
         nullptr,
         GetModuleHandleW(nullptr),

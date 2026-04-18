@@ -15,6 +15,15 @@
 
 struct HnswHandle;  // defined in rag_service.cpp
 
+struct RagMarkdownExtractionResult {
+    bool success = false;
+    bool processed_document = false;
+    std::string markdown;
+    std::string extractor_id;
+    std::string mime_type;
+    std::string error;
+};
+
 class RagService {
 public:
     explicit RagService(AppStorage* storage);
@@ -80,6 +89,7 @@ public:
     RagExtractionToolInstallResult LaunchExtractionToolInstaller(bool recommended_only) const;
     RagImageIngestSettings LoadImageIngestSettings() const;
     void SaveImageIngestSettings(const RagImageIngestSettings& settings) const;
+    RagMarkdownExtractionResult ExtractFileToMarkdown(const std::filesystem::path& file) const;
     RagImageIngestRuntimeStatus GetImageIngestRuntimeStatus(const RagImageIngestSettings& settings) const;
     RagExtractionToolInstallResult LaunchImageIngestToolInstaller(const RagImageIngestSettings& settings, const std::string& tool_id) const;
     RagExtractionToolInstallResult LaunchImageVisionModelInstaller(const RagImageIngestSettings& settings) const;

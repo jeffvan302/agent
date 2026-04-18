@@ -4,6 +4,7 @@
 #include <shellapi.h>
 
 #include "util.h"
+#include "variable_resolver.h"
 
 #include <nlohmann/json.hpp>
 
@@ -410,11 +411,18 @@ std::string BuildToolAlias(const std::string& server_id, const std::string& tool
     return prefix + "_" + HashHex(server_id + "::" + tool_name);
 }
 
-std::string BuildConnectionKey(const McpServerConfig& config, const std::string& project_id) {
+std::string BuildConnectionKey(const McpServerConfig& config,
+                               const std::string& project_id,
+                               const std::vector<ProjectMcpVariableValue>& runtime_variables = {}) {
     if (config.scope == McpServerScope::Shared) {
         return "shared::" + config.id;
     }
-    return "project::" + project_id + "::" + config.id;
+    std::string key = "project::" + project_id + "::" + config.id;
+    const std::string runtime_key = variable_resolver::BuildScopeKey(runtime_variables);
+    if (!runtime_key.empty()) {
+        key += "::runtime::" + runtime_key;
+    }
+    return key;
 }
 
 std::optional<std::string> FindBindingValue(const ProjectMcpServerBinding& binding, const std::string& name) {
@@ -490,8 +498,11 @@ std::string ApplyProjectVariables(std::string text, const std::vector<ProjectMcp
 
 bool TextUsesVariable(const std::string& text, const std::string& name) {
     return text.find("$" + name + "$") != std::string::npos ||
+           text.find("$" + name + "_$") != std::string::npos ||
            text.find("$<" + name + ">$") != std::string::npos ||
-           text.find("$<" + name + ">") != std::string::npos;
+           text.find("$<" + name + "_>$") != std::string::npos ||
+           text.find("$<" + name + ">") != std::string::npos ||
+           text.find("$<" + name + "_>") != std::string::npos;
 }
 
 bool ConfigUsesVariable(const McpServerConfig& config, const std::string& name) {
@@ -1340,6 +1351,46 @@ McpManager::~McpManager() {
 void McpManager::Load() {
     configs_ = storage_->LoadMcpServers();
     global_variables_ = storage_->LoadMcpGlobalVariables();
+    bool changed = false;
+    auto ensure_global_variable = [&](const char* name,
+                                      const char* description,
+                                      McpVariableKind kind,
+                                      bool inject_into_context) {
+        const auto exists = std::find_if(
+            global_variables_.begin(),
+            global_variables_.end(),
+            [&](const McpServerVariable& variable) {
+                return variable_resolver::ToLookupKey(variable.name) ==
+                       variable_resolver::ToLookupKey(name);
+            }) != global_variables_.end();
+        if (exists) return;
+        McpServerVariable variable;
+        variable.name = name;
+        variable.description = description;
+        variable.kind = kind;
+        variable.inject_into_context = inject_into_context;
+        global_variables_.push_back(std::move(variable));
+        changed = true;
+    };
+    ensure_global_variable(
+        "ProjectFolder",
+        "Project folder where the project files are located.",
+        McpVariableKind::Folder,
+        true);
+    const auto before_remove = global_variables_.size();
+    global_variables_.erase(
+        std::remove_if(global_variables_.begin(), global_variables_.end(),
+            [](const McpServerVariable& variable) {
+                return variable_resolver::ToLookupKey(variable.name) == "userfolder" &&
+                       variable.description.find("Per-chat user workspace folder. Defaults") != std::string::npos;
+            }),
+        global_variables_.end());
+    if (global_variables_.size() != before_remove) {
+        changed = true;
+    }
+    if (changed) {
+        storage_->SaveMcpConfiguration(configs_, global_variables_);
+    }
     NotifyStateChanged();
 }
 
@@ -1479,17 +1530,12 @@ std::optional<ProjectMcpServerBinding> McpManager::FindProjectBinding(const std:
     return *it;
 }
 
-std::optional<McpServerConfig> McpManager::ResolveConfigForProject(const McpServerConfig& config, const std::string& project_id, std::string* error) const {
+std::optional<McpServerConfig> McpManager::ResolveConfigForProject(
+    const McpServerConfig& config,
+    const std::string& project_id,
+    std::string* error,
+    const std::vector<ProjectMcpVariableValue>& runtime_variables) const {
     McpServerConfig resolved = config;
-    const auto used_global_variables = UsedGlobalVariables(config, global_variables_);
-    std::vector<ProjectMcpVariableValue> project_variables;
-    if (storage_ && !project_id.empty()) {
-        project_variables = storage_->LoadProjectSettings(project_id).project_variables;
-    }
-    const bool uses_named_project_variables = std::any_of(project_variables.begin(), project_variables.end(), [&](const ProjectMcpVariableValue& variable) {
-        return !variable.name.empty() && ConfigUsesVariable(config, variable.name);
-    });
-    const bool uses_project_variables = !config.variables.empty() || !used_global_variables.empty() || uses_named_project_variables;
 
     if (config.scope == McpServerScope::PerProject && project_id.empty()) {
         if (error) {
@@ -1498,15 +1544,8 @@ std::optional<McpServerConfig> McpManager::ResolveConfigForProject(const McpServ
         return std::nullopt;
     }
 
-    if (!uses_project_variables) {
-        return resolved;
-    }
-
     if (config.scope == McpServerScope::Shared) {
-        if (error) {
-            *error = "Shared MCP servers cannot use project variables.";
-        }
-        return std::nullopt;
+        return resolved;
     }
 
     const auto binding = FindProjectBinding(project_id, config.id);
@@ -1517,70 +1556,57 @@ std::optional<McpServerConfig> McpManager::ResolveConfigForProject(const McpServ
         return std::nullopt;
     }
 
-    std::vector<std::string> missing_variables;
-    std::vector<ProjectMcpVariableValue> resolved_values;
-
-    auto resolve_value = [&](const std::string& name, bool prefer_project_value) -> std::optional<std::string> {
-        const auto project_value = FindVariableValue(project_variables, name);
-        const auto binding_value = FindBindingValue(*binding, name);
-        if (prefer_project_value && project_value && !Trim(*project_value).empty()) {
-            return project_value;
-        }
-        if (binding_value && !Trim(*binding_value).empty()) {
-            return binding_value;
-        }
-        if (project_value && !Trim(*project_value).empty()) {
-            return project_value;
-        }
-        return std::nullopt;
-    };
-
-    auto require_value = [&](const std::string& name, bool prefer_project_value) {
-        if (name.empty() || FindVariableValue(resolved_values, name)) {
-            return;
-        }
-        const auto value = resolve_value(name, prefer_project_value);
-        if (!value) {
-            missing_variables.push_back("$<" + name + ">$");
-            return;
-        }
-        UpsertVariableValue(resolved_values, name, *value);
-    };
-
-    for (const auto& variable : config.variables) {
-        require_value(variable.name, false);
+    std::vector<ProjectMcpVariableValue> values;
+    for (const auto& variable : binding->variables) {
+        variable_resolver::UpsertValue(values, variable.name, variable.value);
     }
-    for (const auto& variable : used_global_variables) {
-        require_value(variable.name, true);
-    }
-    for (const auto& variable : project_variables) {
-        if (!variable.name.empty() && ConfigUsesVariable(config, variable.name)) {
-            require_value(variable.name, true);
+
+    ProjectSettings project_settings;
+    if (storage_ && !project_id.empty()) {
+        project_settings = storage_->LoadProjectSettings(project_id);
+        for (const auto& variable : project_settings.project_variables) {
+            variable_resolver::UpsertValue(values, variable);
         }
     }
 
-    if (!missing_variables.empty()) {
-        std::ostringstream stream;
-        stream << "Missing project values for MCP variables: ";
-        for (size_t i = 0; i < missing_variables.size(); ++i) {
-            if (i > 0) {
-                stream << ", ";
-            }
-            stream << missing_variables[i];
-        }
-        if (error) {
-            *error = stream.str();
-        }
-        return std::nullopt;
+    if (!project_settings.project_name.empty()) {
+        variable_resolver::UpsertValue(values, "PROJECTNAME", project_settings.project_name);
     }
+    for (const auto& variable : runtime_variables) {
+        variable_resolver::UpsertValue(values, variable.name, variable.value);
+    }
+    const auto resolved_values = variable_resolver::ResolveValues(values);
+    std::vector<McpServerVariable> folder_definitions =
+        variable_resolver::MergeDefinitions(global_variables_, config.variables);
+    variable_resolver::EnsureFolderVariables(resolved_values, folder_definitions);
 
-    resolved.command = ApplyVariableValues(resolved.command, resolved_values);
-    resolved.working_directory = ApplyVariableValues(resolved.working_directory, resolved_values);
+    resolved.command = variable_resolver::ExpandTemplate(resolved.command, resolved_values);
+    resolved.working_directory = variable_resolver::ExpandTemplate(resolved.working_directory, resolved_values);
     for (auto& argument : resolved.arguments) {
-        argument = ApplyVariableValues(argument, resolved_values);
+        argument = variable_resolver::ExpandTemplate(argument, resolved_values);
     }
     for (auto& entry : resolved.env_entries) {
-        entry = ApplyVariableValues(entry, resolved_values);
+        entry = variable_resolver::ExpandTemplate(entry, resolved_values);
+    }
+
+    // If the configured working directory is an expanded folder path, make sure
+    // it exists before CreateProcessW validates it.
+    if (!Trim(resolved.working_directory).empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(
+            std::filesystem::path(Utf8ToWide(resolved.working_directory)), ec);
+        if (ec && error) {
+            *error = "Could not create MCP working directory: " + resolved.working_directory;
+            return std::nullopt;
+        }
+        ec.clear();
+        const std::filesystem::path working_dir(Utf8ToWide(resolved.working_directory));
+        if (!std::filesystem::is_directory(working_dir, ec)) {
+            if (error) {
+                *error = "Working directory is not a folder: " + resolved.working_directory;
+            }
+            return std::nullopt;
+        }
     }
 
     return resolved;
@@ -1614,7 +1640,10 @@ std::vector<McpServerSnapshot> McpManager::GetServerSnapshots(const std::string&
     return snapshots;
 }
 
-bool McpManager::ConnectServer(const std::string& server_id, const std::string& project_id, std::string* error) {
+bool McpManager::ConnectServer(const std::string& server_id,
+                               const std::string& project_id,
+                               std::string* error,
+                               const std::vector<ProjectMcpVariableValue>& runtime_variables) {
     const auto config_it = std::find_if(configs_.begin(), configs_.end(), [&](const McpServerConfig& config) { return config.id == server_id; });
     if (config_it == configs_.end()) {
         if (error) {
@@ -1631,7 +1660,8 @@ bool McpManager::ConnectServer(const std::string& server_id, const std::string& 
     }
 
     std::string resolved_error;
-    const auto resolved_config = ResolveConfigForProject(*config_it, project_id, &resolved_error);
+    const auto resolved_config =
+        ResolveConfigForProject(*config_it, project_id, &resolved_error, runtime_variables);
     if (!resolved_config) {
         if (error) {
             *error = resolved_error;
@@ -1639,7 +1669,7 @@ bool McpManager::ConnectServer(const std::string& server_id, const std::string& 
         return false;
     }
 
-    const std::string connection_key = BuildConnectionKey(*config_it, project_id);
+    const std::string connection_key = BuildConnectionKey(*config_it, project_id, runtime_variables);
     std::shared_ptr<Connection> connection;
     {
         std::scoped_lock lock(impl_->mutex);
@@ -1723,7 +1753,9 @@ void McpManager::ConnectAutoServers(const std::string& project_id) {
     }
 }
 
-std::vector<McpExposedTool> McpManager::GetExposedToolsForProject(const std::string& project_id) const {
+std::vector<McpExposedTool> McpManager::GetExposedToolsForProject(
+    const std::string& project_id,
+    const std::vector<ProjectMcpVariableValue>& runtime_variables) const {
     std::vector<McpExposedTool> exposed_tools;
     std::unordered_map<std::string, std::shared_ptr<Connection>> connections;
     {
@@ -1736,7 +1768,7 @@ std::vector<McpExposedTool> McpManager::GetExposedToolsForProject(const std::str
             continue;
         }
 
-        const auto it = connections.find(BuildConnectionKey(config, project_id));
+        const auto it = connections.find(BuildConnectionKey(config, project_id, runtime_variables));
         if (it == connections.end()) {
             continue;
         }
@@ -1769,8 +1801,12 @@ std::vector<McpExposedTool> McpManager::GetExposedToolsForProject(const std::str
     return exposed_tools;
 }
 
-McpToolCallResult McpManager::CallExposedTool(const std::string& project_id, const std::string& alias, const std::string& arguments_json) const {
-    const auto exposed_tools = GetExposedToolsForProject(project_id);
+McpToolCallResult McpManager::CallExposedTool(
+    const std::string& project_id,
+    const std::string& alias,
+    const std::string& arguments_json,
+    const std::vector<ProjectMcpVariableValue>& runtime_variables) const {
+    const auto exposed_tools = GetExposedToolsForProject(project_id, runtime_variables);
     const auto tool_it = std::find_if(exposed_tools.begin(), exposed_tools.end(), [&](const McpExposedTool& tool) { return tool.alias == alias; });
     if (tool_it == exposed_tools.end()) {
         McpToolCallResult result;
@@ -1793,7 +1829,8 @@ McpToolCallResult McpManager::CallExposedTool(const std::string& project_id, con
             result.raw_result_json = json{{"error", result.content_text}}.dump(2);
             return result;
         }
-        const auto connection_it = impl_->connections.find(BuildConnectionKey(*config_it, project_id));
+        const auto connection_it =
+            impl_->connections.find(BuildConnectionKey(*config_it, project_id, runtime_variables));
         if (connection_it != impl_->connections.end()) {
             connection = connection_it->second;
         }

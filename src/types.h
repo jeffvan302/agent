@@ -87,6 +87,8 @@ struct McpServerVariable {
 struct ProjectMcpVariableValue {
     std::string name;
     std::string value;
+    std::string description;
+    bool inject_into_context = false;
 };
 
 struct ProjectMcpServerBinding {

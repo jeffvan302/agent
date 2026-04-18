@@ -155,6 +155,20 @@ private:
     // Returns a Session if the request carries a valid, unexpired cookie.
     // On failure, writes a 401 or 302 to res and returns nullopt.
     std::optional<Session> RequireAuth(const void* req_ptr, void* res_ptr);
+    bool                UserCanAccessProject(const Session& session,
+                                             const std::string& project_id) const;
+    bool                ChatBelongsToSessionUser(const ChatInfo& chat,
+                                                 const Session& session) const;
+    std::optional<ChatInfo> FindChatInProject(const std::string& project_id,
+                                              const std::string& chat_id) const;
+    std::optional<std::string> FindAccessibleProjectForChat(
+                            const Session& session,
+                            const std::string& chat_id,
+                            void* res_ptr) const;
+    bool                ValidateProjectChatAccess(const Session& session,
+                                                  const std::string& project_id,
+                                                  const std::string& chat_id,
+                                                  void* res_ptr) const;
 
     static void SendJson (void* res_ptr, int status, const std::string& body);
     static void SendError(void* res_ptr, int status, const std::string& message);
@@ -173,10 +187,15 @@ private:
     void HandleSendMessage    (const void* req, void* res);
     void HandleStreamMessage  (const void* req, void* res);  // SSE streaming
     void HandleUpload         (const void* req, void* res);  // multipart file upload
+    void HandleProjectDataDownload(const void* req, void* res);
+    void HandleRagDocumentDownload(const void* req, void* res);
 
     // ── Static file serving ───────────────────────────────────────────────
     void HandleStaticOrPage(const void* req, void* res);
     bool ServeFile         (const std::filesystem::path& abs_path, void* res);
+    bool ServeDownloadFile (const std::filesystem::path& abs_path,
+                            const std::string& download_name,
+                            void* res);
     static std::string MimeType(const std::string& ext);
 
     // ── Utility ───────────────────────────────────────────────────────────
@@ -217,6 +236,7 @@ private:
     std::string BuildUserContentWithAttachments(
                             const std::string& project_id,
                             const std::string& chat_id,
+                            const std::string& username,
                             const std::string& user_content,
                             const std::vector<std::string>& attachments) const;
 

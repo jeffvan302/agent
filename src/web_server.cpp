@@ -29,6 +29,7 @@
 #include "openai_client.h"
 #include "rag_tool_bridge.h"
 #include "util.h"
+#include "variable_resolver.h"
 #include <nlohmann/json.hpp>
 
 #include <windows.h>
@@ -96,6 +97,137 @@ std::string DecodeFormComponent(const std::string& value) {
     return out;
 }
 
+std::string DecodeUrlPathComponent(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == '%' && i + 2 < value.size()) {
+            const int hi = HexNibble(value[i + 1]);
+            const int lo = HexNibble(value[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+            } else {
+                out.push_back(value[i]);
+            }
+        } else {
+            out.push_back(value[i]);
+        }
+    }
+    return out;
+}
+
+std::string LowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+bool HasPathSeparator(const std::string& value) {
+    return value.find('/') != std::string::npos ||
+           value.find('\\') != std::string::npos;
+}
+
+std::string SafeHeaderFileName(std::string name) {
+    if (name.empty()) name = "download";
+    for (char& ch : name) {
+        const unsigned char uch = static_cast<unsigned char>(ch);
+        if (uch < 32 || uch >= 127 || ch == '"' || ch == '\\' ||
+            ch == '/' || ch == ';') {
+            ch = '_';
+        }
+    }
+    return name.empty() ? std::string("download") : name;
+}
+
+std::optional<fs::path> SafeRelativeDownloadPath(const std::string& raw_path) {
+    const std::string decoded = Trim(DecodeUrlPathComponent(raw_path));
+    if (decoded.empty()) return std::nullopt;
+
+    fs::path relative(Utf8ToWide(decoded));
+    if (relative.empty() || relative.is_absolute() ||
+        relative.has_root_name() || relative.has_root_directory()) {
+        return std::nullopt;
+    }
+    for (const auto& part : relative) {
+        if (part == L"." || part == L".." || part.empty()) {
+            return std::nullopt;
+        }
+    }
+    return relative.lexically_normal();
+}
+
+fs::path CanonicalOrAbsolute(const fs::path& path) {
+    std::error_code ec;
+    fs::path resolved = fs::weakly_canonical(path, ec);
+    if (!ec) return resolved;
+
+    ec.clear();
+    resolved = fs::absolute(path, ec);
+    if (!ec) return resolved.lexically_normal();
+    return path.lexically_normal();
+}
+
+bool PathIsAtOrInside(const fs::path& candidate, const fs::path& root) {
+    std::error_code ec;
+    const fs::path relative = fs::relative(candidate, root, ec);
+    if (ec || relative.empty()) return !ec;
+    for (const auto& part : relative) {
+        if (part == L"..") return false;
+    }
+    return true;
+}
+
+std::optional<fs::path> FirstUniqueFileNamed(const fs::path& root,
+                                             const fs::path& filename,
+                                             bool* multiple) {
+    if (multiple) *multiple = false;
+    std::optional<fs::path> found;
+    std::error_code ec;
+    size_t visited = 0;
+    constexpr size_t kMaxDownloadSearchEntries = 20000;
+
+    fs::recursive_directory_iterator it(
+        root, fs::directory_options::skip_permission_denied, ec);
+    fs::recursive_directory_iterator end;
+    while (!ec && it != end) {
+        if (++visited > kMaxDownloadSearchEntries) break;
+        const fs::path current = it->path();
+        if (it->is_regular_file(ec) && !ec &&
+            current.filename() == filename.filename()) {
+            const fs::path canonical = CanonicalOrAbsolute(current);
+            if (PathIsAtOrInside(canonical, root)) {
+                if (found) {
+                    if (multiple) *multiple = true;
+                    return std::nullopt;
+                }
+                found = canonical;
+            }
+        }
+        ec.clear();
+        it.increment(ec);
+    }
+    return found;
+}
+
+std::optional<fs::path> PathFromFileUriOrPath(const std::string& value) {
+    std::string text = Trim(value);
+    if (text.empty()) return std::nullopt;
+
+    if (text.rfind("file:///", 0) == 0) {
+        text = DecodeUrlPathComponent(text.substr(8));
+        if (text.size() >= 3 && text[0] == '/' &&
+            std::isalpha(static_cast<unsigned char>(text[1])) &&
+            text[2] == ':') {
+            text.erase(text.begin());
+        }
+    } else if (text.rfind("file://", 0) == 0) {
+        text = DecodeUrlPathComponent(text.substr(7));
+    }
+
+    return fs::path(Utf8ToWide(text));
+}
+
 json ParseFormUrlEncoded(const std::string& body) {
     json result = json::object();
     size_t pos = 0;
@@ -134,6 +266,29 @@ std::optional<json> ParseJsonOrFormBody(const httplib::Request& req) {
     return std::nullopt;
 }
 
+std::string BuildServerAddress(const WebServerConfig& config) {
+    std::string base = Trim(config.base_url);
+    while (!base.empty() && base.back() == '/') {
+        base.pop_back();
+    }
+    if (!base.empty()) {
+        return base;
+    }
+
+    std::string host = Trim(config.bind_address);
+    if (host.empty() || host == "0.0.0.0" || host == "::" || host == "[::]") {
+        host = "localhost";
+    }
+    const bool is_ipv6 = host.find(':') != std::string::npos &&
+                         host.front() != '[';
+    if (is_ipv6) {
+        host = "[" + host + "]";
+    }
+
+    const std::string scheme = config.tls_mode.empty() ? "http" : "https";
+    return scheme + "://" + host + ":" + std::to_string(config.port);
+}
+
 void SendRedirect(httplib::Response* res, const std::string& location) {
     res->status = 302;
     res->set_header("Location", location);
@@ -157,8 +312,521 @@ std::vector<ChatToolDefinition> BuildMcpToolDefinitions(
     return definitions;
 }
 
-void EnsureProjectMcpConnections(McpManager* mcp_manager,
-                                 const std::string& project_id) {
+std::vector<ProjectMcpVariableValue> BuildWebRuntimeVariables(
+    AppStorage* storage,
+    WebUserStore* user_store,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const std::string& username,
+    const ProjectSettings& project_settings) {
+    std::string project_name = Trim(project_settings.project_name);
+    std::string chat_name;
+
+    if (storage) {
+        for (const auto& project : storage->LoadProjects()) {
+            if (project.info.id != project_id) continue;
+            if (project_name.empty()) {
+                project_name = Trim(project.info.name);
+            }
+            for (const auto& chat : project.chats) {
+                if (chat.id == chat_id) {
+                    chat_name = Trim(chat.name);
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    const std::string username_suffix = " [" + Trim(username) + "]";
+    if (!Trim(username).empty() &&
+        chat_name.size() >= username_suffix.size() &&
+        chat_name.compare(chat_name.size() - username_suffix.size(),
+                          username_suffix.size(),
+                          username_suffix) == 0) {
+        chat_name = Trim(chat_name.substr(0, chat_name.size() - username_suffix.size()));
+    }
+
+    std::string display_name;
+    std::string email;
+    if (user_store && !Trim(username).empty()) {
+        if (const auto user = user_store->FindUserByUsername(username)) {
+            display_name = Trim(user->display_name);
+            email = Trim(user->email);
+        }
+    }
+
+    std::string chat_full_name = chat_name;
+    if (!Trim(username).empty()) {
+        chat_full_name += chat_full_name.empty()
+            ? "(" + Trim(username) + ")"
+            : " (" + Trim(username) + ")";
+    }
+
+    std::vector<ProjectMcpVariableValue> values;
+    variable_resolver::UpsertValue(values, "PROJECTNAME", project_name);
+    variable_resolver::UpsertValue(values, "CHATNAME", chat_name);
+    variable_resolver::UpsertValue(values, "CHATFULLNAME", chat_full_name);
+    variable_resolver::UpsertValue(values, "CHATID", chat_id);
+    variable_resolver::UpsertValue(values, "USERNAME", Trim(username));
+    variable_resolver::UpsertValue(values, "USER", display_name);
+    variable_resolver::UpsertValue(values, "USEREMAIL", email);
+    variable_resolver::UpsertValue(values, "UserName", Trim(username));
+
+    return values;
+}
+
+std::vector<McpServerVariable> BuildProjectFolderVariableDefinitions(
+    McpManager* mcp_manager,
+    const std::string& project_id) {
+    if (!mcp_manager || project_id.empty()) return {};
+
+    std::vector<McpServerVariable> definitions = mcp_manager->global_variables();
+    const auto bindings = mcp_manager->GetProjectBindings(project_id);
+    const auto& configs = mcp_manager->configs();
+    for (const auto& binding : bindings) {
+        const auto config_it = std::find_if(configs.begin(), configs.end(),
+            [&](const McpServerConfig& config) {
+                return config.id == binding.server_id;
+            });
+        if (config_it == configs.end()) continue;
+        definitions = variable_resolver::MergeDefinitions(
+            definitions, config_it->variables);
+    }
+    return definitions;
+}
+
+std::vector<ProjectMcpVariableValue> BuildResolvedProjectVariables(
+    McpManager* mcp_manager,
+    AppStorage* storage,
+    const std::string& project_id,
+    const std::vector<ProjectMcpVariableValue>& runtime_variables) {
+    std::vector<ProjectMcpVariableValue> values;
+
+    if (mcp_manager && !project_id.empty()) {
+        for (const auto& binding : mcp_manager->GetProjectBindings(project_id)) {
+            for (const auto& variable : binding.variables) {
+                variable_resolver::UpsertValue(
+                    values, variable.name, variable.value);
+            }
+        }
+    }
+
+    if (storage && !project_id.empty()) {
+        const auto project_settings = storage->LoadProjectSettings(project_id);
+        for (const auto& variable : project_settings.project_variables) {
+            variable_resolver::UpsertValue(values, variable);
+        }
+        if (!Trim(project_settings.project_name).empty()) {
+            variable_resolver::UpsertValue(
+                values, "PROJECTNAME", Trim(project_settings.project_name));
+        }
+    }
+
+    for (const auto& variable : runtime_variables) {
+        variable_resolver::UpsertValue(values, variable.name, variable.value);
+    }
+
+    values = variable_resolver::ResolveValues(values);
+    if (mcp_manager) {
+        variable_resolver::EnsureFolderVariables(
+            values,
+            BuildProjectFolderVariableDefinitions(mcp_manager, project_id));
+    }
+    return values;
+}
+
+struct ResolvedProjectUploadFolder {
+    fs::path root;
+    std::string variable_name;
+};
+
+std::string SanitizeUploadFileName(std::string name) {
+    const auto pos = name.find_last_of("/\\");
+    if (pos != std::string::npos) {
+        name = name.substr(pos + 1);
+    }
+    for (char& ch : name) {
+        const unsigned char uch = static_cast<unsigned char>(ch);
+        if (!std::isalnum(uch) && ch != '.' && ch != '-' && ch != '_' && ch != ' ') {
+            ch = '_';
+        }
+    }
+    name = Trim(name);
+    if (name.empty() || name == "." || name == "..") {
+        name = "upload";
+    }
+    return name;
+}
+
+std::optional<ResolvedProjectUploadFolder> ResolveProjectUploadFolder(
+    McpManager* mcp_manager,
+    AppStorage* storage,
+    WebUserStore* user_store,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const std::string& username,
+    std::string* error) {
+    if (!storage) {
+        if (error) *error = "Project storage is not available.";
+        return std::nullopt;
+    }
+
+    const auto project_settings = storage->LoadProjectSettings(project_id);
+    const auto runtime_variables = BuildWebRuntimeVariables(
+        storage, user_store, project_id, chat_id, username, project_settings);
+    const auto resolved_values = BuildResolvedProjectVariables(
+        mcp_manager, storage, project_id, runtime_variables);
+
+    std::vector<McpServerVariable> definitions =
+        BuildProjectFolderVariableDefinitions(mcp_manager, project_id);
+    auto add_definition_if_missing = [&](const std::string& name) {
+        const std::string key = variable_resolver::ToLookupKey(name);
+        const auto exists = std::find_if(definitions.begin(), definitions.end(),
+            [&](const McpServerVariable& definition) {
+                return variable_resolver::ToLookupKey(definition.name) == key;
+            }) != definitions.end();
+        if (!exists && variable_resolver::FindValue(resolved_values, name)) {
+            McpServerVariable definition;
+            definition.name = name;
+            definition.kind = McpVariableKind::Folder;
+            definitions.push_back(std::move(definition));
+        }
+    };
+    add_definition_if_missing("ProjectFolder");
+
+    struct Candidate {
+        int score = 0;
+        fs::path path;
+        std::string variable_name;
+    };
+    std::vector<Candidate> candidates;
+    for (const auto& definition : definitions) {
+        if (definition.kind != McpVariableKind::Folder) continue;
+        const auto value = variable_resolver::FindValue(resolved_values, definition.name);
+        if (!value || Trim(*value).empty()) continue;
+
+        fs::path root(Utf8ToWide(Trim(*value)));
+        if (root.empty() || !root.is_absolute()) continue;
+
+        std::error_code ec;
+        fs::create_directories(root, ec);
+        if (ec || !fs::is_directory(root, ec) || ec) continue;
+
+        const std::string key = variable_resolver::ToLookupKey(definition.name);
+        int score = 10;
+        if (key == "projectfolder") score = 100;
+        else if (key.find("chat") != std::string::npos) score = 90;
+        else if (key.find("user") != std::string::npos) score = 80;
+        else if (key.find("workspace") != std::string::npos) score = 70;
+        else if (key.find("folder") != std::string::npos) score = 60;
+
+        candidates.push_back({score, CanonicalOrAbsolute(root), definition.name});
+    }
+
+    if (candidates.empty()) {
+        if (error) {
+            *error = "No project folder is configured for this project/chat, so the file cannot be received yet.";
+        }
+        return std::nullopt;
+    }
+
+    std::sort(candidates.begin(), candidates.end(),
+        [](const Candidate& left, const Candidate& right) {
+            if (left.score != right.score) return left.score > right.score;
+            return left.path.wstring().size() > right.path.wstring().size();
+        });
+    return ResolvedProjectUploadFolder{candidates.front().path, candidates.front().variable_name};
+}
+
+fs::path MakeUniqueChildPath(const fs::path& directory, const std::string& safe_name) {
+    fs::path candidate = directory / fs::path(Utf8ToWide(safe_name));
+    if (!fs::exists(candidate)) return candidate;
+
+    const fs::path original(safe_name);
+    const std::string stem = original.stem().string().empty()
+        ? "upload"
+        : original.stem().string();
+    const std::string ext = original.extension().string();
+    for (int counter = 1; counter < 10000; ++counter) {
+        candidate = directory / fs::path(Utf8ToWide(
+            stem + "_" + std::to_string(counter) + ext));
+        if (!fs::exists(candidate)) return candidate;
+    }
+    return directory / fs::path(Utf8ToWide(stem + "_" + MakeId("upload") + ext));
+}
+
+std::string RelativePathUtf8(const fs::path& root, const fs::path& child) {
+    std::error_code ec;
+    fs::path relative = fs::relative(child, root, ec);
+    if (ec || relative.empty()) {
+        relative = child.filename();
+    }
+    return WideToUtf8(relative.generic_wstring());
+}
+
+bool HasExtension(const fs::path& path, const std::vector<std::string>& extensions) {
+    const std::string ext = LowerAscii(path.extension().string());
+    return std::find(extensions.begin(), extensions.end(), ext) != extensions.end();
+}
+
+bool FileLooksLikeTextForUpload(const fs::path& path) {
+    static const std::vector<std::string> kTextExts = {
+        ".txt", ".md", ".markdown", ".csv", ".json", ".xml", ".yaml", ".yml",
+        ".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".cpp",
+        ".c", ".h", ".hpp", ".hh", ".hxx", ".cc", ".cxx", ".cs", ".java",
+        ".rs", ".go", ".sh", ".bash", ".bat", ".cmd", ".ps1", ".log", ".ini",
+        ".cfg", ".toml", ".sql", ".r", ".m", ".rb", ".php", ".swift", ".kt",
+        ".kts", ".scala", ".pl", ".pm", ".lua", ".dart", ".vue", ".svelte",
+    };
+    if (HasExtension(path, kTextExts)) return true;
+
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) return false;
+    std::string sample(4096, '\0');
+    input.read(sample.data(), static_cast<std::streamsize>(sample.size()));
+    sample.resize(static_cast<size_t>(input.gcount()));
+    if (sample.empty()) return true;
+
+    size_t suspicious = 0;
+    for (unsigned char ch : sample) {
+        if (ch == 0) return false;
+        if (ch < 9 || (ch > 13 && ch < 32)) {
+            ++suspicious;
+        }
+    }
+    return suspicious * 20 < sample.size();
+}
+
+bool ShouldCreateAgentMarkdownForUpload(const fs::path& path) {
+    static const std::vector<std::string> kProcessedExts = {
+        ".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp",
+        ".doc", ".docx", ".docm", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx", ".pptm",
+    };
+    return HasExtension(path, kProcessedExts) || !FileLooksLikeTextForUpload(path);
+}
+
+std::string UrlEncodePath(const std::string& value) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(value.size());
+    for (unsigned char ch : value) {
+        if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.' ||
+            ch == '~' || ch == '/') {
+            out.push_back(static_cast<char>(ch));
+        } else {
+            out.push_back('%');
+            out.push_back(kHex[(ch >> 4) & 0x0F]);
+            out.push_back(kHex[ch & 0x0F]);
+        }
+    }
+    return out;
+}
+
+std::string ReadTextFileLimited(const fs::path& path, size_t max_bytes, bool* truncated) {
+    if (truncated) *truncated = false;
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) return {};
+    std::string content{
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>()};
+    if (content.size() > max_bytes) {
+        content.resize(max_bytes);
+        if (truncated) *truncated = true;
+    }
+    return content;
+}
+
+struct AgentUploadArtifact {
+    bool created = false;
+    bool extraction_success = false;
+    fs::path markdown_path;
+    fs::path index_path;
+    std::string markdown_relative_path;
+    std::string extractor_id;
+    std::string error;
+};
+
+void UpdateAgentUploadIndex(const fs::path& index_path, const json& entry) {
+    json index = json::object();
+    if (fs::is_regular_file(index_path)) {
+        try {
+            std::ifstream input(index_path, std::ios::binary);
+            index = json::parse(input);
+            if (!index.is_object()) index = json::object();
+        } catch (...) {
+            index = json::object();
+        }
+    }
+    index["version"] = 1;
+    index["updated_at"] = CurrentTimestampUtc();
+    if (!index.contains("files") || !index["files"].is_array()) {
+        index["files"] = json::array();
+    }
+    index["files"].push_back(entry);
+
+    std::ofstream output(index_path, std::ios::binary | std::ios::trunc);
+    output << index.dump(2);
+}
+
+AgentUploadArtifact CreateAgentMarkdownArtifact(
+    RagService* rag_service,
+    const fs::path& project_folder,
+    const fs::path& original_path,
+    const std::string& original_filename,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const std::string& username,
+    const std::string& download_url) {
+    AgentUploadArtifact artifact;
+    const fs::path agent_dir = project_folder / ".agent";
+    std::error_code ec;
+    fs::create_directories(agent_dir, ec);
+    if (ec) {
+        artifact.error = "Could not create .agent folder: " + ec.message();
+        return artifact;
+    }
+
+    artifact.markdown_path = MakeUniqueChildPath(
+        agent_dir,
+        fs::path(Utf8ToWide(original_filename)).stem().string() + ".md");
+    artifact.index_path = agent_dir / "index.json";
+    artifact.markdown_relative_path = RelativePathUtf8(project_folder, artifact.markdown_path);
+
+    RagMarkdownExtractionResult extraction;
+    if (rag_service) {
+        extraction = rag_service->ExtractFileToMarkdown(original_path);
+    } else {
+        extraction.error = "RAG extraction service is not available.";
+    }
+    artifact.extraction_success = extraction.success;
+    artifact.extractor_id = extraction.extractor_id;
+    artifact.error = extraction.error;
+
+    const std::string original_abs = WideToUtf8(original_path.wstring());
+    const std::string markdown_abs = WideToUtf8(artifact.markdown_path.wstring());
+    const std::string index_abs = WideToUtf8(artifact.index_path.wstring());
+    std::ostringstream markdown;
+    markdown << "# Uploaded File: " << original_filename << "\n\n";
+    markdown << "## File Locations\n\n";
+    markdown << "- Original file: " << original_abs << "\n";
+    markdown << "- Project relative original: " << RelativePathUtf8(project_folder, original_path) << "\n";
+    markdown << "- Web download route: " << download_url << "\n";
+    markdown << "- Agent Markdown file: " << markdown_abs << "\n";
+    markdown << "- Agent upload index: " << index_abs << "\n\n";
+    markdown << "## Processing\n\n";
+    markdown << "- Status: " << (extraction.success ? "extracted" : "extraction_failed") << "\n";
+    markdown << "- Extractor: " << (extraction.extractor_id.empty() ? "none" : extraction.extractor_id) << "\n";
+    markdown << "- MIME type: " << (extraction.mime_type.empty() ? "unknown" : extraction.mime_type) << "\n";
+    if (!extraction.error.empty()) {
+        markdown << "- Error: " << extraction.error << "\n";
+    }
+    markdown << "\n";
+    if (extraction.success) {
+        markdown << "## Extracted Markdown\n\n" << extraction.markdown << "\n";
+    } else {
+        markdown << "## Extracted Markdown\n\n";
+        markdown << "The original file was preserved, but Markdown extraction did not complete. ";
+        markdown << "Use the original file path or the agent upload index for follow-up processing.\n";
+    }
+
+    {
+        std::ofstream output(artifact.markdown_path, std::ios::binary | std::ios::trunc);
+        if (!output.is_open()) {
+            artifact.error = "Could not write extracted Markdown file.";
+            return artifact;
+        }
+        output << markdown.str();
+    }
+
+    const std::string original_relative = RelativePathUtf8(project_folder, original_path);
+    json entry = {
+        {"id", MakeId("upload")},
+        {"uploaded_at", CurrentTimestampUtc()},
+        {"project_id", project_id},
+        {"chat_id", chat_id},
+        {"uploaded_by", username},
+        {"original_filename", original_filename},
+        {"original_path", original_abs},
+        {"original_relative_path", original_relative},
+        {"download_url", download_url},
+        {"markdown_path", markdown_abs},
+        {"markdown_relative_path", artifact.markdown_relative_path},
+        {"index_path", index_abs},
+        {"mime_type", extraction.mime_type},
+        {"extractor", extraction.extractor_id},
+        {"extraction_success", extraction.success},
+        {"extraction_error", extraction.error},
+    };
+    UpdateAgentUploadIndex(artifact.index_path, entry);
+    artifact.created = true;
+    return artifact;
+}
+
+struct AgentIndexEntry {
+    fs::path markdown_path;
+    fs::path index_path;
+    std::string markdown_relative_path;
+    std::string original_path;
+    std::string original_relative_path;
+    std::string download_url;
+    bool extraction_success = false;
+    std::string extraction_error;
+};
+
+std::optional<AgentIndexEntry> FindAgentIndexEntryForUpload(
+    const fs::path& project_folder,
+    const std::string& filename) {
+    const fs::path index_path = project_folder / ".agent" / "index.json";
+    if (!fs::is_regular_file(index_path)) return std::nullopt;
+
+    json index = json::object();
+    try {
+        std::ifstream input(index_path, std::ios::binary);
+        index = json::parse(input);
+    } catch (...) {
+        return std::nullopt;
+    }
+    if (!index.contains("files") || !index["files"].is_array()) {
+        return std::nullopt;
+    }
+
+    const auto& files = index["files"];
+    for (auto it = files.rbegin(); it != files.rend(); ++it) {
+        if (!it->is_object()) continue;
+        const std::string original_filename = it->value("original_filename", "");
+        const std::string original_relative = it->value("original_relative_path", "");
+        if (original_filename != filename &&
+            fs::path(Utf8ToWide(original_relative)).filename().string() != filename) {
+            continue;
+        }
+
+        const std::string markdown_relative = it->value("markdown_relative_path", "");
+        if (markdown_relative.empty()) continue;
+        const fs::path markdown_path = CanonicalOrAbsolute(
+            project_folder / fs::path(Utf8ToWide(markdown_relative)));
+        if (!PathIsAtOrInside(markdown_path, project_folder) ||
+            !fs::is_regular_file(markdown_path)) {
+            continue;
+        }
+
+        AgentIndexEntry entry;
+        entry.markdown_path = markdown_path;
+        entry.index_path = index_path;
+        entry.markdown_relative_path = markdown_relative;
+        entry.original_path = it->value("original_path", "");
+        entry.original_relative_path = original_relative;
+        entry.download_url = it->value("download_url", "");
+        entry.extraction_success = it->value("extraction_success", false);
+        entry.extraction_error = it->value("extraction_error", "");
+        return entry;
+    }
+    return std::nullopt;
+}
+
+void EnsureProjectMcpConnections(
+    McpManager* mcp_manager,
+    const std::string& project_id,
+    const std::vector<ProjectMcpVariableValue>& runtime_variables) {
     if (!mcp_manager || project_id.empty()) return;
 
     for (const auto& config : mcp_manager->configs()) {
@@ -168,34 +836,20 @@ void EnsureProjectMcpConnections(McpManager* mcp_manager,
         }
 
         std::string ignored_error;
-        mcp_manager->ConnectServer(config.id, project_id, &ignored_error);
+        mcp_manager->ConnectServer(
+            config.id, project_id, &ignored_error, runtime_variables);
     }
 }
 
 std::string BuildMcpProjectContext(McpManager* mcp_manager,
                                    AppStorage* storage,
-                                   const std::string& project_id) {
+                                   const std::string& project_id,
+                                   const std::vector<ProjectMcpVariableValue>& runtime_variables) {
     if (!mcp_manager || project_id.empty()) return {};
 
     const auto bindings = mcp_manager->GetProjectBindings(project_id);
-    if (bindings.empty()) return {};
-
-    std::unordered_map<std::string, std::string> values;
-    for (const auto& binding : bindings) {
-        for (const auto& variable : binding.variables) {
-            const std::string name = Trim(variable.name);
-            const std::string value = Trim(variable.value);
-            if (!name.empty() && !value.empty()) values[name] = value;
-        }
-    }
-    if (storage) {
-        const auto project_settings = storage->LoadProjectSettings(project_id);
-        for (const auto& variable : project_settings.project_variables) {
-            const std::string name = Trim(variable.name);
-            const std::string value = Trim(variable.value);
-            if (!name.empty() && !value.empty()) values[name] = value;
-        }
-    }
+    const auto values = BuildResolvedProjectVariables(
+        mcp_manager, storage, project_id, runtime_variables);
     if (values.empty()) return {};
 
     struct ContextVariable {
@@ -208,24 +862,49 @@ std::string BuildMcpProjectContext(McpManager* mcp_manager,
     std::vector<std::string> emitted_names;
     const auto add_variable = [&](const McpServerVariable& variable) {
         if (!variable.inject_into_context || variable.name.empty()) return;
-        if (std::find(emitted_names.begin(), emitted_names.end(), variable.name)
+        const std::string emitted_key = variable_resolver::ToLookupKey(variable.name);
+        if (std::find(emitted_names.begin(), emitted_names.end(), emitted_key)
                 != emitted_names.end()) {
             return;
         }
 
-        const auto value_it = values.find(variable.name);
-        if (value_it == values.end() || Trim(value_it->second).empty()) return;
+        const auto value = variable_resolver::FindValue(values, variable.name);
 
         ContextVariable context_variable;
         context_variable.name = variable.name;
-        context_variable.value = value_it->second;
+        context_variable.value = value.value_or("");
         context_variable.description = Trim(variable.description);
         context_values.push_back(std::move(context_variable));
-        emitted_names.push_back(variable.name);
+        emitted_names.push_back(emitted_key);
+    };
+    const auto add_project_variable = [&](const ProjectMcpVariableValue& variable) {
+        if (!variable.inject_into_context || variable.name.empty()) return;
+        const std::string emitted_key = variable_resolver::ToLookupKey(variable.name);
+        if (std::find(emitted_names.begin(), emitted_names.end(), emitted_key)
+                != emitted_names.end()) {
+            return;
+        }
+
+        const auto value = variable_resolver::FindValue(values, variable.name);
+        if (!value || Trim(*value).empty()) return;
+
+        ContextVariable context_variable;
+        context_variable.name = variable.name;
+        context_variable.value = *value;
+        context_variable.description = Trim(variable.description);
+        context_values.push_back(std::move(context_variable));
+        emitted_names.push_back(emitted_key);
     };
 
     for (const auto& variable : mcp_manager->global_variables()) {
         add_variable(variable);
+    }
+
+    if (storage) {
+        const auto project_settings = storage->LoadProjectSettings(project_id);
+        for (const auto& variable : project_settings.project_variables) {
+            add_project_variable(variable);
+        }
     }
 
     const auto& configs = mcp_manager->configs();
@@ -257,8 +936,10 @@ std::string BuildMcpProjectContext(McpManager* mcp_manager,
     return stream.str();
 }
 
-std::string BuildWebFormattingContext() {
-    return
+std::string BuildWebFormattingContext(const std::string& server_address,
+                                      const std::string& project_id,
+                                      const std::string& chat_id) {
+    std::string context =
         "Web Chat Formatting Capabilities:\n"
         "This response is being rendered in the web chat. Mermaid and Vega-Lite "
         "libraries are available for visual output.\n"
@@ -267,7 +948,28 @@ std::string BuildWebFormattingContext() {
         "- Use fenced code blocks tagged `vega-lite` with JSON for charts and data graphics. "
         "Keep Vega-Lite specs self-contained with inline data when possible.\n"
         "- Prefer these formats when a diagram, graph, or flow chart would make "
-        "the answer clearer.";
+        "the answer clearer.\n"
+        "\nWeb Download Links:\n"
+        "- You may generate direct download URLs from raw link data by combining the server address with the route. "
+        "Relative routes also work inside this web chat.\n"
+        "- Project-accessible files can be linked as `" + server_address + "/data/{project_id}/{chat_id}/{file_or_relative_path}` "
+        "or `/data/{project_id}/{chat_id}/{file_or_relative_path}`. Use only file names or relative paths that came from the user, "
+        "tool output, or project context; URL-encode spaces and special characters. The server only serves files inside configured "
+        "folder variables for the current user and chat.\n"
+        "- RAG originals can be linked as `" + server_address + "/rag/{project_id}/{rag_id}/{document_id}` "
+        "or `/rag/{project_id}/{rag_id}/{document_id}` when a readable exposed RAG tool returns a document_id or download_url.\n"
+        "- For RAG documents, source_path, original_source_uri, and original file names are provenance only. They may refer to another "
+        "computer or a file that no longer exists. Use download_url or the /rag route for downloadable links.";
+    if (!server_address.empty()) {
+        context += "\n- Current server_address: " + server_address;
+    }
+    if (!project_id.empty()) {
+        context += "\n- Current project_id: " + project_id;
+    }
+    if (!chat_id.empty()) {
+        context += "\n- Current chat_id: " + chat_id;
+    }
+    return context;
 }
 
 void AppendAssistantToolRequest(std::vector<MessageRecord>& messages,
@@ -758,6 +1460,80 @@ WebServer::RequireAuth(const void* req_ptr, void* res_ptr) {
     return session;
 }
 
+bool WebServer::UserCanAccessProject(const Session& session,
+                                     const std::string& project_id) const {
+    const auto accessible = user_store_->GetProjectIdsForUser(session.user_id);
+    return std::find(accessible.begin(), accessible.end(), project_id) !=
+           accessible.end();
+}
+
+bool WebServer::ChatBelongsToSessionUser(const ChatInfo& chat,
+                                         const Session& session) const {
+    const std::string suffix = " [" + session.username + "]";
+    return chat.name.size() >= suffix.size() &&
+           chat.name.compare(chat.name.size() - suffix.size(),
+                             suffix.size(),
+                             suffix) == 0;
+}
+
+std::optional<ChatInfo> WebServer::FindChatInProject(
+    const std::string& project_id,
+    const std::string& chat_id) const {
+    for (const auto& project : storage_->LoadProjects()) {
+        if (project.info.id != project_id) continue;
+        for (const auto& chat : project.chats) {
+            if (chat.id == chat_id) {
+                return chat;
+            }
+        }
+        break;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> WebServer::FindAccessibleProjectForChat(
+    const Session& session,
+    const std::string& chat_id,
+    void* res_ptr) const {
+    for (const auto& project : storage_->LoadProjects()) {
+        for (const auto& chat : project.chats) {
+            if (chat.id != chat_id) continue;
+            if (!UserCanAccessProject(session, project.info.id)) {
+                SendError(res_ptr, 403, "Access denied");
+                return std::nullopt;
+            }
+            if (!ChatBelongsToSessionUser(chat, session)) {
+                SendError(res_ptr, 403, "Access denied for this chat");
+                return std::nullopt;
+            }
+            return project.info.id;
+        }
+    }
+    SendError(res_ptr, 404, "Chat not found");
+    return std::nullopt;
+}
+
+bool WebServer::ValidateProjectChatAccess(const Session& session,
+                                          const std::string& project_id,
+                                          const std::string& chat_id,
+                                          void* res_ptr) const {
+    if (!UserCanAccessProject(session, project_id)) {
+        SendError(res_ptr, 403, "Access denied");
+        return false;
+    }
+
+    const auto chat = FindChatInProject(project_id, chat_id);
+    if (!chat) {
+        SendError(res_ptr, 404, "Chat not found");
+        return false;
+    }
+    if (!ChatBelongsToSessionUser(*chat, session)) {
+        SendError(res_ptr, 403, "Access denied for this chat");
+        return false;
+    }
+    return true;
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Web-root resolution
 // ──────────────────────────────────────────────────────────────────────────────
@@ -788,18 +1564,26 @@ std::string WebServer::InjectThemePath(std::string html, const std::string& them
 // Static file serving
 // ──────────────────────────────────────────────────────────────────────────────
 std::string WebServer::MimeType(const std::string& ext) {
-    if (ext == ".html" || ext == ".htm")  return "text/html; charset=utf-8";
-    if (ext == ".css")   return "text/css; charset=utf-8";
-    if (ext == ".js")    return "application/javascript; charset=utf-8";
-    if (ext == ".json")  return "application/json";
-    if (ext == ".svg")   return "image/svg+xml";
-    if (ext == ".png")   return "image/png";
-    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
-    if (ext == ".ico")   return "image/x-icon";
-    if (ext == ".woff")  return "font/woff";
-    if (ext == ".woff2") return "font/woff2";
-    if (ext == ".ttf")   return "font/ttf";
-    if (ext == ".txt")   return "text/plain; charset=utf-8";
+    const std::string lower_ext = LowerAscii(ext);
+    if (lower_ext == ".html" || lower_ext == ".htm")  return "text/html; charset=utf-8";
+    if (lower_ext == ".css")   return "text/css; charset=utf-8";
+    if (lower_ext == ".js")    return "application/javascript; charset=utf-8";
+    if (lower_ext == ".json")  return "application/json";
+    if (lower_ext == ".svg")   return "image/svg+xml";
+    if (lower_ext == ".png")   return "image/png";
+    if (lower_ext == ".jpg" || lower_ext == ".jpeg") return "image/jpeg";
+    if (lower_ext == ".gif")   return "image/gif";
+    if (lower_ext == ".webp")  return "image/webp";
+    if (lower_ext == ".pdf")   return "application/pdf";
+    if (lower_ext == ".zip")   return "application/zip";
+    if (lower_ext == ".docx")  return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    if (lower_ext == ".xlsx")  return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    if (lower_ext == ".pptx")  return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    if (lower_ext == ".ico")   return "image/x-icon";
+    if (lower_ext == ".woff")  return "font/woff";
+    if (lower_ext == ".woff2") return "font/woff2";
+    if (lower_ext == ".ttf")   return "font/ttf";
+    if (lower_ext == ".txt" || lower_ext == ".md") return "text/plain; charset=utf-8";
     return "application/octet-stream";
 }
 
@@ -822,6 +1606,53 @@ bool WebServer::ServeFile(const fs::path& abs_path, void* res_ptr) {
         res->set_header("Cache-Control", "max-age=3600");
     else
         res->set_header("Cache-Control", "no-store");
+    return true;
+}
+
+bool WebServer::ServeDownloadFile(const fs::path& abs_path,
+                                  const std::string& download_name,
+                                  void* res_ptr) {
+    auto* res = static_cast<httplib::Response*>(res_ptr);
+    std::error_code ec;
+    if (!fs::is_regular_file(abs_path, ec) || ec) return false;
+
+    const uintmax_t file_size = fs::file_size(abs_path, ec);
+    if (ec) return false;
+
+    const std::string ext = abs_path.extension().string();
+    const std::string safe_name = SafeHeaderFileName(
+        download_name.empty()
+            ? WideToUtf8(abs_path.filename().wstring())
+            : download_name);
+    const fs::path path_copy = abs_path;
+
+    res->status = 200;
+    res->set_header("Cache-Control", "no-store");
+    res->set_header("Content-Disposition",
+                    "attachment; filename=\"" + safe_name + "\"");
+    res->set_content_provider(
+        static_cast<size_t>(file_size),
+        MimeType(ext),
+        [path_copy](size_t offset, size_t length, httplib::DataSink& sink) -> bool {
+            std::ifstream input(path_copy, std::ios::binary);
+            if (!input.is_open()) return false;
+            input.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+            if (!input.good()) return false;
+
+            std::vector<char> buffer(std::min<size_t>(length, 64 * 1024));
+            size_t remaining = length;
+            while (remaining > 0) {
+                const size_t to_read = std::min(buffer.size(), remaining);
+                input.read(buffer.data(), static_cast<std::streamsize>(to_read));
+                const std::streamsize got = input.gcount();
+                if (got <= 0) return false;
+                if (!sink.write(buffer.data(), static_cast<size_t>(got))) {
+                    return false;
+                }
+                remaining -= static_cast<size_t>(got);
+            }
+            return true;
+        });
     return true;
 }
 
@@ -1233,27 +2064,21 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
     const auto* req = static_cast<const httplib::Request*>(req_ptr);
     const std::string chat_id = req->path_params.at("id");
 
-    // Find owning project
-    const auto all_projects = storage_->LoadProjects();
-    for (const auto& proj : all_projects) {
-        for (const auto& chat : proj.chats) {
-            if (chat.id != chat_id) continue;
-            const auto messages = storage_->LoadMessages(proj.info.id, chat_id);
-            json arr = json::array();
-            for (const auto& m : messages) {
-                if (m.role == "tool") continue;
-                if (m.role == "assistant" &&
-                    (m.content.empty() || !m.tool_calls_json.empty())) {
-                    continue;
-                }
-                arr.push_back({{"role", m.role}, {"content", m.content},
-                               {"created_at", m.created_at}});
-            }
-            SendJson(res_ptr, 200, arr.dump());
-            return;
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    const auto messages = storage_->LoadMessages(*project_id, chat_id);
+    json arr = json::array();
+    for (const auto& m : messages) {
+        if (m.role == "tool") continue;
+        if (m.role == "assistant" &&
+            (m.content.empty() || !m.tool_calls_json.empty())) {
+            continue;
         }
+        arr.push_back({{"role", m.role}, {"content", m.content},
+                       {"created_at", m.created_at}});
     }
-    SendError(res_ptr, 404, "Chat not found");
+    SendJson(res_ptr, 200, arr.dump());
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1262,14 +2087,21 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
 std::string WebServer::BuildUserContentWithAttachments(
     const std::string& project_id,
     const std::string& chat_id,
+    const std::string& username,
     const std::string& user_content,
     const std::vector<std::string>& attachments) const
 {
     if (attachments.empty()) return user_content;
 
-    const fs::path upload_dir = app_root_ / "uploads" / project_id / chat_id;
+    std::string folder_error;
+    const auto upload_folder = ResolveProjectUploadFolder(
+        mcp_manager_, storage_, user_store_, project_id, chat_id, username, &folder_error);
+    if (!upload_folder) {
+        return user_content + "\n\n---\nAttachment note: " + folder_error + "\n";
+    }
 
     std::string combined = user_content;
+    constexpr size_t kMaxAttachmentTextBytes = 128 * 1024;
 
     for (const auto& filename : attachments) {
         // Security: reject any filename that contains a path separator or ".."
@@ -1279,50 +2111,83 @@ std::string WebServer::BuildUserContentWithAttachments(
             continue;
         }
 
-        const fs::path file_path = upload_dir / filename;
+        const fs::path file_path = CanonicalOrAbsolute(
+            upload_folder->root / fs::path(Utf8ToWide(filename)));
+        if (!PathIsAtOrInside(file_path, upload_folder->root)) continue;
         if (!fs::is_regular_file(file_path)) continue;
 
-        // Determine how to read: text vs binary
-        const std::string ext = file_path.extension().string();
-        // Treat common text formats as UTF-8 text; everything else as base64
-        static const std::vector<std::string> kTextExts = {
-            ".txt", ".md", ".markdown", ".csv", ".json", ".xml", ".yaml", ".yml",
-            ".html", ".htm", ".css", ".js", ".ts", ".py", ".cpp", ".c", ".h",
-            ".java", ".rs", ".go", ".sh", ".bat", ".ps1", ".log", ".ini", ".cfg",
-            ".toml", ".sql", ".r", ".m", ".rb", ".php", ".swift",
-        };
-        bool is_text = std::any_of(kTextExts.begin(), kTextExts.end(),
-            [&](const std::string& e) {
-                if (ext.size() != e.size()) return false;
-                for (size_t i = 0; i < ext.size(); ++i)
-                    if (std::tolower(static_cast<unsigned char>(ext[i])) !=
-                        std::tolower(static_cast<unsigned char>(e[i]))) return false;
-                return true;
-            });
+        const std::string attachment_file_abs = WideToUtf8(file_path.wstring());
+        const std::string attachment_file_relative =
+            RelativePathUtf8(upload_folder->root, file_path);
+        const std::string attachment_download_url =
+            "/data/" + project_id + "/" + chat_id + "/" +
+            UrlEncodePath(attachment_file_relative);
 
-        combined += "\n\n---\nAttached file: " + filename + "\n";
-
-        if (is_text) {
-            std::ifstream ifs(file_path);
-            if (!ifs) { combined += "[Error: could not read file]\n"; continue; }
-            std::ostringstream oss;
-            oss << ifs.rdbuf();
-            std::string text = oss.str();
-            // Truncate very large files to avoid blowing the context window
-            constexpr size_t kMaxTextBytes = 128 * 1024;
-            if (text.size() > kMaxTextBytes) {
-                text.resize(kMaxTextBytes);
-                text += "\n[... truncated at 128 KB ...]";
+        if (const auto agent_entry =
+                FindAgentIndexEntryForUpload(upload_folder->root, filename)) {
+            bool truncated = false;
+            std::string markdown = ReadTextFileLimited(
+                agent_entry->markdown_path, kMaxAttachmentTextBytes, &truncated);
+            combined += "\n\n---\nAttached processed file: " + filename + "\n";
+            combined += "Original file: " +
+                (agent_entry->original_path.empty()
+                    ? attachment_file_abs
+                    : agent_entry->original_path) + "\n";
+            combined += "Project relative original: " +
+                (agent_entry->original_relative_path.empty()
+                    ? attachment_file_relative
+                    : agent_entry->original_relative_path) + "\n";
+            combined += "Web download route: " +
+                (agent_entry->download_url.empty()
+                    ? attachment_download_url
+                    : agent_entry->download_url) + "\n";
+            combined += "Processed Markdown file: " +
+                WideToUtf8(agent_entry->markdown_path.wstring()) + "\n";
+            combined += "Agent upload index: " +
+                WideToUtf8(agent_entry->index_path.wstring()) + "\n";
+            if (!agent_entry->extraction_success &&
+                !agent_entry->extraction_error.empty()) {
+                combined += "Extraction warning: " +
+                    agent_entry->extraction_error + "\n";
             }
-            combined += text;
+            combined += "\nProcessed Markdown content:\n";
+            combined += markdown.empty()
+                ? "[Error: could not read processed Markdown]\n"
+                : markdown;
+            if (truncated) {
+                combined += "\n[... truncated at 128 KB ...]";
+            }
+        } else if (FileLooksLikeTextForUpload(file_path)) {
+            bool truncated = false;
+            std::string text = ReadTextFileLimited(
+                file_path, kMaxAttachmentTextBytes, &truncated);
+            combined += "\n\n---\nAttached text/source file: " + filename + "\n";
+            combined += "Stored file: " + attachment_file_abs + "\n";
+            combined += "Project relative path: " + attachment_file_relative + "\n";
+            combined += "Web download route: " + attachment_download_url + "\n\n";
+            combined += text.empty() ? "[Error: could not read file]\n" : text;
+            if (truncated) {
+                combined += "\n[... truncated at 128 KB ...]";
+            }
         } else {
-            // Binary file: note it exists but don't embed raw bytes
-            const auto file_size = fs::file_size(file_path);
-            combined += "[Binary file, " + std::to_string(file_size)
+            std::error_code file_size_error;
+            const auto attachment_file_size =
+                fs::file_size(file_path, file_size_error);
+            combined += "\n\n---\nAttached binary file: " + filename + "\n";
+            combined += "Stored file: " + attachment_file_abs + "\n";
+            combined += "Project relative path: " + attachment_file_relative + "\n";
+            combined += "Web download route: " + attachment_download_url + "\n";
+            combined += "[Binary file, " +
+                std::to_string(file_size_error ? 0 : attachment_file_size) +
+                " bytes; content not embedded]\n";
+        }
+        continue;
+/*
                      + " bytes — content not embedded]\n";
         }
+#endif
+*/
     }
-
     return combined;
 }
 
@@ -1356,6 +2221,10 @@ WebServer::CallModel(const std::string& project_id,
 
     // Load project settings to get preferred provider/model and instructions
     const auto proj_settings = storage_->LoadProjectSettings(project_id);
+    const auto runtime_variables = BuildWebRuntimeVariables(
+        storage_, user_store_, project_id, chat_id, username, proj_settings);
+    const auto resolved_prompt_variables = BuildResolvedProjectVariables(
+        mcp_manager_, storage_, project_id, runtime_variables);
 
     // Select provider and model
     ProviderConfig selected_provider;
@@ -1387,48 +2256,20 @@ WebServer::CallModel(const std::string& project_id,
         return result;
     }
 
-    // Build system prompt: project instructions with $<VarName> substitution
+    // Build system prompt: project instructions with project and chat variables.
     std::string system_prompt;
     {
-        std::string instr = proj_settings.project_instructions;
-        for (const auto& pv : proj_settings.project_variables) {
-            if (pv.name.empty()) continue;
-            const std::string ph = "$<" + pv.name + ">";
-            size_t pos = 0;
-            while ((pos = instr.find(ph, pos)) != std::string::npos) {
-                const size_t after = pos + ph.size();
-                // Trailing-$ guard: skip $<Name>$ MCP binding tokens
-                if (after < instr.size() && instr[after] == '$') { ++pos; continue; }
-                instr.replace(pos, ph.size(), pv.value);
-                pos += pv.value.size();
-            }
-        }
-        // Also inject $<UserName>
-        {
-            const std::string ph = "$<UserName>";
-            size_t pos = 0;
-            while ((pos = instr.find(ph, pos)) != std::string::npos) {
-                instr.replace(pos, ph.size(), username);
-                pos += username.size();
-            }
-        }
-        // Inject $<UserProjectFolder> if per-user folder is enabled for this project
-        const std::string user_folder = user_store_->GetUserProjectFolder(project_id, username);
-        if (!user_folder.empty()) {
-            fs::create_directories(fs::path(user_folder));
-            const std::string ph = "$<UserProjectFolder>";
-            size_t pos = 0;
-            while ((pos = instr.find(ph, pos)) != std::string::npos) {
-                instr.replace(pos, ph.size(), user_folder);
-                pos += user_folder.size();
-            }
-        }
+        const std::string instr = variable_resolver::ExpandTemplate(
+            proj_settings.project_instructions,
+            resolved_prompt_variables);
         if (!instr.empty()) system_prompt = "Project Instructions:\n" + instr;
     }
     if (mcp_manager_) {
-        EnsureProjectMcpConnections(mcp_manager_, project_id);
+        EnsureProjectMcpConnections(
+            mcp_manager_, project_id, runtime_variables);
         const std::string mcp_context =
-            BuildMcpProjectContext(mcp_manager_, storage_, project_id);
+            BuildMcpProjectContext(
+                mcp_manager_, storage_, project_id, runtime_variables);
         if (!mcp_context.empty()) {
             if (!system_prompt.empty()) system_prompt += "\n\n";
             system_prompt += mcp_context;
@@ -1443,7 +2284,8 @@ WebServer::CallModel(const std::string& project_id,
         }
     }
     {
-        const std::string web_formatting_context = BuildWebFormattingContext();
+        const std::string web_formatting_context =
+            BuildWebFormattingContext(BuildServerAddress(config_), project_id, chat_id);
         if (!web_formatting_context.empty()) {
             if (!system_prompt.empty()) system_prompt += "\n\n";
             system_prompt += web_formatting_context;
@@ -1457,7 +2299,7 @@ WebServer::CallModel(const std::string& project_id,
     MessageRecord user_msg;
     user_msg.role       = "user";
     user_msg.content    = BuildUserContentWithAttachments(
-                              project_id, chat_id, user_content, attachments);
+                              project_id, chat_id, username, user_content, attachments);
     user_msg.created_at = NowIso();
     messages.push_back(user_msg);
 
@@ -1471,7 +2313,7 @@ WebServer::CallModel(const std::string& project_id,
     opts.messages     = messages;
 
     const auto exposed_tools = (mcp_manager_ && selected_model.supports_tools)
-        ? mcp_manager_->GetExposedToolsForProject(project_id)
+        ? mcp_manager_->GetExposedToolsForProject(project_id, runtime_variables)
         : std::vector<McpExposedTool>{};
     auto tool_definitions = BuildMcpToolDefinitions(exposed_tools);
     const auto rag_tool_set = (rag_service_ && selected_model.supports_tools)
@@ -1514,10 +2356,15 @@ WebServer::CallModel(const std::string& project_id,
                             project_id,
                             tool_call.name,
                             tool_call.arguments_json,
-                            &rag_tool_set.routes);
+                            &rag_tool_set.routes,
+                            nullptr,
+                            resolved_prompt_variables);
                     } else if (mcp_manager_) {
                         tool_result = mcp_manager_->CallExposedTool(
-                            project_id, tool_call.name, tool_call.arguments_json);
+                            project_id,
+                            tool_call.name,
+                            tool_call.arguments_json,
+                            runtime_variables);
                     } else {
                         tool_result = ToolUnavailableResult(tool_call);
                     }
@@ -1630,23 +2477,11 @@ void WebServer::HandleSendMessage(const void* req_ptr, void* res_ptr) {
     }
     RecordMessageSent(ip);
 
-    // Find owning project and verify user access
-    const auto accessible  = user_store_->GetProjectIdsForUser(session->user_id);
-    const auto all_projects = storage_->LoadProjects();
-    std::string project_id;
-    for (const auto& proj : all_projects) {
-        for (const auto& chat : proj.chats) {
-            if (chat.id == chat_id) { project_id = proj.info.id; break; }
-        }
-        if (!project_id.empty()) break;
-    }
-    if (project_id.empty()) { SendError(res_ptr, 404, "Chat not found"); return; }
-    if (std::find(accessible.begin(), accessible.end(), project_id) == accessible.end()) {
-        SendError(res_ptr, 403, "Access denied"); return;
-    }
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
 
     // Call model (may block for several seconds)
-    const auto model_result = CallModel(project_id, chat_id, content, session->username);
+    const auto model_result = CallModel(*project_id, chat_id, content, session->username);
 
     if (!model_result.success) {
         json err = {{"error", model_result.error}};
@@ -1678,6 +2513,10 @@ std::string WebServer::StreamModel(const std::string& project_id,
     if (providers.empty()) return "No AI providers configured.";
 
     const auto proj_settings = storage_->LoadProjectSettings(project_id);
+    const auto runtime_variables = BuildWebRuntimeVariables(
+        storage_, user_store_, project_id, chat_id, username, proj_settings);
+    const auto resolved_prompt_variables = BuildResolvedProjectVariables(
+        mcp_manager_, storage_, project_id, runtime_variables);
 
     // Select provider/model (same logic as CallModel)
     ProviderConfig selected_provider;
@@ -1701,46 +2540,20 @@ std::string WebServer::StreamModel(const std::string& project_id,
     }
     if (selected_model.id.empty()) return "No AI model configured.";
 
-    // Build system prompt with variable substitution
+    // Build system prompt with project and chat variable substitution.
     std::string system_prompt;
     {
-        std::string instr = proj_settings.project_instructions;
-        for (const auto& pv : proj_settings.project_variables) {
-            if (pv.name.empty()) continue;
-            const std::string ph = "$<" + pv.name + ">";
-            size_t pos = 0;
-            while ((pos = instr.find(ph, pos)) != std::string::npos) {
-                const size_t after = pos + ph.size();
-                if (after < instr.size() && instr[after] == '$') { ++pos; continue; }
-                instr.replace(pos, ph.size(), pv.value);
-                pos += pv.value.size();
-            }
-        }
-        {
-            const std::string ph = "$<UserName>";
-            size_t pos = 0;
-            while ((pos = instr.find(ph, pos)) != std::string::npos) {
-                instr.replace(pos, ph.size(), username);
-                pos += username.size();
-            }
-        }
-        // Inject $<UserProjectFolder> if per-user folder is enabled for this project
-        const std::string user_folder = user_store_->GetUserProjectFolder(project_id, username);
-        if (!user_folder.empty()) {
-            fs::create_directories(fs::path(user_folder));
-            const std::string ph = "$<UserProjectFolder>";
-            size_t pos = 0;
-            while ((pos = instr.find(ph, pos)) != std::string::npos) {
-                instr.replace(pos, ph.size(), user_folder);
-                pos += user_folder.size();
-            }
-        }
+        const std::string instr = variable_resolver::ExpandTemplate(
+            proj_settings.project_instructions,
+            resolved_prompt_variables);
         if (!instr.empty()) system_prompt = "Project Instructions:\n" + instr;
     }
     if (mcp_manager_) {
-        EnsureProjectMcpConnections(mcp_manager_, project_id);
+        EnsureProjectMcpConnections(
+            mcp_manager_, project_id, runtime_variables);
         const std::string mcp_context =
-            BuildMcpProjectContext(mcp_manager_, storage_, project_id);
+            BuildMcpProjectContext(
+                mcp_manager_, storage_, project_id, runtime_variables);
         if (!mcp_context.empty()) {
             if (!system_prompt.empty()) system_prompt += "\n\n";
             system_prompt += mcp_context;
@@ -1755,7 +2568,8 @@ std::string WebServer::StreamModel(const std::string& project_id,
         }
     }
     {
-        const std::string web_formatting_context = BuildWebFormattingContext();
+        const std::string web_formatting_context =
+            BuildWebFormattingContext(BuildServerAddress(config_), project_id, chat_id);
         if (!web_formatting_context.empty()) {
             if (!system_prompt.empty()) system_prompt += "\n\n";
             system_prompt += web_formatting_context;
@@ -1767,7 +2581,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
     MessageRecord user_msg;
     user_msg.role       = "user";
     user_msg.content    = BuildUserContentWithAttachments(
-                              project_id, chat_id, user_content, attachments);
+                              project_id, chat_id, username, user_content, attachments);
     user_msg.created_at = NowIso();
     messages.push_back(user_msg);
 
@@ -1785,7 +2599,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
     opts.messages      = messages;
 
     const auto exposed_tools = (mcp_manager_ && selected_model.supports_tools)
-        ? mcp_manager_->GetExposedToolsForProject(project_id)
+        ? mcp_manager_->GetExposedToolsForProject(project_id, runtime_variables)
         : std::vector<McpExposedTool>{};
     auto tool_definitions = BuildMcpToolDefinitions(exposed_tools);
     const auto rag_tool_set = (rag_service_ && selected_model.supports_tools)
@@ -1847,10 +2661,15 @@ std::string WebServer::StreamModel(const std::string& project_id,
                             project_id,
                             tool_call.name,
                             tool_call.arguments_json,
-                            &rag_tool_set.routes);
+                            &rag_tool_set.routes,
+                            nullptr,
+                            resolved_prompt_variables);
                     } else if (mcp_manager_) {
                         tool_result = mcp_manager_->CallExposedTool(
-                            project_id, tool_call.name, tool_call.arguments_json);
+                            project_id,
+                            tool_call.name,
+                            tool_call.arguments_json,
+                            runtime_variables);
                     } else {
                         tool_result = ToolUnavailableResult(tool_call);
                     }
@@ -1992,20 +2811,8 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
         }
     }
 
-    // Verify access
-    const auto accessible   = user_store_->GetProjectIdsForUser(session->user_id);
-    const auto all_projects = storage_->LoadProjects();
-    std::string project_id;
-    for (const auto& proj : all_projects) {
-        for (const auto& chat : proj.chats) {
-            if (chat.id == chat_id) { project_id = proj.info.id; break; }
-        }
-        if (!project_id.empty()) break;
-    }
-    if (project_id.empty()) { SendError(res_ptr, 404, "Chat not found"); return; }
-    if (std::find(accessible.begin(), accessible.end(), project_id) == accessible.end()) {
-        SendError(res_ptr, 403, "Access denied"); return;
-    }
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
 
     // ── Shared state between producer (model thread) and consumer (HTTP thread) ──
     struct StreamPipe {
@@ -2021,7 +2828,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
         return "data: " + json_str + "\n\n";
     };
 
-    const std::string proj_id  = project_id;
+    const std::string proj_id  = *project_id;
     const std::string sess_user = session->username;
 
     // ── Producer thread — runs the model, enqueues SSE events ─────────────────
@@ -2094,11 +2901,11 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
 // HandleUpload — POST /api/chats/:id/upload
 //
 // Accepts a multipart/form-data upload with a "file" field.
-// Saves the file to the project's output folder (or a temp folder) and returns
-// a JSON object with the saved filename and size.
+// Saves the file to the resolved project folder and returns a JSON object with
+// the saved filename, project-relative path, and download route.
 //
-// The uploaded content is currently stored as a blob in the chat's storage
-// folder so it can be referenced in future messages.
+// Binary/rich uploads keep the original and write extracted Markdown plus an
+// index entry under <project folder>/.agent/.
 // ──────────────────────────────────────────────────────────────────────────────
 void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
     auto session = RequireAuth(req_ptr, res_ptr);
@@ -2107,20 +2914,8 @@ void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
     const auto* req = static_cast<const httplib::Request*>(req_ptr);
     const std::string chat_id = req->path_params.at("id");
 
-    // Find owning project
-    const auto accessible   = user_store_->GetProjectIdsForUser(session->user_id);
-    const auto all_projects = storage_->LoadProjects();
-    std::string project_id;
-    for (const auto& proj : all_projects) {
-        for (const auto& chat : proj.chats) {
-            if (chat.id == chat_id) { project_id = proj.info.id; break; }
-        }
-        if (!project_id.empty()) break;
-    }
-    if (project_id.empty()) { SendError(res_ptr, 404, "Chat not found"); return; }
-    if (std::find(accessible.begin(), accessible.end(), project_id) == accessible.end()) {
-        SendError(res_ptr, 403, "Access denied"); return;
-    }
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
 
     // Find "file" field in multipart (httplib stores files in req->form.files)
     if (!req->form.has_file("file")) {
@@ -2147,21 +2942,27 @@ void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
         if (safe_name.empty()) safe_name = "upload";
     }
 
-    // Destination: <app_root>/uploads/<project_id>/<chat_id>/<safe_name>
-    const fs::path upload_dir = app_root_ / "uploads" / project_id / chat_id;
+    std::string folder_error;
+    const auto upload_folder = ResolveProjectUploadFolder(
+        mcp_manager_, storage_, user_store_, *project_id, chat_id,
+        session->username, &folder_error);
+    if (!upload_folder) {
+        SendError(res_ptr, 400, folder_error);
+        return;
+    }
+
+    // Destination: resolved project folder for this project/chat.
+    const fs::path upload_dir = upload_folder->root;
     std::error_code ec;
     fs::create_directories(upload_dir, ec);
-    if (ec) { SendError(res_ptr, 500, "Could not create upload directory"); return; }
+    if (ec) { SendError(res_ptr, 500, "Could not create project upload folder"); return; }
 
     // Avoid overwriting: if the file exists, append a counter
-    fs::path dest = upload_dir / safe_name;
-    if (fs::exists(dest)) {
-        const std::string stem = dest.stem().string();
-        const std::string ext  = dest.extension().string();
-        int counter = 1;
-        do {
-            dest = upload_dir / (stem + "_" + std::to_string(counter++) + ext);
-        } while (fs::exists(dest) && counter < 1000);
+    fs::path dest = MakeUniqueChildPath(upload_dir, safe_name);
+    dest = CanonicalOrAbsolute(dest);
+    if (!PathIsAtOrInside(dest, upload_dir)) {
+        SendError(res_ptr, 400, "Invalid upload filename");
+        return;
     }
 
     // Write file
@@ -2170,21 +2971,241 @@ void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
     ofs.write(file_info.content.data(), static_cast<std::streamsize>(file_info.content.size()));
     ofs.close();
 
+    const std::string original_filename = WideToUtf8(dest.filename().wstring());
+    const std::string original_relative = RelativePathUtf8(upload_dir, dest);
+    const std::string data_route =
+        "/data/" + *project_id + "/" + chat_id + "/" + UrlEncodePath(original_relative);
+    const std::string absolute_data_url = BuildServerAddress(config_) + data_route;
+
+    AgentUploadArtifact artifact;
+    const bool creates_agent_markdown = ShouldCreateAgentMarkdownForUpload(dest);
+    if (creates_agent_markdown) {
+        artifact = CreateAgentMarkdownArtifact(
+            rag_service_,
+            upload_dir,
+            dest,
+            original_filename,
+            *project_id,
+            chat_id,
+            session->username,
+            data_route);
+    }
+
     AppendAuditLog(GetRemoteAddr(req_ptr), "upload",
-                   session->username + " -> " + dest.filename().string());
+                   session->username + " -> " + original_filename);
 
     json resp = {
-        {"filename",   dest.filename().string()},
+        {"filename",   original_filename},
         {"size",       file_info.content.size()},
         {"chat_id",    chat_id},
-        {"project_id", project_id},
+        {"project_id", *project_id},
+        {"stored_path", WideToUtf8(dest.wstring())},
+        {"relative_path", original_relative},
+        {"download_url", data_route},
+        {"absolute_download_url", absolute_data_url},
+        {"project_folder", WideToUtf8(upload_dir.wstring())},
+        {"project_folder_variable", upload_folder->variable_name},
+        {"file_kind", creates_agent_markdown ? "processed" : "text"},
+        {"added_to_rag", false},
     };
+    if (artifact.created) {
+        resp["agent_markdown_path"] = WideToUtf8(artifact.markdown_path.wstring());
+        resp["agent_markdown_relative_path"] = artifact.markdown_relative_path;
+        resp["agent_index_path"] = WideToUtf8(artifact.index_path.wstring());
+        resp["extraction_success"] = artifact.extraction_success;
+        resp["extractor"] = artifact.extractor_id;
+        resp["extraction_error"] = artifact.error;
+    } else if (creates_agent_markdown) {
+        resp["extraction_success"] = false;
+        resp["extraction_error"] = artifact.error.empty()
+            ? "Processed upload did not create an .agent Markdown artifact."
+            : artifact.error;
+    }
     SendJson(res_ptr, 200, resp.dump());
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Route registration
 // ──────────────────────────────────────────────────────────────────────────────
+void WebServer::HandleProjectDataDownload(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string project_id = req->path_params.at("project_id");
+    const std::string chat_id = req->path_params.at("chat_id");
+    const std::string raw_file_path = req->path_params.at("file_path");
+
+    if (!ValidateProjectChatAccess(*session, project_id, chat_id, res_ptr)) {
+        return;
+    }
+
+    const auto requested_relative = SafeRelativeDownloadPath(raw_file_path);
+    if (!requested_relative) {
+        SendError(res_ptr, 400, "Invalid download path");
+        return;
+    }
+
+    const auto project_settings = storage_->LoadProjectSettings(project_id);
+    const auto runtime_variables = BuildWebRuntimeVariables(
+        storage_, user_store_, project_id, chat_id, session->username, project_settings);
+    const auto resolved_values = BuildResolvedProjectVariables(
+        mcp_manager_, storage_, project_id, runtime_variables);
+    const auto definitions = BuildProjectFolderVariableDefinitions(mcp_manager_, project_id);
+
+    std::vector<fs::path> roots;
+    for (const auto& definition : definitions) {
+        if (definition.kind != McpVariableKind::Folder) continue;
+        const auto value = variable_resolver::FindValue(resolved_values, definition.name);
+        if (!value || Trim(*value).empty()) continue;
+
+        fs::path root(Utf8ToWide(Trim(*value)));
+        if (root.empty() || !root.is_absolute()) continue;
+
+        std::error_code ec;
+        if (!fs::is_directory(root, ec) || ec) continue;
+
+        root = CanonicalOrAbsolute(root);
+        const auto duplicate = std::find_if(roots.begin(), roots.end(),
+            [&](const fs::path& existing) {
+                return existing.wstring() == root.wstring();
+            });
+        if (duplicate == roots.end()) {
+            roots.push_back(root);
+        }
+    }
+
+    if (roots.empty()) {
+        SendError(res_ptr, 404, "No downloadable project folders are configured for this chat");
+        return;
+    }
+
+    std::optional<fs::path> matched_file;
+    for (const auto& root : roots) {
+        const fs::path candidate = CanonicalOrAbsolute(root / *requested_relative);
+        if (!PathIsAtOrInside(candidate, root)) continue;
+        std::error_code ec;
+        if (fs::is_regular_file(candidate, ec) && !ec) {
+            matched_file = candidate;
+            break;
+        }
+    }
+
+    const std::string decoded_path = DecodeUrlPathComponent(raw_file_path);
+    if (!matched_file && !HasPathSeparator(decoded_path)) {
+        bool multiple = false;
+        for (const auto& root : roots) {
+            bool root_multiple = false;
+            const auto found = FirstUniqueFileNamed(root, *requested_relative, &root_multiple);
+            if (root_multiple || (found && matched_file)) {
+                multiple = true;
+                break;
+            }
+            if (found) matched_file = found;
+        }
+        if (multiple) {
+            SendError(res_ptr, 409,
+                      "Multiple accessible files have that name; include a subfolder path");
+            return;
+        }
+    }
+
+    if (!matched_file) {
+        SendError(res_ptr, 404, "File not found in the downloadable project folders");
+        return;
+    }
+
+    const std::string download_name = WideToUtf8(matched_file->filename().wstring());
+    if (!ServeDownloadFile(*matched_file, download_name, res_ptr)) {
+        SendError(res_ptr, 500, "Could not read file");
+        return;
+    }
+
+    AppendAuditLog(GetRemoteAddr(req_ptr), "download_project_file",
+                   "user=" + session->username + " project=" + project_id +
+                   " chat=" + chat_id + " file=" + download_name);
+}
+
+void WebServer::HandleRagDocumentDownload(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    if (!rag_service_) {
+        SendError(res_ptr, 404, "RAG service is not available");
+        return;
+    }
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string project_id = req->path_params.at("project_id");
+    const std::string rag_id = req->path_params.at("rag_id");
+    const std::string document_id = req->path_params.at("document_id");
+
+    if (!UserCanAccessProject(*session, project_id)) {
+        SendError(res_ptr, 403, "Access denied");
+        return;
+    }
+
+    const auto libraries = rag_tools::GetProjectRagToolLibraries(rag_service_, project_id);
+    const auto* library = rag_tools::FindRagToolLibrary(libraries, rag_id);
+    if (!library) {
+        SendError(res_ptr, 403,
+                  "The requested RAG library is not exposed as a readable tool for this project");
+        return;
+    }
+
+    const auto document = rag_service_->GetDocument(rag_id, document_id);
+    if (!document) {
+        SendError(res_ptr, 404, "Document not found");
+        return;
+    }
+
+    fs::path source_path;
+    if (!document->stored_relative_path.empty()) {
+        if (Trim(library->library.storage_path).empty()) {
+            SendError(res_ptr, 404, "The RAG library storage path is not configured");
+            return;
+        }
+        const fs::path library_root =
+            CanonicalOrAbsolute(fs::path(Utf8ToWide(library->library.storage_path)));
+        source_path = CanonicalOrAbsolute(
+            library_root / fs::path(Utf8ToWide(document->stored_relative_path)));
+        if (!PathIsAtOrInside(source_path, library_root)) {
+            SendError(res_ptr, 403, "RAG document path is outside the library storage folder");
+            return;
+        }
+    } else if (document->original_source_type == "file" &&
+               !Trim(document->original_source_uri).empty()) {
+        const auto original_path = PathFromFileUriOrPath(document->original_source_uri);
+        if (original_path) {
+            source_path = CanonicalOrAbsolute(*original_path);
+        }
+    }
+
+    std::error_code ec;
+    if (source_path.empty() || !fs::is_regular_file(source_path, ec) || ec) {
+        SendError(res_ptr, 404, "Original RAG document file is not available");
+        return;
+    }
+
+    std::string download_name = Trim(document->display_name);
+    if (download_name.empty()) {
+        download_name = WideToUtf8(source_path.filename().wstring());
+    }
+    if (fs::path(Utf8ToWide(download_name)).extension().empty() &&
+        !source_path.extension().empty()) {
+        download_name += WideToUtf8(source_path.extension().wstring());
+    }
+
+    if (!ServeDownloadFile(source_path, download_name, res_ptr)) {
+        SendError(res_ptr, 500, "Could not read RAG document file");
+        return;
+    }
+
+    AppendAuditLog(GetRemoteAddr(req_ptr), "download_rag_document",
+                   "user=" + session->username + " project=" + project_id +
+                   " rag=" + rag_id + " document=" + document_id);
+}
+
 void WebServer::RegisterRoutes() {
     auto& srv = impl_->srv();
 
@@ -2282,6 +3303,19 @@ void WebServer::RegisterRoutes() {
     srv.Post(R"(/api/chats/([^/]+)/upload)", [this](const httplib::Request& req, httplib::Response& res) {
         const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
         HandleUpload(&req, &res);
+    });
+
+    srv.Get(R"(/data/([^/]+)/([^/]+)/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["project_id"] = req.matches[1].str();
+        const_cast<httplib::Request&>(req).path_params["chat_id"] = req.matches[2].str();
+        const_cast<httplib::Request&>(req).path_params["file_path"] = req.matches[3].str();
+        HandleProjectDataDownload(&req, &res);
+    });
+    srv.Get(R"(/rag/([^/]+)/([^/]+)/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["project_id"] = req.matches[1].str();
+        const_cast<httplib::Request&>(req).path_params["rag_id"] = req.matches[2].str();
+        const_cast<httplib::Request&>(req).path_params["document_id"] = req.matches[3].str();
+        HandleRagDocumentDownload(&req, &res);
     });
 
     // ── Static files & HTML pages ─────────────────────────────────────────

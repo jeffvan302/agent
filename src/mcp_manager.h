@@ -74,7 +74,10 @@ public:
     void SetStateChangedCallback(StateChangedCallback callback);
 
     std::vector<McpServerSnapshot> GetServerSnapshots(const std::string& project_id) const;
-    bool ConnectServer(const std::string& server_id, const std::string& project_id, std::string* error);
+    bool ConnectServer(const std::string& server_id,
+                       const std::string& project_id,
+                       std::string* error,
+                       const std::vector<ProjectMcpVariableValue>& runtime_variables = {});
     bool RefreshServerTools(const std::string& server_id, const std::string& project_id, std::string* error);
     void DisconnectServer(const std::string& server_id, const std::string& project_id);
     void ConnectAutoServers(const std::string& project_id);
@@ -83,8 +86,14 @@ public:
     void SaveProjectBindings(const std::string& project_id, const std::vector<ProjectMcpServerBinding>& bindings);
     bool IsServerSelectedForProject(const std::string& project_id, const std::string& server_id) const;
 
-    std::vector<McpExposedTool> GetExposedToolsForProject(const std::string& project_id) const;
-    McpToolCallResult CallExposedTool(const std::string& project_id, const std::string& alias, const std::string& arguments_json) const;
+    std::vector<McpExposedTool> GetExposedToolsForProject(
+        const std::string& project_id,
+        const std::vector<ProjectMcpVariableValue>& runtime_variables = {}) const;
+    McpToolCallResult CallExposedTool(
+        const std::string& project_id,
+        const std::string& alias,
+        const std::string& arguments_json,
+        const std::vector<ProjectMcpVariableValue>& runtime_variables = {}) const;
     McpServerTestResult TestServerConfig(const McpServerConfig& config) const;
 
 private:
@@ -94,7 +103,11 @@ private:
     void NotifyStateChanged() const;
     std::vector<ProjectMcpServerBinding> LoadProjectBindings(const std::string& project_id) const;
     std::optional<ProjectMcpServerBinding> FindProjectBinding(const std::string& project_id, const std::string& server_id) const;
-    std::optional<McpServerConfig> ResolveConfigForProject(const McpServerConfig& config, const std::string& project_id, std::string* error) const;
+    std::optional<McpServerConfig> ResolveConfigForProject(
+        const McpServerConfig& config,
+        const std::string& project_id,
+        std::string* error,
+        const std::vector<ProjectMcpVariableValue>& runtime_variables = {}) const;
 
     AppStorage* storage_ = nullptr;
     mutable StateChangedCallback state_changed_callback_;

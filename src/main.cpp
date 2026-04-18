@@ -1,4 +1,4 @@
-#include <windows.h>
+﻿#include <windows.h>
 #include <commctrl.h>
 #include <richedit.h>
 
@@ -21,6 +21,7 @@
 #include "admin_config_dialog.h"
 #include "storage.h"
 #include "util.h"
+#include "variable_resolver.h"
 
 #include <nlohmann/json.hpp>
 
@@ -640,32 +641,12 @@ std::optional<std::string> ExpandProjectVariableTemplate(
     std::string text,
     const std::unordered_map<std::string, std::string>& values,
     std::string* error) {
-    std::vector<std::string> missing;
-    for (const auto& name : FindVariablePlaceholders(text)) {
-        const auto value_it = values.find(name);
-        if (value_it == values.end() || Trim(value_it->second).empty()) {
-            missing.push_back("$<" + name + ">$");
-            continue;
-        }
-        ReplaceAll(text, "$" + name + "$", value_it->second);
-        ReplaceAll(text, "$<" + name + ">$", value_it->second);
+    std::vector<ProjectMcpVariableValue> variable_values;
+    for (const auto& item : values) {
+        variable_resolver::UpsertValue(variable_values, item.first, item.second);
     }
-
-    if (!missing.empty()) {
-        std::ostringstream stream;
-        stream << "Missing project variable values for export path: ";
-        for (size_t i = 0; i < missing.size(); ++i) {
-            if (i > 0) {
-                stream << ", ";
-            }
-            stream << missing[i];
-        }
-        if (error) {
-            *error = stream.str();
-        }
-        return std::nullopt;
-    }
-    return text;
+    if (error) error->clear();
+    return variable_resolver::ExpandTemplate(text, variable_values);
 }
 
 std::wstring LowercasePathString(std::filesystem::path path) {
@@ -1528,7 +1509,8 @@ McpToolCallResult CallModelToolAgent(
     RagService* rag_service,
     const std::vector<ProviderConfig>& providers,
     const std::vector<ModelToolConfig>& model_tools,
-    const std::vector<ProjectMcpVariableValue>& project_variables = {})
+    const std::vector<ProjectMcpVariableValue>& project_variables = {},
+    const std::vector<ProjectMcpVariableValue>& runtime_variables = {})
 {
     // Find the tool config matching this alias
     const ModelToolConfig* tool_config = nullptr;
@@ -1546,7 +1528,7 @@ McpToolCallResult CallModelToolAgent(
         return err;
     }
 
-    // Parse arguments – expect { "instructions": "..." }
+    // Parse arguments â€“ expect { "instructions": "..." }
     std::string task_instructions;
     try {
         if (!Trim(arguments_json).empty()) {
@@ -1609,7 +1591,15 @@ McpToolCallResult CallModelToolAgent(
         allowed_server_ids.push_back(b.server_id);
     }
 
-    const auto all_exposed = mcp_manager->GetExposedToolsForProject(project_id);
+    for (const auto& config : mcp_manager->configs()) {
+        if (config.enabled && config.auto_connect &&
+            mcp_manager->IsServerSelectedForProject(project_id, config.id)) {
+            std::string ignored;
+            mcp_manager->ConnectServer(config.id, project_id, &ignored, runtime_variables);
+        }
+    }
+
+    const auto all_exposed = mcp_manager->GetExposedToolsForProject(project_id, runtime_variables);
     std::vector<McpExposedTool> sub_exposed;
     for (const auto& t : all_exposed) {
         if (std::find(allowed_server_ids.begin(), allowed_server_ids.end(), t.server_id) != allowed_server_ids.end()) {
@@ -1641,19 +1631,10 @@ McpToolCallResult CallModelToolAgent(
     ChatRequestOptions sub_request;
     sub_request.provider      = use_provider;
     sub_request.model         = use_model;
-    // Apply project variable substitution to the instructions: $<VarName> → value
+    // Apply project variable substitution to the instructions: $<VarName> â†’ value
     {
-        std::string instructions = tool_config->instructions;
-        for (const auto& pv : project_variables) {
-            if (pv.name.empty()) continue;
-            const std::string placeholder = "$<" + pv.name + ">";
-            std::string::size_type pos = 0;
-            while ((pos = instructions.find(placeholder, pos)) != std::string::npos) {
-                instructions.replace(pos, placeholder.size(), pv.value);
-                pos += pv.value.size();
-            }
-        }
-        sub_request.system_prompt = std::move(instructions);
+        sub_request.system_prompt =
+            variable_resolver::ExpandTemplate(tool_config->instructions, project_variables);
     }
     sub_request.temperature   = 0.2;
     sub_request.max_tokens    = 4096;
@@ -1669,7 +1650,7 @@ McpToolCallResult CallModelToolAgent(
         "{\n"
         "  \"status\": \"success\" | \"partial\" | \"error\",\n"
         "  \"summary\": \"<one-sentence description of what was accomplished>\",\n"
-        "  \"result\": <primary output — string, object, or array>,\n"
+        "  \"result\": <primary output â€” string, object, or array>,\n"
         "  \"actions\": [\"<action 1>\", \"<action 2>\", ...]\n"
         "}\n"
         "```\n"
@@ -1743,9 +1724,12 @@ McpToolCallResult CallModelToolAgent(
                         project_id,
                         tc.name,
                         tc.arguments_json,
-                        &sub_rag_tools.routes);
+                        &sub_rag_tools.routes,
+                        nullptr,
+                        project_variables);
                 } else {
-                    result = mcp_manager->CallExposedTool(project_id, tc.name, tc.arguments_json);
+                    result = mcp_manager->CallExposedTool(
+                        project_id, tc.name, tc.arguments_json, runtime_variables);
                 }
                 MessageRecord tool_msg;
                 tool_msg.role        = "tool";
@@ -1758,7 +1742,7 @@ McpToolCallResult CallModelToolAgent(
             continue;
         }
 
-        // No tool calls → final answer
+        // No tool calls â†’ final answer
         last_reply = completion.assistant_text;
         break;
     }
@@ -2225,6 +2209,9 @@ private:
     bool IsChatInFlight(const std::string& chat_id) const;
     int CountChatsInFlight() const;
     void UpdateChatTreeLabel(const std::string& chat_id);
+    std::vector<ProjectMcpVariableValue> BuildRuntimeVariablesForChat(
+        const std::string& project_id,
+        const std::string& chat_id) const;
     ProjectRecord* FindProject(const std::string& project_id);
     ChatInfo* FindChat(const std::string& project_id, const std::string& chat_id);
 
@@ -2929,9 +2916,9 @@ static bool DetectDedicatedGpu() {
     return false;
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// EnsureWebServer — create the WebServer instance if not yet created.
-// ──────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// EnsureWebServer â€” create the WebServer instance if not yet created.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 void MainWindow::EnsureWebServer() {
     if (web_server_) return;
     const auto app_root = storage_.root_path();
@@ -2949,9 +2936,9 @@ void MainWindow::EnsureWebServer() {
     });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Web Config — full settings dialog + Start/Stop
-// ──────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Web Config â€” full settings dialog + Start/Stop
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 void MainWindow::OpenWebConfig() {
     Logger::Info("WebConfig", "OpenWebConfig: starting");
     const auto app_root = storage_.root_path();
@@ -2965,7 +2952,7 @@ void MainWindow::OpenWebConfig() {
     // Load current config from file (dialog will read it live too)
     auto cfg = WebServerConfig::LoadFromFile(settings_path);
 
-    // Show the dialog — it modifies cfg in place and handles Start/Stop
+    // Show the dialog â€” it modifies cfg in place and handles Start/Stop
     Logger::Info("WebConfig", "OpenWebConfig: calling ShowWebConfigDialog");
     const bool accepted = ShowWebConfigDialog(hwnd_, web_server_.get(), &cfg, app_root);
     Logger::Info("WebConfig", "OpenWebConfig: ShowWebConfigDialog returned");
@@ -2987,9 +2974,9 @@ void MainWindow::OpenWebConfig() {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Admin Config — tabbed Users / Groups / Bindings dialog
-// ──────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Admin Config â€” tabbed Users / Groups / Bindings dialog
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 void MainWindow::OpenAdminConfig() {
     // Ensure the WebServer is created so ForceLogout works
     EnsureWebServer();
@@ -3258,7 +3245,7 @@ void MainWindow::RefreshTree() {
             // Append a streaming indicator if this chat is currently in flight.
             std::wstring chat_name = Utf8ToWide(chat.name);
             if (IsChatInFlight(chat.id)) {
-                chat_name += L" \u25cf";  // ● U+25CF BLACK CIRCLE
+                chat_name += L" \u25cf";  // â— U+25CF BLACK CIRCLE
             }
             child.item.pszText = chat_name.data();
             child.item.lParam = reinterpret_cast<LPARAM>(chat_data.get());
@@ -3294,28 +3281,26 @@ std::string MainWindow::BuildMcpProjectContext() const {
     }
 
     const auto bindings = mcp_manager_.GetProjectBindings(active_project_id_);
-    if (bindings.empty()) {
-        return {};
-    }
-
-    std::unordered_map<std::string, std::string> values;
+    std::vector<ProjectMcpVariableValue> values;
     const auto project_settings = storage_.LoadProjectSettings(active_project_id_);
     for (const auto& binding : bindings) {
         for (const auto& variable : binding.variables) {
             const std::string name = Trim(variable.name);
-            const std::string value = Trim(variable.value);
-            if (!name.empty() && !value.empty()) {
-                values[name] = value;
+            if (!name.empty()) {
+                variable_resolver::UpsertValue(values, name, variable.value);
             }
         }
     }
     for (const auto& variable : project_settings.project_variables) {
         const std::string name = Trim(variable.name);
-        const std::string value = Trim(variable.value);
-        if (!name.empty() && !value.empty()) {
-            values[name] = value;
+        if (!name.empty()) {
+            variable_resolver::UpsertValue(values, variable);
         }
     }
+    for (const auto& variable : BuildRuntimeVariablesForChat(active_project_id_, active_chat_id_)) {
+        variable_resolver::UpsertValue(values, variable.name, variable.value);
+    }
+    values = variable_resolver::ResolveValues(values);
 
     if (values.empty()) {
         return {};
@@ -3333,25 +3318,48 @@ std::string MainWindow::BuildMcpProjectContext() const {
         if (!variable.inject_into_context || variable.name.empty()) {
             return;
         }
-        if (std::find(emitted_names.begin(), emitted_names.end(), variable.name) != emitted_names.end()) {
+        const std::string emitted_key = variable_resolver::ToLookupKey(variable.name);
+        if (std::find(emitted_names.begin(), emitted_names.end(), emitted_key) != emitted_names.end()) {
             return;
         }
 
-        const auto value_it = values.find(variable.name);
-        if (value_it == values.end() || Trim(value_it->second).empty()) {
+        const auto value_it = variable_resolver::FindValue(values, variable.name);
+
+        ContextVariable context_variable;
+        context_variable.name = variable.name;
+        context_variable.value = value_it.value_or("");
+        context_variable.description = Trim(variable.description);
+        context_values.push_back(std::move(context_variable));
+        emitted_names.push_back(emitted_key);
+    };
+    const auto add_project_variable = [&](const ProjectMcpVariableValue& variable) {
+        if (!variable.inject_into_context || variable.name.empty()) {
+            return;
+        }
+        const std::string emitted_key = variable_resolver::ToLookupKey(variable.name);
+        if (std::find(emitted_names.begin(), emitted_names.end(), emitted_key) != emitted_names.end()) {
+            return;
+        }
+
+        const auto value_it = variable_resolver::FindValue(values, variable.name);
+        if (!value_it || Trim(*value_it).empty()) {
             return;
         }
 
         ContextVariable context_variable;
         context_variable.name = variable.name;
-        context_variable.value = value_it->second;
+        context_variable.value = *value_it;
         context_variable.description = Trim(variable.description);
         context_values.push_back(std::move(context_variable));
-        emitted_names.push_back(variable.name);
+        emitted_names.push_back(emitted_key);
     };
 
     for (const auto& variable : mcp_manager_.global_variables()) {
         add_variable(variable);
+    }
+
+    for (const auto& variable : project_settings.project_variables) {
+        add_project_variable(variable);
     }
 
     const auto& configs = mcp_manager_.configs();
@@ -3454,6 +3462,23 @@ void MainWindow::SendCurrentMessage() {
     std::vector<MessageRecord> request_history = active_messages_;
     std::string compressed_context;
     auto proj_settings = storage_.LoadProjectSettings(active_project_id_);
+    const auto runtime_variables = BuildRuntimeVariablesForChat(active_project_id_, active_chat_id_);
+    std::vector<ProjectMcpVariableValue> resolved_prompt_variables;
+    for (const auto& binding : mcp_manager_.GetProjectBindings(active_project_id_)) {
+        for (const auto& variable : binding.variables) {
+            variable_resolver::UpsertValue(resolved_prompt_variables, variable.name, variable.value);
+        }
+    }
+    for (const auto& variable : proj_settings.project_variables) {
+        variable_resolver::UpsertValue(resolved_prompt_variables, variable);
+    }
+    for (const auto& variable : runtime_variables) {
+        variable_resolver::UpsertValue(resolved_prompt_variables, variable.name, variable.value);
+    }
+    resolved_prompt_variables = variable_resolver::ResolveValues(resolved_prompt_variables);
+    variable_resolver::EnsureFolderVariables(
+        resolved_prompt_variables,
+        mcp_manager_.global_variables());
     std::optional<ContextCompressionConfig> selected_compression_config;
     if (!proj_settings.selected_compression_config_id.empty()) {
         selected_compression_config = compression_service_.GetGlobalConfig(proj_settings.selected_compression_config_id);
@@ -3491,23 +3516,8 @@ void MainWindow::SendCurrentMessage() {
     {
         std::string project_instructions = Trim(proj_settings.project_instructions);
         if (!project_instructions.empty()) {
-            // Substitute $<VarName> tokens using project-level variables.
-            // Skip any token immediately followed by '$' — those are MCP binding
-            // variable placeholders ($<Name>$) and are handled by McpManager.
-            for (const auto& pv : proj_settings.project_variables) {
-                if (pv.name.empty()) continue;
-                const std::string ph = "$<" + pv.name + ">";
-                std::string::size_type pos = 0;
-                while ((pos = project_instructions.find(ph, pos)) != std::string::npos) {
-                    const size_t after = pos + ph.size();
-                    if (after < project_instructions.size() && project_instructions[after] == '$') {
-                        ++pos;
-                        continue;
-                    }
-                    project_instructions.replace(pos, ph.size(), pv.value);
-                    pos += pv.value.size();
-                }
-            }
+            project_instructions =
+                variable_resolver::ExpandTemplate(project_instructions, resolved_prompt_variables);
             if (!request.system_prompt.empty()) {
                 request.system_prompt += "\n\n";
             }
@@ -3568,7 +3578,15 @@ void MainWindow::SendCurrentMessage() {
 
     const std::string project_id = active_project_id_;
     const std::string chat_id = active_chat_id_;
-    const auto exposed_tools = mcp_manager_.GetExposedToolsForProject(project_id);
+    for (const auto& config : mcp_manager_.configs()) {
+        if (config.enabled && config.auto_connect &&
+            mcp_manager_.IsServerSelectedForProject(project_id, config.id)) {
+            std::string ignored;
+            mcp_manager_.ConnectServer(config.id, project_id, &ignored, runtime_variables);
+        }
+    }
+    const auto exposed_tools =
+        mcp_manager_.GetExposedToolsForProject(project_id, runtime_variables);
     const auto rag_tool_set = rag_tools::BuildRagToolSet(&rag_service_, project_id);
     const auto rag_tool_definitions = rag_tool_set.definitions;
     const auto rag_tool_routes = rag_tool_set.routes;
@@ -3577,11 +3595,11 @@ void MainWindow::SendCurrentMessage() {
     // Filter model tools to only those enabled for this project.
     const auto project_settings_for_tools = storage_.LoadProjectSettings(project_id);
     const auto& enabled_tool_ids = project_settings_for_tools.model_tool_ids;
-    const auto project_variables = project_settings_for_tools.project_variables;
+    const auto project_variables = resolved_prompt_variables;
     std::vector<ModelToolConfig> model_tools;
     for (const auto& mt : all_model_tools) {
         // If the project has an explicit enabled list, only include listed tools.
-        // An empty list means "legacy project" — include all tools until the user
+        // An empty list means "legacy project" â€” include all tools until the user
         // explicitly saves Project Settings with the new checklist.
         if (!enabled_tool_ids.empty() &&
             std::find(enabled_tool_ids.begin(), enabled_tool_ids.end(), mt.id) == enabled_tool_ids.end()) {
@@ -3748,7 +3766,7 @@ void MainWindow::SendCurrentMessage() {
         return;
     }
 
-    std::thread([hwnd = hwnd_, request, project_id, chat_id, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, model_tool_definitions, model_tools, project_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
+    std::thread([hwnd = hwnd_, request, project_id, chat_id, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, model_tool_definitions, model_tools, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
         constexpr int kMaxToolRounds = 8;
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
@@ -3864,7 +3882,7 @@ void MainWindow::SendCurrentMessage() {
                     std::vector<std::thread> sub_threads(model_tool_indices.size());
                     for (size_t ti = 0; ti < model_tool_indices.size(); ++ti) {
                         const size_t pi = model_tool_indices[ti];
-                        sub_threads[ti] = std::thread([&pending, pi, &project_id, mcp_manager, rag_service, &providers, &model_tools, &project_variables]() {
+                        sub_threads[ti] = std::thread([&pending, pi, &project_id, mcp_manager, rag_service, &providers, &model_tools, &project_variables, &runtime_variables]() {
                             pending[pi].result = CallModelToolAgent(
                                 pending[pi].tool_call.name,
                                 pending[pi].tool_call.arguments_json,
@@ -3873,7 +3891,8 @@ void MainWindow::SendCurrentMessage() {
                                 rag_service,
                                 providers,
                                 model_tools,
-                                project_variables);
+                                project_variables,
+                                runtime_variables);
                         });
                     }
                     // While model tools run, execute regular (non-model-tool) calls serially
@@ -3888,9 +3907,14 @@ void MainWindow::SendCurrentMessage() {
                                 pending[pi].tool_call.name,
                                 pending[pi].tool_call.arguments_json,
                                 &rag_tool_routes,
-                                working_set_additions.get());
+                                working_set_additions.get(),
+                                project_variables);
                         } else {
-                            pending[pi].result = mcp_manager->CallExposedTool(project_id, pending[pi].tool_call.name, pending[pi].tool_call.arguments_json);
+                            pending[pi].result = mcp_manager->CallExposedTool(
+                                project_id,
+                                pending[pi].tool_call.name,
+                                pending[pi].tool_call.arguments_json,
+                                runtime_variables);
                         }
                     }
                     // Join all model-tool threads before continuing
@@ -3898,7 +3922,7 @@ void MainWindow::SendCurrentMessage() {
                         if (t.joinable()) t.join();
                     }
                 } else {
-                    // No model tools — run all calls serially
+                    // No model tools â€” run all calls serially
                     for (auto& p : pending) {
                         if (!p.tool_call.arguments_valid) continue;
                         if (rag_tools::IsRagToolName(p.tool_call.name, &rag_tool_routes)) {
@@ -3909,9 +3933,14 @@ void MainWindow::SendCurrentMessage() {
                                 p.tool_call.name,
                                 p.tool_call.arguments_json,
                                 &rag_tool_routes,
-                                working_set_additions.get());
+                                working_set_additions.get(),
+                                project_variables);
                         } else {
-                            p.result = mcp_manager->CallExposedTool(project_id, p.tool_call.name, p.tool_call.arguments_json);
+                            p.result = mcp_manager->CallExposedTool(
+                                project_id,
+                                p.tool_call.name,
+                                p.tool_call.arguments_json,
+                                runtime_variables);
                         }
                     }
                 }
@@ -4177,7 +4206,7 @@ void MainWindow::OnChatFinished(ChatFinishedPayload* payload) {
     }
 
     if (payload->chat_id == active_chat_id_) {
-        // The visible chat finished — update transcript and show status.
+        // The visible chat finished â€” update transcript and show status.
         RenderTranscript();
         RenderToolTrace();
         if (payload->success) {
@@ -4187,7 +4216,7 @@ void MainWindow::OnChatFinished(ChatFinishedPayload* payload) {
             MessageBoxW(hwnd_, Utf8ToWide(payload->error).c_str(), L"Request Failed", MB_OK | MB_ICONERROR);
         }
     } else {
-        // A background chat finished — tree label was already cleared by SetChatBusy.
+        // A background chat finished â€” tree label was already cleared by SetChatBusy.
         // Update status bar only if nothing else is running for the active chat.
         if (!IsChatInFlight(active_chat_id_)) {
             if (!payload->success) {
@@ -4221,6 +4250,36 @@ void MainWindow::OnMcpStateChanged() {
 
 void MainWindow::OnWebContentChanged() {
     ReloadProjects(active_project_id_, active_chat_id_);
+}
+
+std::vector<ProjectMcpVariableValue> MainWindow::BuildRuntimeVariablesForChat(
+    const std::string& project_id,
+    const std::string& chat_id) const {
+    std::string project_name;
+    std::string chat_name;
+
+    for (const auto& project : projects_) {
+        if (project.info.id != project_id) continue;
+        project_name = project.info.name;
+        for (const auto& chat : project.chats) {
+            if (chat.id == chat_id) {
+                chat_name = chat.name;
+                break;
+            }
+        }
+        break;
+    }
+
+    std::vector<ProjectMcpVariableValue> values;
+    variable_resolver::UpsertValue(values, "PROJECTNAME", project_name);
+    variable_resolver::UpsertValue(values, "CHATNAME", chat_name);
+    variable_resolver::UpsertValue(values, "CHATFULLNAME", chat_name);
+    variable_resolver::UpsertValue(values, "CHATID", chat_id);
+    variable_resolver::UpsertValue(values, "USERNAME", "");
+    variable_resolver::UpsertValue(values, "USER", "");
+    variable_resolver::UpsertValue(values, "USEREMAIL", "");
+    variable_resolver::UpsertValue(values, "UserName", "");
+    return values;
 }
 
 void MainWindow::RenderTranscript() {
@@ -4408,7 +4467,7 @@ void MainWindow::SetChatBusy(const std::string& chat_id, bool busy) {
         RefreshInputState();
     }
 
-    // Update the tree label to add or remove the streaming indicator (●).
+    // Update the tree label to add or remove the streaming indicator (â—).
     UpdateChatTreeLabel(chat_id);
 }
 
@@ -4437,7 +4496,7 @@ void MainWindow::UpdateChatTreeLabel(const std::string& chat_id) {
 
     std::wstring label = Utf8ToWide(chat_info->name);
     if (IsChatInFlight(chat_id)) {
-        label += L" \u25cf";  // ● U+25CF BLACK CIRCLE
+        label += L" \u25cf";  // â— U+25CF BLACK CIRCLE
     }
 
     TVITEMW item{};

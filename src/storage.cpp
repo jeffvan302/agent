@@ -126,6 +126,8 @@ json ProjectMcpVariableValueToJson(const ProjectMcpVariableValue& variable) {
     return json{
         {"name", variable.name},
         {"value", variable.value},
+        {"description", variable.description},
+        {"inject_into_context", variable.inject_into_context},
     };
 }
 
@@ -133,6 +135,8 @@ ProjectMcpVariableValue ProjectMcpVariableValueFromJson(const json& item) {
     ProjectMcpVariableValue variable;
     variable.name = item.value("name", "");
     variable.value = item.value("value", "");
+    variable.description = item.value("description", "");
+    variable.inject_into_context = item.value("inject_into_context", false);
     return variable;
 }
 
@@ -1151,7 +1155,7 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
 
     json pv_arr = json::array();
     for (const auto& pv : settings.project_variables) {
-        pv_arr.push_back({{"name", pv.name}, {"value", pv.value}});
+        pv_arr.push_back(ProjectMcpVariableValueToJson(pv));
     }
     j["project_variables"] = pv_arr;
 
@@ -1198,6 +1202,8 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
                 ProjectMcpVariableValue pv;
                 pv.name  = item.value("name",  "");
                 pv.value = item.value("value", "");
+                pv.description = item.value("description", "");
+                pv.inject_into_context = item.value("inject_into_context", false);
                 if (!pv.name.empty()) settings.project_variables.push_back(std::move(pv));
             }
         }
