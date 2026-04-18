@@ -37,3 +37,18 @@
 2026-04-18T03:14:28Z [127.0.0.1] download_rag_document user=admin project=project_1775880780377_10 rag=rag_1776409676886_9 document=doc_1776409703238_10
 2026-04-18T03:18:05Z [127.0.0.1] download_project_file user=admin project=project_1775880780377_10 chat=chat_1776482024634_8 file=right_of_way_decision_flowchart.html
 2026-04-18T03:53:50Z [127.0.0.1] login_success user=admin
+2026-04-18T04:15:58Z [127.0.0.1] login_success user=admin
+2026-04-18T04:16:33Z [127.0.0.1] upload admin -> 20260414_123920.jpg
+2026-04-18T04:20:23Z [127.0.0.1] upload admin -> 20260414_123920.jpg
+2026-04-18T04:29:21Z [127.0.0.1] login_success user=admin
+2026-04-18T04:29:46Z [127.0.0.1] chat_created user=admin project=project_1775880780377_10 chat=chat_1776486586235_8
+2026-04-18T04:33:09Z [127.0.0.1] upload admin -> 20260414_123920.jpg
+2026-04-18T04:37:26Z [127.0.0.1] login_success user=admin
+2026-04-18T04:40:53Z [127.0.0.1] upload admin -> 20260414_123920.jpg
+2026-04-18T04:44:30Z [127.0.0.1] upload admin -> _IMG9985.JPG
+2026-04-18T04:44:57Z [127.0.0.1] chat_deleted user=admin chat=chat_1776486586235_8
+2026-04-18T04:45:05Z [127.0.0.1] chat_created user=admin project=project_1775880780377_10 chat=chat_1776487505859_14
+2026-04-18T04:48:29Z [127.0.0.1] upload admin -> _IMG9985.JPG
+2026-04-18T05:02:12Z [127.0.0.1] login_success user=admin
+2026-04-18T05:03:21Z [127.0.0.1] upload admin -> _IMG3766.JPG
+2026-04-18T05:10:40Z [127.0.0.1] upload admin -> QuietStrength.jpg

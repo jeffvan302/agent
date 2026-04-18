@@ -443,6 +443,7 @@ async function selectChat(projectId, chatId, chatName) {
   messageInput.disabled = false;
   sendBtn.disabled      = false;
   newChatBtn.disabled   = false;
+  if (attachBtn) attachBtn.disabled = false;
   await loadMessages(projectId, chatId);
 }
 
@@ -563,15 +564,22 @@ function renderAttachList() {
   for (let i = 0; i < state.pendingFiles.length; i++) {
     const f = state.pendingFiles[i];
     const chip = document.createElement('span');
-    chip.className = 'attach-chip';
-    chip.textContent = f.name;
-    const rm = document.createElement('button');
-    rm.textContent = '✕';
-    rm.addEventListener('click', () => {
-      state.pendingFiles.splice(i, 1);
-      renderAttachList();
-    });
-    chip.appendChild(rm);
+    let icon = '';
+    if (f.status === 'ingesting') icon = '⟳';
+    else if (f.status === 'done') icon = '✓';
+    else if (f.status === 'error') icon = '✗';
+    else if (f.status === 'pending') icon = '○';
+    chip.className = 'attach-chip attach-chip-' + (f.status || 'pending');
+    chip.textContent = (icon ? icon + ' ' : '') + f.name;
+    if (f.status === 'pending') {
+      const rm = document.createElement('button');
+      rm.textContent = '✕';
+      rm.addEventListener('click', () => {
+        state.pendingFiles.splice(i, 1);
+        renderAttachList();
+      });
+      chip.appendChild(rm);
+    }
     attachList.appendChild(chip);
   }
   if (attachList.parentElement)
@@ -581,6 +589,8 @@ function renderAttachList() {
 async function uploadPendingFiles(chatId) {
   const uploaded = [];
   for (const f of state.pendingFiles) {
+    f.status = 'ingesting';
+    renderAttachList();
     const fd = new FormData();
     fd.append('file', f);
     const resp = await fetch(`/api/chats/${chatId}/upload`, {
@@ -589,13 +599,18 @@ async function uploadPendingFiles(chatId) {
       body: fd,
     });
     if (!resp.ok) {
+      f.status = 'error';
+      renderAttachList();
       let errMsg = 'Upload failed';
       try { errMsg = (await resp.json()).error || errMsg; } catch (_) {}
       throw new Error(`${f.name}: ${errMsg}`);
     }
     const data = await resp.json();
+    f.status = 'done';
+    renderAttachList();
     uploaded.push(data.filename);
   }
+  await new Promise(r => setTimeout(r, 800));
   state.pendingFiles = [];
   renderAttachList();
   return uploaded;

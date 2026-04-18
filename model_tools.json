@@ -1,0 +1,38 @@
+{
+  "tools": [
+    {
+      "description": "This is the primary web search tool.  Any request passed to this model will be used to search the web.",
+      "id": "mt_1776068304465_8",
+      "instructions": "You are a glorified web search engine.  Any prompt you received should directly be used to search the web.  The results should be directly provided in json format back to the user.",
+      "mcp_bindings": [
+        {
+          "server_id": "mcp_server_1775829469413_4",
+          "variables": []
+        }
+      ],
+      "name": "Cruncher",
+      "preferred_model_id": "codex-MiniMax-M2.7",
+      "preferred_provider_id": "provider_1775726633372_1",
+      "rag_bindings": [
+        {
+          "can_delete": false,
+          "can_export": true,
+          "can_read": true,
+          "can_write": false,
+          "default_ingest_target": false,
+          "default_max_confidence": 1.0,
+          "default_min_confidence": 0.0,
+          "enabled": true,
+          "export_path_template": "",
+          "expose_as_tool": true,
+          "inject_on_start": true,
+          "max_chunks": 8,
+          "rag_id": "rag_1776053664702_9",
+          "retrieval_mode": "both",
+          "retrieval_priority": 10
+        }
+      ],
+      "selected_compression_config_id": "cc_f98er24s"
+    }
+  ]
+}

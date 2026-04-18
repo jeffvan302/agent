@@ -1,0 +1,100 @@
+{
+  "servers": [
+    {
+      "arguments": [
+        "duckduckgo-mcp-server"
+      ],
+      "auto_connect": true,
+      "command": "uvx",
+      "enabled": true,
+      "env_entries": [],
+      "id": "mcp_server_1775828640792_3",
+      "name": "duckduckgo",
+      "scope": "shared",
+      "variables": [],
+      "working_directory": ""
+    },
+    {
+      "arguments": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "$ProjectFolder$"
+      ],
+      "auto_connect": true,
+      "command": "npx",
+      "enabled": true,
+      "env_entries": [],
+      "id": "mcp_server_1775829469413_4",
+      "name": "file-system",
+      "scope": "per_project",
+      "variables": [],
+      "working_directory": "$ProjectFolder$"
+    },
+    {
+      "arguments": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "auto_connect": true,
+      "command": "npx",
+      "enabled": true,
+      "env_entries": [],
+      "id": "mcp_server_1775841788611_5",
+      "name": "sequential-thinking",
+      "scope": "per_project",
+      "variables": [],
+      "working_directory": ""
+    },
+    {
+      "arguments": [
+        "mcp-server-time"
+      ],
+      "auto_connect": true,
+      "command": "uvx",
+      "enabled": true,
+      "env_entries": [],
+      "id": "mcp_server_1775857258512_5",
+      "name": "server-time",
+      "scope": "shared",
+      "variables": [],
+      "working_directory": ""
+    },
+    {
+      "arguments": [
+        "mcp-server-git"
+      ],
+      "auto_connect": true,
+      "command": "uvx",
+      "enabled": true,
+      "env_entries": [],
+      "id": "mcp_server_1775857473938_6",
+      "name": "server-git",
+      "scope": "per_project",
+      "variables": [],
+      "working_directory": ""
+    },
+    {
+      "arguments": [
+        "-y",
+        "@wonderwhy-er/desktop-commander@latest"
+      ],
+      "auto_connect": true,
+      "command": "npx",
+      "enabled": true,
+      "env_entries": [],
+      "id": "mcp_server_1775879351362_7",
+      "name": "desktop_command_mcp",
+      "scope": "per_project",
+      "variables": [],
+      "working_directory": "$ProjectFolder$"
+    }
+  ],
+  "variables": [
+    {
+      "description": "Project Folder where the project files are located.",
+      "inject_into_context": true,
+      "kind": "folder",
+      "name": "ProjectFolder"
+    }
+  ]
+}

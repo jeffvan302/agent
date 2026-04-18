@@ -131,6 +131,7 @@ enum ImageIngestSettingsControlId : int {
     kImageInstallOllama = 6325,
     kImagePullVisionModel = 6326,
     kImageDiagnosticsLog = 6327,
+    kImageVisionModelHelp = 6328,
     kImageSaveButton = IDOK,
     kImageCancelButton = IDCANCEL,
 };
@@ -1322,7 +1323,7 @@ void RagImageIngestSettingsDialog::OnCreate() {
     vision_provider_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionProviderCombo), nullptr, nullptr);
     vision_base_url_label_ = CreateWindowExW(0, L"STATIC", L"Vision base URL", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionBaseUrlLabel), nullptr, nullptr);
     vision_base_url_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionBaseUrlEdit), nullptr, nullptr);
-    vision_model_label_ = CreateWindowExW(0, L"STATIC", L"Vision model", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionModelLabel), nullptr, nullptr);
+    vision_model_label_ = CreateWindowExW(0, L"BUTTON", L"Vision model", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionModelLabel), nullptr, nullptr);
     vision_model_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionModelEdit), nullptr, nullptr);
     vision_prompt_label_ = CreateWindowExW(0, L"STATIC", L"Vision description prompt", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionPromptLabel), nullptr, nullptr);
     vision_prompt_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionPromptEdit), nullptr, nullptr);
@@ -1439,6 +1440,9 @@ void RagImageIngestSettingsDialog::OnCommand(int control_id) {
         break;
     case kImagePullVisionModel:
         PullVisionModel();
+        break;
+    case kImageVisionModelLabel:
+        ShellExecuteW(nullptr, L"open", L"https://ollama.com/search?q=vision", nullptr, nullptr, SW_SHOWNORMAL);
         break;
     case kImageSaveButton:
         ValidateAndSave();

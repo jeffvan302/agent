@@ -4,3 +4,18 @@
 [2026-04-13T02:01:51Z] Launching visible image ingest installer command: winget install --id tesseract-ocr.tesseract -e --accept-package-agreements --accept-source-agreements
 [2026-04-13T02:02:08Z] Saved image ingest settings. Mode: tesseract_cpu.
 [2026-04-13T02:02:21Z] Saved image ingest settings. Mode: tesseract_cpu.
+[2026-04-18T04:18:14Z] Saved image ingest settings. Mode: vision_language_gpu.
+[2026-04-18T04:18:18Z] Launching visible Ollama vision model pull command: ollama pull qwen2.5vl:7b
+[2026-04-18T04:18:27Z] Saved image ingest settings. Mode: vision_language_gpu.
+[2026-04-18T04:21:27Z] Launching visible image ingest installer command: python -m pip install paddleocr paddlepaddle
+[2026-04-18T04:21:31Z] Launching visible image ingest installer command: winget install --id tesseract-ocr.tesseract -e --accept-package-agreements --accept-source-agreements
+[2026-04-18T04:22:26Z] Saved image ingest settings. Mode: vision_language_gpu.
+[2026-04-18T04:26:05Z] Saved image ingest settings. Mode: vision_language_gpu.
+[2026-04-18T04:28:35Z] Saved image ingest settings. Mode: vision_language_gpu.
+[2026-04-18T04:52:01Z] Launching visible Ollama vision model pull command: ollama pull qwen2.5vl:7b
+[2026-04-18T04:59:46Z] Launching visible Ollama vision model pull command: ollama pull moondream:1.6b
+[2026-04-18T05:00:32Z] Launching visible Ollama vision model pull command: ollama pull moondream-1.8b
+[2026-04-18T05:00:42Z] Launching visible Ollama vision model pull command: ollama pull thatdamai/moondream-1.8b:latest
+[2026-04-18T05:01:53Z] Saved image ingest settings. Mode: vision_language_gpu.
+[2026-04-18T05:04:43Z] Launching visible Ollama vision model pull command: ollama pull gemma4:e2b
+[2026-04-18T05:08:11Z] Saved image ingest settings. Mode: vision_language_gpu.

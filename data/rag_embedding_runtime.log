@@ -1448,3 +1448,1091 @@ time=2026-04-15T00:38:02.051-04:00 level=INFO source=routes.go:1860 msg="vram-ba
 [GIN] 2026/04/17 - 02:13:43 | 200 |      1.5156ms |       127.0.0.1 | GET      "/api/tags"
 [GIN] 2026/04/17 - 02:51:12 | 200 |      1.5748ms |       127.0.0.1 | GET      "/api/tags"
 [GIN] 2026/04/17 - 03:05:17 | 200 |      1.5616ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/17 - 23:25:20 | 200 |     28.9343ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:18:09 | 200 |      1.5879ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:18:10 | 200 |      1.0354ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:18:16 | 200 |      1.5718ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:18:16 | 200 |      1.0388ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:18:20 | 200 |      2.0268ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:18:20 | 200 |       528.7µs |       127.0.0.1 | HEAD     "/"
+[GIN] 2026/04/18 - 00:18:20 | 200 |    400.0594ms |       127.0.0.1 | POST     "/api/pull"
+[GIN] 2026/04/18 - 00:21:19 | 200 |      1.5892ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:21:19 | 200 |      1.3013ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:21:27 | 200 |      1.2864ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:21:31 | 200 |      1.0373ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:21:39 | 200 |      1.6117ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:22:09 | 200 |            0s |       127.0.0.1 | GET      "/"
+[GIN] 2026/04/18 - 00:22:10 | 404 |            0s |       127.0.0.1 | GET      "/favicon.ico"
+[GIN] 2026/04/18 - 00:24:20 | 200 |      1.5551ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:24:20 | 200 |      1.0526ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:24:20 | 200 |      1.0342ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:24:20 | 200 |      1.0315ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:24:23 | 200 |      1.5509ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:24:23 | 200 |      1.0232ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:24:23 | 200 |      1.0185ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:24:31 | 200 |      1.7519ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:24:33 | 200 |      1.5678ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:24:58 | 200 |      1.5521ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:25:15 | 200 |      1.1061ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:25:17 | 200 |      1.2382ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-18T04:25:23Z] Launching visible Ollama model pull command: ollama pull nomic-embed-text
+[GIN] 2026/04/18 - 00:25:23 | 200 |      1.5703ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:25:23 | 200 |            0s |       127.0.0.1 | HEAD     "/"
+[GIN] 2026/04/18 - 00:25:23 | 200 |    337.1008ms |       127.0.0.1 | POST     "/api/pull"
+[2026-04-18T04:25:27Z] Embedding test requested for provider ollama model nomic-embed-text.
+[GIN] 2026/04/18 - 00:25:29 | 200 |       1.053ms |       127.0.0.1 | GET      "/api/tags"
+time=2026-04-18T00:25:29.412-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 56120"
+time=2026-04-18T00:25:31.028-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-18T00:25:31.028-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+time=2026-04-18T00:25:31.040-04:00 level=WARN source=server.go:169 msg="requested context size too large for model" num_ctx=8192 n_ctx_train=2048
+time=2026-04-18T00:25:31.042-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --model C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-970aa74c0a90ef7482477cf803618e776e173c007bf957f635f1015bfcfef0e6 --port 56129"
+time=2026-04-18T00:25:31.045-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="34.0 GiB" free_swap="19.3 GiB"
+time=2026-04-18T00:25:31.045-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="1005.2 MiB" free="1.4 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-18T00:25:31.046-04:00 level=INFO source=server.go:771 msg="loading model" "model layers"=13 requested=-1
+time=2026-04-18T00:25:31.104-04:00 level=INFO source=runner.go:1417 msg="starting ollama engine"
+time=2026-04-18T00:25:31.106-04:00 level=INFO source=runner.go:1452 msg="Server listening on 127.0.0.1:56129"
+time=2026-04-18T00:25:31.109-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:25:31.112-04:00 level=INFO source=ggml.go:136 msg="" architecture=nomic-bert file_type=F16 name=nomic-embed-text-v1.5 description="" num_tensors=112 num_key_values=25
+load_backend: loaded CPU backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\ggml-cpu-haswell.dll
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: Quadro P620, compute capability 6.1, VMM: yes, ID: GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2
+load_backend: loaded CUDA backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll
+time=2026-04-18T00:25:31.218-04:00 level=INFO source=ggml.go:104 msg=system CPU.0.SSE3=1 CPU.0.SSSE3=1 CPU.0.AVX=1 CPU.0.AVX2=1 CPU.0.F16C=1 CPU.0.FMA=1 CPU.0.BMI2=1 CPU.0.LLAMAFILE=1 CPU.1.LLAMAFILE=1 CUDA.0.ARCHS=500,520,600,610,700,750,800,860,890,900,1200 CUDA.0.USE_GRAPHS=1 CUDA.0.PEER_MAX_BATCH_SIZE=128 compiler=cgo(clang)
+time=2026-04-18T00:25:31.220-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-18T00:25:31.431-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:25:31.437-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-18T00:25:31.441-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:25:31.441-04:00 level=INFO source=device.go:240 msg="model weights" device=CUDA0 size="260.9 MiB"
+time=2026-04-18T00:25:31.441-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="44.7 MiB"
+time=2026-04-18T00:25:31.441-04:00 level=INFO source=device.go:262 msg="compute graph" device=CUDA0 size="250.0 MiB"
+time=2026-04-18T00:25:31.441-04:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="6.0 MiB"
+time=2026-04-18T00:25:31.441-04:00 level=INFO source=device.go:272 msg="total memory" size="561.6 MiB"
+time=2026-04-18T00:25:31.441-04:00 level=INFO source=sched.go:561 msg="loaded runners" count=1
+time=2026-04-18T00:25:31.441-04:00 level=INFO source=ggml.go:482 msg="offloading 12 repeating layers to GPU"
+time=2026-04-18T00:25:31.442-04:00 level=INFO source=ggml.go:489 msg="offloading output layer to GPU"
+time=2026-04-18T00:25:31.442-04:00 level=INFO source=ggml.go:494 msg="offloaded 13/13 layers to GPU"
+time=2026-04-18T00:25:31.442-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-18T00:25:31.442-04:00 level=INFO source=server.go:1398 msg="waiting for server to become available" status="llm server loading model"
+time=2026-04-18T00:25:31.943-04:00 level=INFO source=server.go:1402 msg="llama runner started in 0.90 seconds"
+[GIN] 2026/04/18 - 00:25:31 | 200 |    2.6366165s |       127.0.0.1 | POST     "/api/embed"
+[2026-04-18T04:25:32Z] Embedding test succeeded: ollama / nomic-embed-text returned 768 dimensions in 2639.7 ms.
+[GIN] 2026/04/18 - 00:25:32 | 200 |      1.0319ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:25:36 | 200 |      1.0499ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:25:51 | 200 |      1.1072ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:25:51 | 200 |      1.0469ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:25:59 | 200 |      1.0568ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:25:59 | 200 |      1.2686ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:26:00 | 200 |      1.0279ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:26:00 | 200 |      1.0379ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:26:03 | 200 |      1.0519ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:26:03 | 200 |      1.0328ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:28:17 | 200 |      1.5554ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:28:28 | 200 |      1.0426ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:28:32 | 200 |       1.037ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:28:32 | 200 |      1.0298ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:28:43 | 200 |      1.6561ms |       127.0.0.1 | GET      "/api/tags"
+ggml_backend_cuda_device_get_memory device GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 utilizing NVML memory reporting free: 937996288 total: 2147483648
+time=2026-04-18T00:30:07.694-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-18T00:30:07.694-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+time=2026-04-18T00:30:07.695-04:00 level=INFO source=sched.go:627 msg="updated VRAM based on existing loaded models" gpu=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA total="2.0 GiB" available="894.5 MiB"
+time=2026-04-18T00:30:07.772-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --model C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-a99b7f834d754b88f122d865f32758ba9f0994a83f8363df2c1e71c17605a025 --port 53770"
+time=2026-04-18T00:30:07.776-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="33.1 GiB" free_swap="17.6 GiB"
+time=2026-04-18T00:30:07.776-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="437.5 MiB" free="894.5 MiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-18T00:30:07.776-04:00 level=INFO source=server.go:771 msg="loading model" "model layers"=29 requested=-1
+time=2026-04-18T00:30:07.840-04:00 level=INFO source=runner.go:1417 msg="starting ollama engine"
+time=2026-04-18T00:30:07.841-04:00 level=INFO source=runner.go:1452 msg="Server listening on 127.0.0.1:53770"
+time=2026-04-18T00:30:07.849-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:29[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:29(0..28)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:07.874-04:00 level=INFO source=ggml.go:136 msg="" architecture=qwen25vl file_type=Q4_K_M name="" description="" num_tensors=858 num_key_values=36
+load_backend: loaded CPU backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\ggml-cpu-haswell.dll
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: Quadro P620, compute capability 6.1, VMM: yes, ID: GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2
+load_backend: loaded CUDA backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll
+time=2026-04-18T00:30:07.962-04:00 level=INFO source=ggml.go:104 msg=system CPU.0.SSE3=1 CPU.0.SSSE3=1 CPU.0.AVX=1 CPU.0.AVX2=1 CPU.0.F16C=1 CPU.0.FMA=1 CPU.0.BMI2=1 CPU.0.LLAMAFILE=1 CPU.1.LLAMAFILE=1 CUDA.0.ARCHS=500,520,600,610,700,750,800,860,890,900,1200 CUDA.0.USE_GRAPHS=1 CUDA.0.PEER_MAX_BATCH_SIZE=128 compiler=cgo(clang)
+time=2026-04-18T00:30:08.656-04:00 level=INFO source=server.go:1043 msg="model requires more gpu memory than is currently available, evicting a model to make space" "loaded layers"=0
+time=2026-04-18T00:30:08.656-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:close LoraPath:[] Parallel:0 BatchSize:0 FlashAttention:Disabled KvSize:0 KvCacheType: NumThreads:0 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:08.657-04:00 level=INFO source=device.go:240 msg="model weights" device=CUDA0 size="5.3 GiB"
+time=2026-04-18T00:30:08.657-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="292.4 MiB"
+time=2026-04-18T00:30:08.657-04:00 level=INFO source=device.go:251 msg="kv cache" device=CUDA0 size="224.0 MiB"
+time=2026-04-18T00:30:08.657-04:00 level=INFO source=device.go:262 msg="compute graph" device=CUDA0 size="7.2 GiB"
+time=2026-04-18T00:30:08.657-04:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="35.6 MiB"
+time=2026-04-18T00:30:08.657-04:00 level=INFO source=device.go:272 msg="total memory" size="13.1 GiB"
+ggml_backend_cuda_device_get_memory device GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 utilizing NVML memory reporting free: 885370880 total: 2147483648
+time=2026-04-18T00:30:08.927-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 54299"
+time=2026-04-18T00:30:09.104-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 54307"
+time=2026-04-18T00:30:09.269-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-18T00:30:09.269-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+time=2026-04-18T00:30:09.296-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="32.2 GiB" free_swap="14.2 GiB"
+time=2026-04-18T00:30:09.296-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="951.5 MiB" free="1.4 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-18T00:30:09.296-04:00 level=INFO source=server.go:771 msg="loading model" "model layers"=29 requested=-1
+time=2026-04-18T00:30:09.296-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:09.711-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:5[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:5(23..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:10.120-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:4[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:4(24..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:10.530-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:3[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:3(25..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:10.951-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:2[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:2(26..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:11.360-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:1[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:1(27..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:11.773-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:12.176-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:12.782-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:5[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:5(23..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:18.839-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:4[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:4(24..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:20.968-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:3[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:3(25..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:23.148-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:2[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:2(26..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:25.307-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:1[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:1(27..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:27.240-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:28.668-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:30:28.668-04:00 level=INFO source=ggml.go:482 msg="offloading 0 repeating layers to GPU"
+time=2026-04-18T00:30:28.668-04:00 level=INFO source=ggml.go:486 msg="offloading output layer to CPU"
+time=2026-04-18T00:30:28.668-04:00 level=INFO source=ggml.go:494 msg="offloaded 0/29 layers to GPU"
+time=2026-04-18T00:30:28.668-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="5.6 GiB"
+time=2026-04-18T00:30:28.669-04:00 level=INFO source=device.go:256 msg="kv cache" device=CPU size="224.0 MiB"
+time=2026-04-18T00:30:28.669-04:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="6.7 GiB"
+time=2026-04-18T00:30:28.669-04:00 level=INFO source=device.go:272 msg="total memory" size="12.5 GiB"
+time=2026-04-18T00:30:28.669-04:00 level=INFO source=sched.go:561 msg="loaded runners" count=1
+time=2026-04-18T00:30:28.669-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-18T00:30:28.669-04:00 level=INFO source=server.go:1398 msg="waiting for server to become available" status="llm server loading model"
+time=2026-04-18T00:30:31.931-04:00 level=INFO source=server.go:1402 msg="llama runner started in 24.15 seconds"
+[GIN] 2026/04/18 - 00:33:09 | 500 |          3m1s |       127.0.0.1 | POST     "/api/generate"
+[2026-04-18T04:36:46Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-18T00:36:46.108-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-18T00:36:46.108-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-18T00:36:46.111-04:00 level=INFO source=images.go:499 msg="total blobs: 16"
+time=2026-04-18T00:36:46.112-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-18T00:36:46.113-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.7)"
+time=2026-04-18T00:36:46.114-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-18T00:36:46.125-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59389"
+time=2026-04-18T00:36:46.754-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64131"
+time=2026-04-18T00:36:48.050-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-18T00:36:48.051-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64140"
+time=2026-04-18T00:36:48.253-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64149"
+time=2026-04-18T00:36:48.253-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64148"
+time=2026-04-18T00:36:48.517-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.6 GiB"
+time=2026-04-18T00:36:48.517-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/18 - 00:36:48 | 200 |      1.5958ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-18T04:36:48Z] Ollama is responding at http://localhost:11434.
+time=2026-04-18T00:37:51.530-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 56552"
+time=2026-04-18T00:37:51.728-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-18T00:37:51.728-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+time=2026-04-18T00:37:51.807-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --model C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-a99b7f834d754b88f122d865f32758ba9f0994a83f8363df2c1e71c17605a025 --port 56559"
+time=2026-04-18T00:37:51.810-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="37.7 GiB" free_swap="19.7 GiB"
+time=2026-04-18T00:37:51.810-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="1.1 GiB" free="1.6 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-18T00:37:51.810-04:00 level=INFO source=server.go:771 msg="loading model" "model layers"=29 requested=-1
+time=2026-04-18T00:37:51.869-04:00 level=INFO source=runner.go:1417 msg="starting ollama engine"
+time=2026-04-18T00:37:51.870-04:00 level=INFO source=runner.go:1452 msg="Server listening on 127.0.0.1:56559"
+time=2026-04-18T00:37:51.873-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:29[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:29(0..28)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:51.900-04:00 level=INFO source=ggml.go:136 msg="" architecture=qwen25vl file_type=Q4_K_M name="" description="" num_tensors=858 num_key_values=36
+load_backend: loaded CPU backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\ggml-cpu-haswell.dll
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: Quadro P620, compute capability 6.1, VMM: yes, ID: GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2
+load_backend: loaded CUDA backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll
+time=2026-04-18T00:37:52.009-04:00 level=INFO source=ggml.go:104 msg=system CPU.0.SSE3=1 CPU.0.SSSE3=1 CPU.0.AVX=1 CPU.0.AVX2=1 CPU.0.F16C=1 CPU.0.FMA=1 CPU.0.BMI2=1 CPU.0.LLAMAFILE=1 CPU.1.LLAMAFILE=1 CUDA.0.ARCHS=500,520,600,610,700,750,800,860,890,900,1200 CUDA.0.USE_GRAPHS=1 CUDA.0.PEER_MAX_BATCH_SIZE=128 compiler=cgo(clang)
+time=2026-04-18T00:37:52.600-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:53.020-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:6[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:6(22..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:53.430-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:5[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:5(23..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:53.843-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:4[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:4(24..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:54.261-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:3[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:3(25..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:54.677-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:2[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:2(26..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:55.106-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:1[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:1(27..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:55.531-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:55.954-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:56.532-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:6[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:6(22..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:37:59.268-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:5[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:5(23..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:38:01.568-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:4[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:4(24..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:38:03.504-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:3[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:3(25..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:38:05.283-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:2[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:2(26..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:38:06.912-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:1[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:1(27..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:38:08.645-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:38:09.927-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:38:09.927-04:00 level=INFO source=ggml.go:482 msg="offloading 0 repeating layers to GPU"
+time=2026-04-18T00:38:09.927-04:00 level=INFO source=ggml.go:486 msg="offloading output layer to CPU"
+time=2026-04-18T00:38:09.927-04:00 level=INFO source=ggml.go:494 msg="offloaded 0/29 layers to GPU"
+time=2026-04-18T00:38:09.927-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="5.6 GiB"
+time=2026-04-18T00:38:09.927-04:00 level=INFO source=device.go:256 msg="kv cache" device=CPU size="224.0 MiB"
+time=2026-04-18T00:38:09.927-04:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="6.7 GiB"
+time=2026-04-18T00:38:09.927-04:00 level=INFO source=device.go:272 msg="total memory" size="12.5 GiB"
+time=2026-04-18T00:38:09.927-04:00 level=INFO source=sched.go:561 msg="loaded runners" count=1
+time=2026-04-18T00:38:09.928-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-18T00:38:09.928-04:00 level=INFO source=server.go:1398 msg="waiting for server to become available" status="llm server loading model"
+time=2026-04-18T00:38:11.433-04:00 level=INFO source=server.go:1402 msg="llama runner started in 19.62 seconds"
+[GIN] 2026/04/18 - 00:40:53 | 500 |          3m1s |       127.0.0.1 | POST     "/api/generate"
+[GIN] 2026/04/18 - 00:44:30 | 200 |         2m16s |       127.0.0.1 | POST     "/api/generate"
+[GIN] 2026/04/18 - 00:44:30 | 200 |      6.8078ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:48:29 | 500 |          3m3s |       127.0.0.1 | POST     "/api/generate"
+[GIN] 2026/04/18 - 00:49:01 | 200 |      1.5842ms |       127.0.0.1 | GET      "/api/tags"
+time=2026-04-18T00:49:01.686-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 51936"
+time=2026-04-18T00:49:01.890-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-18T00:49:01.890-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+time=2026-04-18T00:49:01.891-04:00 level=INFO source=sched.go:627 msg="updated VRAM based on existing loaded models" gpu=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA total="2.0 GiB" available="1.6 GiB"
+time=2026-04-18T00:49:01.903-04:00 level=WARN source=server.go:169 msg="requested context size too large for model" num_ctx=8192 n_ctx_train=2048
+time=2026-04-18T00:49:01.905-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --model C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-970aa74c0a90ef7482477cf803618e776e173c007bf957f635f1015bfcfef0e6 --port 51945"
+time=2026-04-18T00:49:01.909-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="24.2 GiB" free_swap="1.5 GiB"
+time=2026-04-18T00:49:01.909-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="1.1 GiB" free="1.6 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-18T00:49:01.909-04:00 level=INFO source=server.go:771 msg="loading model" "model layers"=13 requested=-1
+time=2026-04-18T00:49:01.976-04:00 level=INFO source=runner.go:1417 msg="starting ollama engine"
+time=2026-04-18T00:49:01.978-04:00 level=INFO source=runner.go:1452 msg="Server listening on 127.0.0.1:51945"
+time=2026-04-18T00:49:01.984-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:49:01.987-04:00 level=INFO source=ggml.go:136 msg="" architecture=nomic-bert file_type=F16 name=nomic-embed-text-v1.5 description="" num_tensors=112 num_key_values=25
+load_backend: loaded CPU backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\ggml-cpu-haswell.dll
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: Quadro P620, compute capability 6.1, VMM: yes, ID: GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2
+load_backend: loaded CUDA backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll
+time=2026-04-18T00:49:02.082-04:00 level=INFO source=ggml.go:104 msg=system CPU.0.SSE3=1 CPU.0.SSSE3=1 CPU.0.AVX=1 CPU.0.AVX2=1 CPU.0.F16C=1 CPU.0.FMA=1 CPU.0.BMI2=1 CPU.0.LLAMAFILE=1 CPU.1.LLAMAFILE=1 CUDA.0.ARCHS=500,520,600,610,700,750,800,860,890,900,1200 CUDA.0.USE_GRAPHS=1 CUDA.0.PEER_MAX_BATCH_SIZE=128 compiler=cgo(clang)
+time=2026-04-18T00:49:02.083-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-18T00:49:02.171-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:49:02.177-04:00 level=WARN source=runner.go:1219 msg="model does not support caching, setting batch size to context length" batch_size=2048
+time=2026-04-18T00:49:02.182-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:12 GPULayers:13[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:13(0..12)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T00:49:02.182-04:00 level=INFO source=ggml.go:482 msg="offloading 12 repeating layers to GPU"
+time=2026-04-18T00:49:02.182-04:00 level=INFO source=ggml.go:489 msg="offloading output layer to GPU"
+time=2026-04-18T00:49:02.183-04:00 level=INFO source=ggml.go:494 msg="offloaded 13/13 layers to GPU"
+time=2026-04-18T00:49:02.183-04:00 level=INFO source=device.go:240 msg="model weights" device=CUDA0 size="260.9 MiB"
+time=2026-04-18T00:49:02.183-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="44.7 MiB"
+time=2026-04-18T00:49:02.183-04:00 level=INFO source=device.go:262 msg="compute graph" device=CUDA0 size="250.0 MiB"
+time=2026-04-18T00:49:02.183-04:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="6.0 MiB"
+time=2026-04-18T00:49:02.183-04:00 level=INFO source=device.go:272 msg="total memory" size="561.6 MiB"
+time=2026-04-18T00:49:02.183-04:00 level=INFO source=sched.go:561 msg="loaded runners" count=2
+time=2026-04-18T00:49:02.183-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-18T00:49:02.183-04:00 level=INFO source=server.go:1398 msg="waiting for server to become available" status="llm server loading model"
+time=2026-04-18T00:49:02.683-04:00 level=INFO source=server.go:1402 msg="llama runner started in 0.78 seconds"
+[GIN] 2026/04/18 - 00:49:02 | 200 |    1.0682647s |       127.0.0.1 | POST     "/api/embed"
+[2026-04-18T04:49:46Z] Stopping app-managed Ollama process.
+[2026-04-18T04:51:27Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-18T00:51:27.085-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-18T00:51:27.085-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-18T00:51:27.089-04:00 level=INFO source=images.go:499 msg="total blobs: 16"
+time=2026-04-18T00:51:27.090-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-18T00:51:27.091-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.7)"
+time=2026-04-18T00:51:27.092-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-18T00:51:27.103-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 59428"
+time=2026-04-18T00:51:27.332-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 55114"
+time=2026-04-18T00:51:27.813-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-18T00:51:27.814-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 55123"
+time=2026-04-18T00:51:28.002-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 55131"
+time=2026-04-18T00:51:28.002-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 55132"
+time=2026-04-18T00:51:28.426-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.0 GiB"
+time=2026-04-18T00:51:28.426-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/18 - 00:51:29 | 200 |      1.6325ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-18T04:51:29Z] Ollama is responding at http://localhost:11434.
+[GIN] 2026/04/18 - 00:51:44 | 200 |      1.0561ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:51:45 | 200 |       2.035ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:51:46 | 200 |      1.2835ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:52:03 | 200 |            0s |       127.0.0.1 | HEAD     "/"
+[GIN] 2026/04/18 - 00:52:03 | 200 |    355.5591ms |       127.0.0.1 | POST     "/api/pull"
+[2026-04-18T04:52:26Z] Stopping app-managed Ollama process.
+[2026-04-18T04:53:39Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-18T00:53:39.357-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-18T00:53:39.357-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-18T00:53:39.361-04:00 level=INFO source=images.go:499 msg="total blobs: 16"
+time=2026-04-18T00:53:39.362-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-18T00:53:39.362-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.7)"
+time=2026-04-18T00:53:39.363-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-18T00:53:39.374-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 64131"
+time=2026-04-18T00:53:39.561-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 56986"
+time=2026-04-18T00:53:39.718-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 56994"
+time=2026-04-18T00:53:40.176-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-18T00:53:40.178-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 57003"
+time=2026-04-18T00:53:40.178-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 57004"
+time=2026-04-18T00:53:40.476-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.0 GiB"
+time=2026-04-18T00:53:40.476-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/18 - 00:53:41 | 200 |       2.077ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-18T04:53:41Z] Ollama is responding at http://localhost:11434.
+[GIN] 2026/04/18 - 00:53:55 | 200 |      2.1819ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:53:58 | 200 |      1.1576ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:53:58 | 200 |      1.0342ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-18T04:54:30Z] Stopping app-managed Ollama process.
+[2026-04-18T04:56:44Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+time=2026-04-18T00:56:44.797-04:00 level=INFO source=routes.go:1752 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://localhost:11434 OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MODELS:C:\\Users\\TheunisvanNiekerk\\.ollama\\models OLLAMA_MULTIUSER_CACHE:false OLLAMA_NEW_ENGINE:false OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:false ROCR_VISIBLE_DEVICES:]"
+time=2026-04-18T00:56:44.797-04:00 level=INFO source=routes.go:1754 msg="Ollama cloud disabled: false"
+time=2026-04-18T00:56:44.800-04:00 level=INFO source=images.go:499 msg="total blobs: 16"
+time=2026-04-18T00:56:44.801-04:00 level=INFO source=images.go:506 msg="total unused blobs removed: 0"
+time=2026-04-18T00:56:44.802-04:00 level=INFO source=routes.go:1810 msg="Listening on 127.0.0.1:11434 (version 0.20.7)"
+time=2026-04-18T00:56:44.803-04:00 level=INFO source=runner.go:67 msg="discovering available GPUs..."
+time=2026-04-18T00:56:44.814-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 60780"
+time=2026-04-18T00:56:44.979-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 60788"
+time=2026-04-18T00:56:45.467-04:00 level=INFO source=runner.go:106 msg="experimental Vulkan support disabled.  To enable, set OLLAMA_VULKAN=1"
+time=2026-04-18T00:56:45.469-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 60799"
+time=2026-04-18T00:56:45.656-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 60807"
+time=2026-04-18T00:56:45.656-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 60808"
+time=2026-04-18T00:56:45.933-04:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 filter_id="" library=CUDA compute=6.1 name=CUDA0 description="Quadro P620" libdirs=ollama,cuda_v12 driver=12.9 pci_id=0000:06:00.0 type=discrete total="2.0 GiB" available="1.0 GiB"
+time=2026-04-18T00:56:45.933-04:00 level=INFO source=routes.go:1860 msg="vram-based default context" total_vram="2.0 GiB" default_num_ctx=4096
+[GIN] 2026/04/18 - 00:56:47 | 200 |      1.6245ms |       127.0.0.1 | GET      "/api/tags"
+[2026-04-18T04:56:47Z] Ollama is responding at http://localhost:11434.
+[GIN] 2026/04/18 - 00:57:07 | 200 |      1.0756ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:57:08 | 200 |      1.8639ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:57:08 | 200 |      1.0568ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:59:48 | 200 |      1.6178ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 00:59:49 | 200 |            0s |       127.0.0.1 | HEAD     "/"
+[GIN] 2026/04/18 - 00:59:49 | 200 |      231.94ms |       127.0.0.1 | POST     "/api/pull"
+[GIN] 2026/04/18 - 01:00:32 | 200 |      1.0556ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 01:00:32 | 200 |            0s |       127.0.0.1 | HEAD     "/"
+[GIN] 2026/04/18 - 01:00:32 | 200 |    176.3025ms |       127.0.0.1 | POST     "/api/pull"
+[GIN] 2026/04/18 - 01:00:42 | 200 |      1.2542ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 01:00:42 | 200 |            0s |       127.0.0.1 | HEAD     "/"
+time=2026-04-18T01:00:42.962-04:00 level=INFO source=download.go:179 msg="downloading e554c6b9de01 in 9 100 MB part(s)"
+time=2026-04-18T01:01:05.669-04:00 level=INFO source=download.go:179 msg="downloading 4cc1cb3660d8 in 10 100 MB part(s)"
+time=2026-04-18T01:01:30.398-04:00 level=INFO source=download.go:179 msg="downloading 4b021a3b4b4a in 1 77 B part(s)"
+time=2026-04-18T01:01:31.560-04:00 level=INFO source=download.go:179 msg="downloading 9468773bdc1f in 1 65 B part(s)"
+time=2026-04-18T01:01:32.728-04:00 level=INFO source=download.go:179 msg="downloading d8965b3fe11e in 1 638 B part(s)"
+[GIN] 2026/04/18 - 01:01:36 | 200 |    54.086632s |       127.0.0.1 | POST     "/api/pull"
+time=2026-04-18T01:02:37.208-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 55676"
+time=2026-04-18T01:02:37.408-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-18T01:02:37.408-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+llama_model_loader: loaded meta data with 20 key-value pairs and 245 tensors from C:\Users\TheunisvanNiekerk\.ollama\models\blobs\sha256-e554c6b9de016673fd2c732e0342967727e9659ca5f853a4947cc96263fa602b (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = phi2
+llama_model_loader: - kv   1:                               general.name str              = moondream2
+llama_model_loader: - kv   2:                        phi2.context_length u32              = 2048
+llama_model_loader: - kv   3:                      phi2.embedding_length u32              = 2048
+llama_model_loader: - kv   4:                   phi2.feed_forward_length u32              = 8192
+llama_model_loader: - kv   5:                           phi2.block_count u32              = 24
+llama_model_loader: - kv   6:                  phi2.attention.head_count u32              = 32
+llama_model_loader: - kv   7:               phi2.attention.head_count_kv u32              = 32
+llama_model_loader: - kv   8:          phi2.attention.layer_norm_epsilon f32              = 0.000010
+llama_model_loader: - kv   9:                  phi2.rope.dimension_count u32              = 32
+llama_model_loader: - kv  10:                          general.file_type u32              = 2
+llama_model_loader: - kv  11:               tokenizer.ggml.add_bos_token bool             = false
+llama_model_loader: - kv  12:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  13:                      tokenizer.ggml.tokens arr[str,51200]   = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  14:                  tokenizer.ggml.token_type arr[i32,51200]   = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  15:                      tokenizer.ggml.merges arr[str,50000]   = ["Ġ t", "Ġ a", "h e", "i n", "r e",...
+llama_model_loader: - kv  16:                tokenizer.ggml.bos_token_id u32              = 50256
+llama_model_loader: - kv  17:                tokenizer.ggml.eos_token_id u32              = 50256
+llama_model_loader: - kv  18:            tokenizer.ggml.unknown_token_id u32              = 50256
+llama_model_loader: - kv  19:               general.quantization_version u32              = 2
+llama_model_loader: - type  f32:  147 tensors
+llama_model_loader: - type q4_0:   97 tensors
+llama_model_loader: - type q6_K:    1 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_0
+print_info: file size   = 788.55 MiB (4.66 BPW) 
+load: missing or unrecognized pre-tokenizer type, using: 'default'
+load: printing all EOG tokens:
+load:   - 50256 ('<|endoftext|>')
+load: special tokens cache size = 944
+load: token to piece cache size = 0.3151 MB
+print_info: arch             = phi2
+print_info: vocab_only       = 1
+print_info: no_alloc         = 0
+print_info: model type       = ?B
+print_info: model params     = 1.42 B
+print_info: general.name     = moondream2
+print_info: vocab type       = BPE
+print_info: n_vocab          = 51200
+print_info: n_merges         = 50000
+print_info: BOS token        = 50256 '<|endoftext|>'
+print_info: EOS token        = 50256 '<|endoftext|>'
+print_info: EOT token        = 50256 '<|endoftext|>'
+print_info: UNK token        = 50256 '<|endoftext|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 50256 '<|endoftext|>'
+print_info: max token length = 256
+llama_model_load: vocab only - skipping tensors
+time=2026-04-18T01:02:37.492-04:00 level=WARN source=server.go:169 msg="requested context size too large for model" num_ctx=4096 n_ctx_train=2048
+time=2026-04-18T01:02:37.493-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --model C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-e554c6b9de016673fd2c732e0342967727e9659ca5f853a4947cc96263fa602b --port 55685"
+time=2026-04-18T01:02:37.499-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="24.5 GiB" free_swap="2.4 GiB"
+time=2026-04-18T01:02:37.499-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="569.6 MiB" free="1.0 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-18T01:02:37.499-04:00 level=INFO source=server.go:511 msg="loading model" "model layers"=25 requested=-1
+time=2026-04-18T01:02:37.499-04:00 level=INFO source=device.go:240 msg="model weights" device=CUDA0 size="189.6 MiB"
+time=2026-04-18T01:02:37.499-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="542.7 MiB"
+time=2026-04-18T01:02:37.499-04:00 level=INFO source=device.go:251 msg="kv cache" device=CUDA0 size="112.0 MiB"
+time=2026-04-18T01:02:37.499-04:00 level=INFO source=device.go:256 msg="kv cache" device=CPU size="272.0 MiB"
+time=2026-04-18T01:02:37.499-04:00 level=INFO source=device.go:262 msg="compute graph" device=CUDA0 size="190.0 MiB"
+time=2026-04-18T01:02:37.499-04:00 level=INFO source=device.go:272 msg="total memory" size="1.3 GiB"
+time=2026-04-18T01:02:37.571-04:00 level=INFO source=runner.go:965 msg="starting go runner"
+load_backend: loaded CPU backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\ggml-cpu-haswell.dll
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: Quadro P620, compute capability 6.1, VMM: yes, ID: GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2
+load_backend: loaded CUDA backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll
+time=2026-04-18T01:02:37.665-04:00 level=INFO source=ggml.go:104 msg=system CPU.0.SSE3=1 CPU.0.SSSE3=1 CPU.0.AVX=1 CPU.0.AVX2=1 CPU.0.F16C=1 CPU.0.FMA=1 CPU.0.BMI2=1 CPU.0.LLAMAFILE=1 CPU.1.LLAMAFILE=1 CUDA.0.ARCHS=500,520,600,610,700,750,800,860,890,900,1200 CUDA.0.USE_GRAPHS=1 CUDA.0.PEER_MAX_BATCH_SIZE=128 compiler=cgo(clang)
+time=2026-04-18T01:02:37.666-04:00 level=INFO source=runner.go:1001 msg="Server listening on 127.0.0.1:55685"
+time=2026-04-18T01:02:37.672-04:00 level=INFO source=runner.go:895 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Auto KvSize:2048 KvCacheType: NumThreads:12 GPULayers:7[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:7(17..23)] MultiUserCache:false ProjectorPath:C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-4cc1cb3660d87ff56432ebeb7884ad35d67c48c7b9f6b2856f305e39c38eed8f MainGPU:0 UseMmap:false}"
+time=2026-04-18T01:02:37.672-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-18T01:02:37.673-04:00 level=INFO source=server.go:1398 msg="waiting for server to become available" status="llm server loading model"
+ggml_backend_cuda_device_get_memory device GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 utilizing NVML memory reporting free: 1076473856 total: 2147483648
+llama_model_load_from_file_impl: using device CUDA0 (Quadro P620) (0000:06:00.0) - 1026 MiB free
+llama_model_loader: loaded meta data with 20 key-value pairs and 245 tensors from C:\Users\TheunisvanNiekerk\.ollama\models\blobs\sha256-e554c6b9de016673fd2c732e0342967727e9659ca5f853a4947cc96263fa602b (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = phi2
+llama_model_loader: - kv   1:                               general.name str              = moondream2
+llama_model_loader: - kv   2:                        phi2.context_length u32              = 2048
+llama_model_loader: - kv   3:                      phi2.embedding_length u32              = 2048
+llama_model_loader: - kv   4:                   phi2.feed_forward_length u32              = 8192
+llama_model_loader: - kv   5:                           phi2.block_count u32              = 24
+llama_model_loader: - kv   6:                  phi2.attention.head_count u32              = 32
+llama_model_loader: - kv   7:               phi2.attention.head_count_kv u32              = 32
+llama_model_loader: - kv   8:          phi2.attention.layer_norm_epsilon f32              = 0.000010
+llama_model_loader: - kv   9:                  phi2.rope.dimension_count u32              = 32
+llama_model_loader: - kv  10:                          general.file_type u32              = 2
+llama_model_loader: - kv  11:               tokenizer.ggml.add_bos_token bool             = false
+llama_model_loader: - kv  12:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  13:                      tokenizer.ggml.tokens arr[str,51200]   = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  14:                  tokenizer.ggml.token_type arr[i32,51200]   = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  15:                      tokenizer.ggml.merges arr[str,50000]   = ["Ġ t", "Ġ a", "h e", "i n", "r e",...
+llama_model_loader: - kv  16:                tokenizer.ggml.bos_token_id u32              = 50256
+llama_model_loader: - kv  17:                tokenizer.ggml.eos_token_id u32              = 50256
+llama_model_loader: - kv  18:            tokenizer.ggml.unknown_token_id u32              = 50256
+llama_model_loader: - kv  19:               general.quantization_version u32              = 2
+llama_model_loader: - type  f32:  147 tensors
+llama_model_loader: - type q4_0:   97 tensors
+llama_model_loader: - type q6_K:    1 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_0
+print_info: file size   = 788.55 MiB (4.66 BPW) 
+load: missing or unrecognized pre-tokenizer type, using: 'default'
+load: printing all EOG tokens:
+load:   - 50256 ('<|endoftext|>')
+load: special tokens cache size = 944
+load: token to piece cache size = 0.3151 MB
+print_info: arch             = phi2
+print_info: vocab_only       = 0
+print_info: no_alloc         = 0
+print_info: n_ctx_train      = 2048
+print_info: n_embd           = 2048
+print_info: n_embd_inp       = 2048
+print_info: n_layer          = 24
+print_info: n_head           = 32
+print_info: n_head_kv        = 32
+print_info: n_rot            = 32
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 64
+print_info: n_embd_head_v    = 64
+print_info: n_gqa            = 1
+print_info: n_embd_k_gqa     = 2048
+print_info: n_embd_v_gqa     = 2048
+print_info: f_norm_eps       = 1.0e-05
+print_info: f_norm_rms_eps   = 0.0e+00
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 8192
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 2
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 10000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 2048
+print_info: rope_yarn_log_mul= 0.0000
+print_info: rope_finetuned   = unknown
+print_info: model type       = 1B
+print_info: model params     = 1.42 B
+print_info: general.name     = moondream2
+print_info: vocab type       = BPE
+print_info: n_vocab          = 51200
+print_info: n_merges         = 50000
+print_info: BOS token        = 50256 '<|endoftext|>'
+print_info: EOS token        = 50256 '<|endoftext|>'
+print_info: EOT token        = 50256 '<|endoftext|>'
+print_info: UNK token        = 50256 '<|endoftext|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 50256 '<|endoftext|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = false)
+load_tensors: offloading 7 repeating layers to GPU
+load_tensors: offloaded 7/25 layers to GPU
+load_tensors:        CUDA0 model buffer size =   189.60 MiB
+load_tensors:    CUDA_Host model buffer size =   598.95 MiB
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 1
+llama_context: n_ctx         = 2048
+llama_context: n_ctx_seq     = 2048
+llama_context: n_batch       = 512
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = auto
+llama_context: kv_unified    = false
+llama_context: freq_base     = 10000.0
+llama_context: freq_scale    = 1
+llama_context:        CPU  output buffer size =     0.20 MiB
+llama_kv_cache:        CPU KV buffer size =   272.00 MiB
+llama_kv_cache:      CUDA0 KV buffer size =   112.00 MiB
+llama_kv_cache: size =  384.00 MiB (  2048 cells,  24 layers,  1/1 seqs), K (f16):  192.00 MiB, V (f16):  192.00 MiB
+llama_context: Flash Attention was auto, set to enabled
+llama_context:      CUDA0 compute buffer size =   186.03 MiB
+llama_context:  CUDA_Host compute buffer size =    20.00 MiB
+llama_context: graph nodes  = 778
+llama_context: graph splits = 210 (with bs=512), 3 (with bs=1)
+clip_model_loader: model name:   vikhyatk/moondream2
+clip_model_loader: description:  image encoder for vikhyatk/moondream2
+clip_model_loader: GGUF version: 3
+clip_model_loader: alignment:    32
+clip_model_loader: n_tensors:    457
+clip_model_loader: n_kv:         19
+
+clip_model_loader: has vision encoder
+clip_model_loader: tensor[0]: n_dims = 2, name = mm.0.weight, tensor_size=18874368, offset=0, shape:[1152, 8192, 1, 1], type = f16
+clip_model_loader: tensor[1]: n_dims = 1, name = mm.0.bias, tensor_size=32768, offset=18874368, shape:[8192, 1, 1, 1], type = f32
+clip_model_loader: tensor[2]: n_dims = 2, name = mm.2.weight, tensor_size=33554432, offset=18907136, shape:[8192, 2048, 1, 1], type = f16
+clip_model_loader: tensor[3]: n_dims = 1, name = mm.2.bias, tensor_size=8192, offset=52461568, shape:[2048, 1, 1, 1], type = f32
+clip_model_loader: tensor[4]: n_dims = 2, name = v.position_embd.weight, tensor_size=1679616, offset=52469760, shape:[1152, 729, 1, 1], type = f16
+clip_model_loader: tensor[5]: n_dims = 4, name = v.patch_embd.weight, tensor_size=1354752, offset=54149376, shape:[14, 14, 3, 1152], type = f16
+clip_model_loader: tensor[6]: n_dims = 1, name = v.patch_embd.bias, tensor_size=4608, offset=55504128, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[7]: n_dims = 1, name = v.post_ln.weight, tensor_size=4608, offset=55508736, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[8]: n_dims = 1, name = v.post_ln.bias, tensor_size=4608, offset=55513344, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[9]: n_dims = 2, name = v.blk.0.attn_q.weight, tensor_size=2654208, offset=55517952, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[10]: n_dims = 1, name = v.blk.0.attn_q.bias, tensor_size=4608, offset=58172160, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[11]: n_dims = 2, name = v.blk.0.attn_k.weight, tensor_size=2654208, offset=58176768, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[12]: n_dims = 1, name = v.blk.0.attn_k.bias, tensor_size=4608, offset=60830976, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[13]: n_dims = 2, name = v.blk.0.attn_v.weight, tensor_size=2654208, offset=60835584, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[14]: n_dims = 1, name = v.blk.0.attn_v.bias, tensor_size=4608, offset=63489792, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[15]: n_dims = 2, name = v.blk.0.attn_out.weight, tensor_size=2654208, offset=63494400, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[16]: n_dims = 1, name = v.blk.0.attn_out.bias, tensor_size=4608, offset=66148608, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[17]: n_dims = 1, name = v.blk.0.ln1.weight, tensor_size=4608, offset=66153216, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[18]: n_dims = 1, name = v.blk.0.ln1.bias, tensor_size=4608, offset=66157824, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[19]: n_dims = 2, name = v.blk.0.ffn_down.weight, tensor_size=9916416, offset=66162432, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[20]: n_dims = 1, name = v.blk.0.ffn_down.bias, tensor_size=17216, offset=76078848, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[21]: n_dims = 2, name = v.blk.0.ffn_up.weight, tensor_size=9916416, offset=76096064, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[22]: n_dims = 1, name = v.blk.0.ffn_up.bias, tensor_size=4608, offset=86012480, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[23]: n_dims = 1, name = v.blk.0.ln2.weight, tensor_size=4608, offset=86017088, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[24]: n_dims = 1, name = v.blk.0.ln2.bias, tensor_size=4608, offset=86021696, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[25]: n_dims = 2, name = v.blk.1.attn_q.weight, tensor_size=2654208, offset=86026304, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[26]: n_dims = 1, name = v.blk.1.attn_q.bias, tensor_size=4608, offset=88680512, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[27]: n_dims = 2, name = v.blk.1.attn_k.weight, tensor_size=2654208, offset=88685120, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[28]: n_dims = 1, name = v.blk.1.attn_k.bias, tensor_size=4608, offset=91339328, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[29]: n_dims = 2, name = v.blk.1.attn_v.weight, tensor_size=2654208, offset=91343936, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[30]: n_dims = 1, name = v.blk.1.attn_v.bias, tensor_size=4608, offset=93998144, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[31]: n_dims = 2, name = v.blk.1.attn_out.weight, tensor_size=2654208, offset=94002752, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[32]: n_dims = 1, name = v.blk.1.attn_out.bias, tensor_size=4608, offset=96656960, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[33]: n_dims = 1, name = v.blk.1.ln1.weight, tensor_size=4608, offset=96661568, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[34]: n_dims = 1, name = v.blk.1.ln1.bias, tensor_size=4608, offset=96666176, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[35]: n_dims = 2, name = v.blk.1.ffn_down.weight, tensor_size=9916416, offset=96670784, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[36]: n_dims = 1, name = v.blk.1.ffn_down.bias, tensor_size=17216, offset=106587200, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[37]: n_dims = 2, name = v.blk.1.ffn_up.weight, tensor_size=9916416, offset=106604416, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[38]: n_dims = 1, name = v.blk.1.ffn_up.bias, tensor_size=4608, offset=116520832, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[39]: n_dims = 1, name = v.blk.1.ln2.weight, tensor_size=4608, offset=116525440, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[40]: n_dims = 1, name = v.blk.1.ln2.bias, tensor_size=4608, offset=116530048, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[41]: n_dims = 2, name = v.blk.2.attn_q.weight, tensor_size=2654208, offset=116534656, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[42]: n_dims = 1, name = v.blk.2.attn_q.bias, tensor_size=4608, offset=119188864, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[43]: n_dims = 2, name = v.blk.2.attn_k.weight, tensor_size=2654208, offset=119193472, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[44]: n_dims = 1, name = v.blk.2.attn_k.bias, tensor_size=4608, offset=121847680, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[45]: n_dims = 2, name = v.blk.2.attn_v.weight, tensor_size=2654208, offset=121852288, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[46]: n_dims = 1, name = v.blk.2.attn_v.bias, tensor_size=4608, offset=124506496, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[47]: n_dims = 2, name = v.blk.2.attn_out.weight, tensor_size=2654208, offset=124511104, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[48]: n_dims = 1, name = v.blk.2.attn_out.bias, tensor_size=4608, offset=127165312, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[49]: n_dims = 1, name = v.blk.2.ln1.weight, tensor_size=4608, offset=127169920, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[50]: n_dims = 1, name = v.blk.2.ln1.bias, tensor_size=4608, offset=127174528, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[51]: n_dims = 2, name = v.blk.2.ffn_down.weight, tensor_size=9916416, offset=127179136, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[52]: n_dims = 1, name = v.blk.2.ffn_down.bias, tensor_size=17216, offset=137095552, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[53]: n_dims = 2, name = v.blk.2.ffn_up.weight, tensor_size=9916416, offset=137112768, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[54]: n_dims = 1, name = v.blk.2.ffn_up.bias, tensor_size=4608, offset=147029184, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[55]: n_dims = 1, name = v.blk.2.ln2.weight, tensor_size=4608, offset=147033792, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[56]: n_dims = 1, name = v.blk.2.ln2.bias, tensor_size=4608, offset=147038400, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[57]: n_dims = 2, name = v.blk.3.attn_q.weight, tensor_size=2654208, offset=147043008, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[58]: n_dims = 1, name = v.blk.3.attn_q.bias, tensor_size=4608, offset=149697216, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[59]: n_dims = 2, name = v.blk.3.attn_k.weight, tensor_size=2654208, offset=149701824, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[60]: n_dims = 1, name = v.blk.3.attn_k.bias, tensor_size=4608, offset=152356032, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[61]: n_dims = 2, name = v.blk.3.attn_v.weight, tensor_size=2654208, offset=152360640, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[62]: n_dims = 1, name = v.blk.3.attn_v.bias, tensor_size=4608, offset=155014848, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[63]: n_dims = 2, name = v.blk.3.attn_out.weight, tensor_size=2654208, offset=155019456, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[64]: n_dims = 1, name = v.blk.3.attn_out.bias, tensor_size=4608, offset=157673664, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[65]: n_dims = 1, name = v.blk.3.ln1.weight, tensor_size=4608, offset=157678272, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[66]: n_dims = 1, name = v.blk.3.ln1.bias, tensor_size=4608, offset=157682880, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[67]: n_dims = 2, name = v.blk.3.ffn_down.weight, tensor_size=9916416, offset=157687488, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[68]: n_dims = 1, name = v.blk.3.ffn_down.bias, tensor_size=17216, offset=167603904, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[69]: n_dims = 2, name = v.blk.3.ffn_up.weight, tensor_size=9916416, offset=167621120, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[70]: n_dims = 1, name = v.blk.3.ffn_up.bias, tensor_size=4608, offset=177537536, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[71]: n_dims = 1, name = v.blk.3.ln2.weight, tensor_size=4608, offset=177542144, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[72]: n_dims = 1, name = v.blk.3.ln2.bias, tensor_size=4608, offset=177546752, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[73]: n_dims = 2, name = v.blk.4.attn_q.weight, tensor_size=2654208, offset=177551360, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[74]: n_dims = 1, name = v.blk.4.attn_q.bias, tensor_size=4608, offset=180205568, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[75]: n_dims = 2, name = v.blk.4.attn_k.weight, tensor_size=2654208, offset=180210176, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[76]: n_dims = 1, name = v.blk.4.attn_k.bias, tensor_size=4608, offset=182864384, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[77]: n_dims = 2, name = v.blk.4.attn_v.weight, tensor_size=2654208, offset=182868992, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[78]: n_dims = 1, name = v.blk.4.attn_v.bias, tensor_size=4608, offset=185523200, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[79]: n_dims = 2, name = v.blk.4.attn_out.weight, tensor_size=2654208, offset=185527808, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[80]: n_dims = 1, name = v.blk.4.attn_out.bias, tensor_size=4608, offset=188182016, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[81]: n_dims = 1, name = v.blk.4.ln1.weight, tensor_size=4608, offset=188186624, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[82]: n_dims = 1, name = v.blk.4.ln1.bias, tensor_size=4608, offset=188191232, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[83]: n_dims = 2, name = v.blk.4.ffn_down.weight, tensor_size=9916416, offset=188195840, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[84]: n_dims = 1, name = v.blk.4.ffn_down.bias, tensor_size=17216, offset=198112256, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[85]: n_dims = 2, name = v.blk.4.ffn_up.weight, tensor_size=9916416, offset=198129472, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[86]: n_dims = 1, name = v.blk.4.ffn_up.bias, tensor_size=4608, offset=208045888, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[87]: n_dims = 1, name = v.blk.4.ln2.weight, tensor_size=4608, offset=208050496, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[88]: n_dims = 1, name = v.blk.4.ln2.bias, tensor_size=4608, offset=208055104, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[89]: n_dims = 2, name = v.blk.5.attn_q.weight, tensor_size=2654208, offset=208059712, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[90]: n_dims = 1, name = v.blk.5.attn_q.bias, tensor_size=4608, offset=210713920, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[91]: n_dims = 2, name = v.blk.5.attn_k.weight, tensor_size=2654208, offset=210718528, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[92]: n_dims = 1, name = v.blk.5.attn_k.bias, tensor_size=4608, offset=213372736, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[93]: n_dims = 2, name = v.blk.5.attn_v.weight, tensor_size=2654208, offset=213377344, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[94]: n_dims = 1, name = v.blk.5.attn_v.bias, tensor_size=4608, offset=216031552, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[95]: n_dims = 2, name = v.blk.5.attn_out.weight, tensor_size=2654208, offset=216036160, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[96]: n_dims = 1, name = v.blk.5.attn_out.bias, tensor_size=4608, offset=218690368, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[97]: n_dims = 1, name = v.blk.5.ln1.weight, tensor_size=4608, offset=218694976, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[98]: n_dims = 1, name = v.blk.5.ln1.bias, tensor_size=4608, offset=218699584, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[99]: n_dims = 2, name = v.blk.5.ffn_down.weight, tensor_size=9916416, offset=218704192, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[100]: n_dims = 1, name = v.blk.5.ffn_down.bias, tensor_size=17216, offset=228620608, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[101]: n_dims = 2, name = v.blk.5.ffn_up.weight, tensor_size=9916416, offset=228637824, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[102]: n_dims = 1, name = v.blk.5.ffn_up.bias, tensor_size=4608, offset=238554240, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[103]: n_dims = 1, name = v.blk.5.ln2.weight, tensor_size=4608, offset=238558848, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[104]: n_dims = 1, name = v.blk.5.ln2.bias, tensor_size=4608, offset=238563456, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[105]: n_dims = 2, name = v.blk.6.attn_q.weight, tensor_size=2654208, offset=238568064, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[106]: n_dims = 1, name = v.blk.6.attn_q.bias, tensor_size=4608, offset=241222272, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[107]: n_dims = 2, name = v.blk.6.attn_k.weight, tensor_size=2654208, offset=241226880, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[108]: n_dims = 1, name = v.blk.6.attn_k.bias, tensor_size=4608, offset=243881088, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[109]: n_dims = 2, name = v.blk.6.attn_v.weight, tensor_size=2654208, offset=243885696, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[110]: n_dims = 1, name = v.blk.6.attn_v.bias, tensor_size=4608, offset=246539904, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[111]: n_dims = 2, name = v.blk.6.attn_out.weight, tensor_size=2654208, offset=246544512, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[112]: n_dims = 1, name = v.blk.6.attn_out.bias, tensor_size=4608, offset=249198720, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[113]: n_dims = 1, name = v.blk.6.ln1.weight, tensor_size=4608, offset=249203328, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[114]: n_dims = 1, name = v.blk.6.ln1.bias, tensor_size=4608, offset=249207936, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[115]: n_dims = 2, name = v.blk.6.ffn_down.weight, tensor_size=9916416, offset=249212544, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[116]: n_dims = 1, name = v.blk.6.ffn_down.bias, tensor_size=17216, offset=259128960, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[117]: n_dims = 2, name = v.blk.6.ffn_up.weight, tensor_size=9916416, offset=259146176, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[118]: n_dims = 1, name = v.blk.6.ffn_up.bias, tensor_size=4608, offset=269062592, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[119]: n_dims = 1, name = v.blk.6.ln2.weight, tensor_size=4608, offset=269067200, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[120]: n_dims = 1, name = v.blk.6.ln2.bias, tensor_size=4608, offset=269071808, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[121]: n_dims = 2, name = v.blk.7.attn_q.weight, tensor_size=2654208, offset=269076416, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[122]: n_dims = 1, name = v.blk.7.attn_q.bias, tensor_size=4608, offset=271730624, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[123]: n_dims = 2, name = v.blk.7.attn_k.weight, tensor_size=2654208, offset=271735232, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[124]: n_dims = 1, name = v.blk.7.attn_k.bias, tensor_size=4608, offset=274389440, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[125]: n_dims = 2, name = v.blk.7.attn_v.weight, tensor_size=2654208, offset=274394048, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[126]: n_dims = 1, name = v.blk.7.attn_v.bias, tensor_size=4608, offset=277048256, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[127]: n_dims = 2, name = v.blk.7.attn_out.weight, tensor_size=2654208, offset=277052864, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[128]: n_dims = 1, name = v.blk.7.attn_out.bias, tensor_size=4608, offset=279707072, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[129]: n_dims = 1, name = v.blk.7.ln1.weight, tensor_size=4608, offset=279711680, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[130]: n_dims = 1, name = v.blk.7.ln1.bias, tensor_size=4608, offset=279716288, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[131]: n_dims = 2, name = v.blk.7.ffn_down.weight, tensor_size=9916416, offset=279720896, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[132]: n_dims = 1, name = v.blk.7.ffn_down.bias, tensor_size=17216, offset=289637312, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[133]: n_dims = 2, name = v.blk.7.ffn_up.weight, tensor_size=9916416, offset=289654528, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[134]: n_dims = 1, name = v.blk.7.ffn_up.bias, tensor_size=4608, offset=299570944, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[135]: n_dims = 1, name = v.blk.7.ln2.weight, tensor_size=4608, offset=299575552, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[136]: n_dims = 1, name = v.blk.7.ln2.bias, tensor_size=4608, offset=299580160, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[137]: n_dims = 2, name = v.blk.8.attn_q.weight, tensor_size=2654208, offset=299584768, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[138]: n_dims = 1, name = v.blk.8.attn_q.bias, tensor_size=4608, offset=302238976, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[139]: n_dims = 2, name = v.blk.8.attn_k.weight, tensor_size=2654208, offset=302243584, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[140]: n_dims = 1, name = v.blk.8.attn_k.bias, tensor_size=4608, offset=304897792, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[141]: n_dims = 2, name = v.blk.8.attn_v.weight, tensor_size=2654208, offset=304902400, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[142]: n_dims = 1, name = v.blk.8.attn_v.bias, tensor_size=4608, offset=307556608, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[143]: n_dims = 2, name = v.blk.8.attn_out.weight, tensor_size=2654208, offset=307561216, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[144]: n_dims = 1, name = v.blk.8.attn_out.bias, tensor_size=4608, offset=310215424, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[145]: n_dims = 1, name = v.blk.8.ln1.weight, tensor_size=4608, offset=310220032, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[146]: n_dims = 1, name = v.blk.8.ln1.bias, tensor_size=4608, offset=310224640, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[147]: n_dims = 2, name = v.blk.8.ffn_down.weight, tensor_size=9916416, offset=310229248, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[148]: n_dims = 1, name = v.blk.8.ffn_down.bias, tensor_size=17216, offset=320145664, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[149]: n_dims = 2, name = v.blk.8.ffn_up.weight, tensor_size=9916416, offset=320162880, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[150]: n_dims = 1, name = v.blk.8.ffn_up.bias, tensor_size=4608, offset=330079296, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[151]: n_dims = 1, name = v.blk.8.ln2.weight, tensor_size=4608, offset=330083904, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[152]: n_dims = 1, name = v.blk.8.ln2.bias, tensor_size=4608, offset=330088512, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[153]: n_dims = 2, name = v.blk.9.attn_q.weight, tensor_size=2654208, offset=330093120, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[154]: n_dims = 1, name = v.blk.9.attn_q.bias, tensor_size=4608, offset=332747328, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[155]: n_dims = 2, name = v.blk.9.attn_k.weight, tensor_size=2654208, offset=332751936, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[156]: n_dims = 1, name = v.blk.9.attn_k.bias, tensor_size=4608, offset=335406144, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[157]: n_dims = 2, name = v.blk.9.attn_v.weight, tensor_size=2654208, offset=335410752, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[158]: n_dims = 1, name = v.blk.9.attn_v.bias, tensor_size=4608, offset=338064960, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[159]: n_dims = 2, name = v.blk.9.attn_out.weight, tensor_size=2654208, offset=338069568, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[160]: n_dims = 1, name = v.blk.9.attn_out.bias, tensor_size=4608, offset=340723776, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[161]: n_dims = 1, name = v.blk.9.ln1.weight, tensor_size=4608, offset=340728384, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[162]: n_dims = 1, name = v.blk.9.ln1.bias, tensor_size=4608, offset=340732992, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[163]: n_dims = 2, name = v.blk.9.ffn_down.weight, tensor_size=9916416, offset=340737600, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[164]: n_dims = 1, name = v.blk.9.ffn_down.bias, tensor_size=17216, offset=350654016, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[165]: n_dims = 2, name = v.blk.9.ffn_up.weight, tensor_size=9916416, offset=350671232, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[166]: n_dims = 1, name = v.blk.9.ffn_up.bias, tensor_size=4608, offset=360587648, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[167]: n_dims = 1, name = v.blk.9.ln2.weight, tensor_size=4608, offset=360592256, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[168]: n_dims = 1, name = v.blk.9.ln2.bias, tensor_size=4608, offset=360596864, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[169]: n_dims = 2, name = v.blk.10.attn_q.weight, tensor_size=2654208, offset=360601472, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[170]: n_dims = 1, name = v.blk.10.attn_q.bias, tensor_size=4608, offset=363255680, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[171]: n_dims = 2, name = v.blk.10.attn_k.weight, tensor_size=2654208, offset=363260288, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[172]: n_dims = 1, name = v.blk.10.attn_k.bias, tensor_size=4608, offset=365914496, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[173]: n_dims = 2, name = v.blk.10.attn_v.weight, tensor_size=2654208, offset=365919104, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[174]: n_dims = 1, name = v.blk.10.attn_v.bias, tensor_size=4608, offset=368573312, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[175]: n_dims = 2, name = v.blk.10.attn_out.weight, tensor_size=2654208, offset=368577920, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[176]: n_dims = 1, name = v.blk.10.attn_out.bias, tensor_size=4608, offset=371232128, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[177]: n_dims = 1, name = v.blk.10.ln1.weight, tensor_size=4608, offset=371236736, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[178]: n_dims = 1, name = v.blk.10.ln1.bias, tensor_size=4608, offset=371241344, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[179]: n_dims = 2, name = v.blk.10.ffn_down.weight, tensor_size=9916416, offset=371245952, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[180]: n_dims = 1, name = v.blk.10.ffn_down.bias, tensor_size=17216, offset=381162368, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[181]: n_dims = 2, name = v.blk.10.ffn_up.weight, tensor_size=9916416, offset=381179584, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[182]: n_dims = 1, name = v.blk.10.ffn_up.bias, tensor_size=4608, offset=391096000, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[183]: n_dims = 1, name = v.blk.10.ln2.weight, tensor_size=4608, offset=391100608, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[184]: n_dims = 1, name = v.blk.10.ln2.bias, tensor_size=4608, offset=391105216, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[185]: n_dims = 2, name = v.blk.11.attn_q.weight, tensor_size=2654208, offset=391109824, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[186]: n_dims = 1, name = v.blk.11.attn_q.bias, tensor_size=4608, offset=393764032, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[187]: n_dims = 2, name = v.blk.11.attn_k.weight, tensor_size=2654208, offset=393768640, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[188]: n_dims = 1, name = v.blk.11.attn_k.bias, tensor_size=4608, offset=396422848, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[189]: n_dims = 2, name = v.blk.11.attn_v.weight, tensor_size=2654208, offset=396427456, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[190]: n_dims = 1, name = v.blk.11.attn_v.bias, tensor_size=4608, offset=399081664, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[191]: n_dims = 2, name = v.blk.11.attn_out.weight, tensor_size=2654208, offset=399086272, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[192]: n_dims = 1, name = v.blk.11.attn_out.bias, tensor_size=4608, offset=401740480, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[193]: n_dims = 1, name = v.blk.11.ln1.weight, tensor_size=4608, offset=401745088, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[194]: n_dims = 1, name = v.blk.11.ln1.bias, tensor_size=4608, offset=401749696, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[195]: n_dims = 2, name = v.blk.11.ffn_down.weight, tensor_size=9916416, offset=401754304, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[196]: n_dims = 1, name = v.blk.11.ffn_down.bias, tensor_size=17216, offset=411670720, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[197]: n_dims = 2, name = v.blk.11.ffn_up.weight, tensor_size=9916416, offset=411687936, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[198]: n_dims = 1, name = v.blk.11.ffn_up.bias, tensor_size=4608, offset=421604352, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[199]: n_dims = 1, name = v.blk.11.ln2.weight, tensor_size=4608, offset=421608960, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[200]: n_dims = 1, name = v.blk.11.ln2.bias, tensor_size=4608, offset=421613568, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[201]: n_dims = 2, name = v.blk.12.attn_q.weight, tensor_size=2654208, offset=421618176, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[202]: n_dims = 1, name = v.blk.12.attn_q.bias, tensor_size=4608, offset=424272384, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[203]: n_dims = 2, name = v.blk.12.attn_k.weight, tensor_size=2654208, offset=424276992, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[204]: n_dims = 1, name = v.blk.12.attn_k.bias, tensor_size=4608, offset=426931200, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[205]: n_dims = 2, name = v.blk.12.attn_v.weight, tensor_size=2654208, offset=426935808, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[206]: n_dims = 1, name = v.blk.12.attn_v.bias, tensor_size=4608, offset=429590016, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[207]: n_dims = 2, name = v.blk.12.attn_out.weight, tensor_size=2654208, offset=429594624, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[208]: n_dims = 1, name = v.blk.12.attn_out.bias, tensor_size=4608, offset=432248832, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[209]: n_dims = 1, name = v.blk.12.ln1.weight, tensor_size=4608, offset=432253440, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[210]: n_dims = 1, name = v.blk.12.ln1.bias, tensor_size=4608, offset=432258048, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[211]: n_dims = 2, name = v.blk.12.ffn_down.weight, tensor_size=9916416, offset=432262656, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[212]: n_dims = 1, name = v.blk.12.ffn_down.bias, tensor_size=17216, offset=442179072, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[213]: n_dims = 2, name = v.blk.12.ffn_up.weight, tensor_size=9916416, offset=442196288, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[214]: n_dims = 1, name = v.blk.12.ffn_up.bias, tensor_size=4608, offset=452112704, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[215]: n_dims = 1, name = v.blk.12.ln2.weight, tensor_size=4608, offset=452117312, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[216]: n_dims = 1, name = v.blk.12.ln2.bias, tensor_size=4608, offset=452121920, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[217]: n_dims = 2, name = v.blk.13.attn_q.weight, tensor_size=2654208, offset=452126528, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[218]: n_dims = 1, name = v.blk.13.attn_q.bias, tensor_size=4608, offset=454780736, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[219]: n_dims = 2, name = v.blk.13.attn_k.weight, tensor_size=2654208, offset=454785344, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[220]: n_dims = 1, name = v.blk.13.attn_k.bias, tensor_size=4608, offset=457439552, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[221]: n_dims = 2, name = v.blk.13.attn_v.weight, tensor_size=2654208, offset=457444160, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[222]: n_dims = 1, name = v.blk.13.attn_v.bias, tensor_size=4608, offset=460098368, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[223]: n_dims = 2, name = v.blk.13.attn_out.weight, tensor_size=2654208, offset=460102976, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[224]: n_dims = 1, name = v.blk.13.attn_out.bias, tensor_size=4608, offset=462757184, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[225]: n_dims = 1, name = v.blk.13.ln1.weight, tensor_size=4608, offset=462761792, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[226]: n_dims = 1, name = v.blk.13.ln1.bias, tensor_size=4608, offset=462766400, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[227]: n_dims = 2, name = v.blk.13.ffn_down.weight, tensor_size=9916416, offset=462771008, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[228]: n_dims = 1, name = v.blk.13.ffn_down.bias, tensor_size=17216, offset=472687424, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[229]: n_dims = 2, name = v.blk.13.ffn_up.weight, tensor_size=9916416, offset=472704640, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[230]: n_dims = 1, name = v.blk.13.ffn_up.bias, tensor_size=4608, offset=482621056, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[231]: n_dims = 1, name = v.blk.13.ln2.weight, tensor_size=4608, offset=482625664, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[232]: n_dims = 1, name = v.blk.13.ln2.bias, tensor_size=4608, offset=482630272, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[233]: n_dims = 2, name = v.blk.14.attn_q.weight, tensor_size=2654208, offset=482634880, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[234]: n_dims = 1, name = v.blk.14.attn_q.bias, tensor_size=4608, offset=485289088, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[235]: n_dims = 2, name = v.blk.14.attn_k.weight, tensor_size=2654208, offset=485293696, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[236]: n_dims = 1, name = v.blk.14.attn_k.bias, tensor_size=4608, offset=487947904, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[237]: n_dims = 2, name = v.blk.14.attn_v.weight, tensor_size=2654208, offset=487952512, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[238]: n_dims = 1, name = v.blk.14.attn_v.bias, tensor_size=4608, offset=490606720, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[239]: n_dims = 2, name = v.blk.14.attn_out.weight, tensor_size=2654208, offset=490611328, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[240]: n_dims = 1, name = v.blk.14.attn_out.bias, tensor_size=4608, offset=493265536, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[241]: n_dims = 1, name = v.blk.14.ln1.weight, tensor_size=4608, offset=493270144, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[242]: n_dims = 1, name = v.blk.14.ln1.bias, tensor_size=4608, offset=493274752, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[243]: n_dims = 2, name = v.blk.14.ffn_down.weight, tensor_size=9916416, offset=493279360, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[244]: n_dims = 1, name = v.blk.14.ffn_down.bias, tensor_size=17216, offset=503195776, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[245]: n_dims = 2, name = v.blk.14.ffn_up.weight, tensor_size=9916416, offset=503212992, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[246]: n_dims = 1, name = v.blk.14.ffn_up.bias, tensor_size=4608, offset=513129408, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[247]: n_dims = 1, name = v.blk.14.ln2.weight, tensor_size=4608, offset=513134016, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[248]: n_dims = 1, name = v.blk.14.ln2.bias, tensor_size=4608, offset=513138624, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[249]: n_dims = 2, name = v.blk.15.attn_q.weight, tensor_size=2654208, offset=513143232, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[250]: n_dims = 1, name = v.blk.15.attn_q.bias, tensor_size=4608, offset=515797440, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[251]: n_dims = 2, name = v.blk.15.attn_k.weight, tensor_size=2654208, offset=515802048, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[252]: n_dims = 1, name = v.blk.15.attn_k.bias, tensor_size=4608, offset=518456256, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[253]: n_dims = 2, name = v.blk.15.attn_v.weight, tensor_size=2654208, offset=518460864, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[254]: n_dims = 1, name = v.blk.15.attn_v.bias, tensor_size=4608, offset=521115072, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[255]: n_dims = 2, name = v.blk.15.attn_out.weight, tensor_size=2654208, offset=521119680, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[256]: n_dims = 1, name = v.blk.15.attn_out.bias, tensor_size=4608, offset=523773888, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[257]: n_dims = 1, name = v.blk.15.ln1.weight, tensor_size=4608, offset=523778496, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[258]: n_dims = 1, name = v.blk.15.ln1.bias, tensor_size=4608, offset=523783104, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[259]: n_dims = 2, name = v.blk.15.ffn_down.weight, tensor_size=9916416, offset=523787712, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[260]: n_dims = 1, name = v.blk.15.ffn_down.bias, tensor_size=17216, offset=533704128, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[261]: n_dims = 2, name = v.blk.15.ffn_up.weight, tensor_size=9916416, offset=533721344, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[262]: n_dims = 1, name = v.blk.15.ffn_up.bias, tensor_size=4608, offset=543637760, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[263]: n_dims = 1, name = v.blk.15.ln2.weight, tensor_size=4608, offset=543642368, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[264]: n_dims = 1, name = v.blk.15.ln2.bias, tensor_size=4608, offset=543646976, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[265]: n_dims = 2, name = v.blk.16.attn_q.weight, tensor_size=2654208, offset=543651584, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[266]: n_dims = 1, name = v.blk.16.attn_q.bias, tensor_size=4608, offset=546305792, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[267]: n_dims = 2, name = v.blk.16.attn_k.weight, tensor_size=2654208, offset=546310400, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[268]: n_dims = 1, name = v.blk.16.attn_k.bias, tensor_size=4608, offset=548964608, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[269]: n_dims = 2, name = v.blk.16.attn_v.weight, tensor_size=2654208, offset=548969216, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[270]: n_dims = 1, name = v.blk.16.attn_v.bias, tensor_size=4608, offset=551623424, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[271]: n_dims = 2, name = v.blk.16.attn_out.weight, tensor_size=2654208, offset=551628032, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[272]: n_dims = 1, name = v.blk.16.attn_out.bias, tensor_size=4608, offset=554282240, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[273]: n_dims = 1, name = v.blk.16.ln1.weight, tensor_size=4608, offset=554286848, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[274]: n_dims = 1, name = v.blk.16.ln1.bias, tensor_size=4608, offset=554291456, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[275]: n_dims = 2, name = v.blk.16.ffn_down.weight, tensor_size=9916416, offset=554296064, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[276]: n_dims = 1, name = v.blk.16.ffn_down.bias, tensor_size=17216, offset=564212480, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[277]: n_dims = 2, name = v.blk.16.ffn_up.weight, tensor_size=9916416, offset=564229696, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[278]: n_dims = 1, name = v.blk.16.ffn_up.bias, tensor_size=4608, offset=574146112, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[279]: n_dims = 1, name = v.blk.16.ln2.weight, tensor_size=4608, offset=574150720, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[280]: n_dims = 1, name = v.blk.16.ln2.bias, tensor_size=4608, offset=574155328, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[281]: n_dims = 2, name = v.blk.17.attn_q.weight, tensor_size=2654208, offset=574159936, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[282]: n_dims = 1, name = v.blk.17.attn_q.bias, tensor_size=4608, offset=576814144, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[283]: n_dims = 2, name = v.blk.17.attn_k.weight, tensor_size=2654208, offset=576818752, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[284]: n_dims = 1, name = v.blk.17.attn_k.bias, tensor_size=4608, offset=579472960, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[285]: n_dims = 2, name = v.blk.17.attn_v.weight, tensor_size=2654208, offset=579477568, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[286]: n_dims = 1, name = v.blk.17.attn_v.bias, tensor_size=4608, offset=582131776, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[287]: n_dims = 2, name = v.blk.17.attn_out.weight, tensor_size=2654208, offset=582136384, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[288]: n_dims = 1, name = v.blk.17.attn_out.bias, tensor_size=4608, offset=584790592, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[289]: n_dims = 1, name = v.blk.17.ln1.weight, tensor_size=4608, offset=584795200, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[290]: n_dims = 1, name = v.blk.17.ln1.bias, tensor_size=4608, offset=584799808, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[291]: n_dims = 2, name = v.blk.17.ffn_down.weight, tensor_size=9916416, offset=584804416, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[292]: n_dims = 1, name = v.blk.17.ffn_down.bias, tensor_size=17216, offset=594720832, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[293]: n_dims = 2, name = v.blk.17.ffn_up.weight, tensor_size=9916416, offset=594738048, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[294]: n_dims = 1, name = v.blk.17.ffn_up.bias, tensor_size=4608, offset=604654464, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[295]: n_dims = 1, name = v.blk.17.ln2.weight, tensor_size=4608, offset=604659072, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[296]: n_dims = 1, name = v.blk.17.ln2.bias, tensor_size=4608, offset=604663680, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[297]: n_dims = 2, name = v.blk.18.attn_q.weight, tensor_size=2654208, offset=604668288, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[298]: n_dims = 1, name = v.blk.18.attn_q.bias, tensor_size=4608, offset=607322496, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[299]: n_dims = 2, name = v.blk.18.attn_k.weight, tensor_size=2654208, offset=607327104, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[300]: n_dims = 1, name = v.blk.18.attn_k.bias, tensor_size=4608, offset=609981312, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[301]: n_dims = 2, name = v.blk.18.attn_v.weight, tensor_size=2654208, offset=609985920, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[302]: n_dims = 1, name = v.blk.18.attn_v.bias, tensor_size=4608, offset=612640128, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[303]: n_dims = 2, name = v.blk.18.attn_out.weight, tensor_size=2654208, offset=612644736, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[304]: n_dims = 1, name = v.blk.18.attn_out.bias, tensor_size=4608, offset=615298944, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[305]: n_dims = 1, name = v.blk.18.ln1.weight, tensor_size=4608, offset=615303552, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[306]: n_dims = 1, name = v.blk.18.ln1.bias, tensor_size=4608, offset=615308160, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[307]: n_dims = 2, name = v.blk.18.ffn_down.weight, tensor_size=9916416, offset=615312768, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[308]: n_dims = 1, name = v.blk.18.ffn_down.bias, tensor_size=17216, offset=625229184, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[309]: n_dims = 2, name = v.blk.18.ffn_up.weight, tensor_size=9916416, offset=625246400, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[310]: n_dims = 1, name = v.blk.18.ffn_up.bias, tensor_size=4608, offset=635162816, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[311]: n_dims = 1, name = v.blk.18.ln2.weight, tensor_size=4608, offset=635167424, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[312]: n_dims = 1, name = v.blk.18.ln2.bias, tensor_size=4608, offset=635172032, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[313]: n_dims = 2, name = v.blk.19.attn_q.weight, tensor_size=2654208, offset=635176640, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[314]: n_dims = 1, name = v.blk.19.attn_q.bias, tensor_size=4608, offset=637830848, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[315]: n_dims = 2, name = v.blk.19.attn_k.weight, tensor_size=2654208, offset=637835456, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[316]: n_dims = 1, name = v.blk.19.attn_k.bias, tensor_size=4608, offset=640489664, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[317]: n_dims = 2, name = v.blk.19.attn_v.weight, tensor_size=2654208, offset=640494272, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[318]: n_dims = 1, name = v.blk.19.attn_v.bias, tensor_size=4608, offset=643148480, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[319]: n_dims = 2, name = v.blk.19.attn_out.weight, tensor_size=2654208, offset=643153088, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[320]: n_dims = 1, name = v.blk.19.attn_out.bias, tensor_size=4608, offset=645807296, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[321]: n_dims = 1, name = v.blk.19.ln1.weight, tensor_size=4608, offset=645811904, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[322]: n_dims = 1, name = v.blk.19.ln1.bias, tensor_size=4608, offset=645816512, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[323]: n_dims = 2, name = v.blk.19.ffn_down.weight, tensor_size=9916416, offset=645821120, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[324]: n_dims = 1, name = v.blk.19.ffn_down.bias, tensor_size=17216, offset=655737536, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[325]: n_dims = 2, name = v.blk.19.ffn_up.weight, tensor_size=9916416, offset=655754752, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[326]: n_dims = 1, name = v.blk.19.ffn_up.bias, tensor_size=4608, offset=665671168, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[327]: n_dims = 1, name = v.blk.19.ln2.weight, tensor_size=4608, offset=665675776, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[328]: n_dims = 1, name = v.blk.19.ln2.bias, tensor_size=4608, offset=665680384, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[329]: n_dims = 2, name = v.blk.20.attn_q.weight, tensor_size=2654208, offset=665684992, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[330]: n_dims = 1, name = v.blk.20.attn_q.bias, tensor_size=4608, offset=668339200, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[331]: n_dims = 2, name = v.blk.20.attn_k.weight, tensor_size=2654208, offset=668343808, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[332]: n_dims = 1, name = v.blk.20.attn_k.bias, tensor_size=4608, offset=670998016, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[333]: n_dims = 2, name = v.blk.20.attn_v.weight, tensor_size=2654208, offset=671002624, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[334]: n_dims = 1, name = v.blk.20.attn_v.bias, tensor_size=4608, offset=673656832, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[335]: n_dims = 2, name = v.blk.20.attn_out.weight, tensor_size=2654208, offset=673661440, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[336]: n_dims = 1, name = v.blk.20.attn_out.bias, tensor_size=4608, offset=676315648, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[337]: n_dims = 1, name = v.blk.20.ln1.weight, tensor_size=4608, offset=676320256, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[338]: n_dims = 1, name = v.blk.20.ln1.bias, tensor_size=4608, offset=676324864, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[339]: n_dims = 2, name = v.blk.20.ffn_down.weight, tensor_size=9916416, offset=676329472, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[340]: n_dims = 1, name = v.blk.20.ffn_down.bias, tensor_size=17216, offset=686245888, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[341]: n_dims = 2, name = v.blk.20.ffn_up.weight, tensor_size=9916416, offset=686263104, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[342]: n_dims = 1, name = v.blk.20.ffn_up.bias, tensor_size=4608, offset=696179520, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[343]: n_dims = 1, name = v.blk.20.ln2.weight, tensor_size=4608, offset=696184128, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[344]: n_dims = 1, name = v.blk.20.ln2.bias, tensor_size=4608, offset=696188736, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[345]: n_dims = 2, name = v.blk.21.attn_q.weight, tensor_size=2654208, offset=696193344, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[346]: n_dims = 1, name = v.blk.21.attn_q.bias, tensor_size=4608, offset=698847552, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[347]: n_dims = 2, name = v.blk.21.attn_k.weight, tensor_size=2654208, offset=698852160, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[348]: n_dims = 1, name = v.blk.21.attn_k.bias, tensor_size=4608, offset=701506368, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[349]: n_dims = 2, name = v.blk.21.attn_v.weight, tensor_size=2654208, offset=701510976, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[350]: n_dims = 1, name = v.blk.21.attn_v.bias, tensor_size=4608, offset=704165184, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[351]: n_dims = 2, name = v.blk.21.attn_out.weight, tensor_size=2654208, offset=704169792, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[352]: n_dims = 1, name = v.blk.21.attn_out.bias, tensor_size=4608, offset=706824000, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[353]: n_dims = 1, name = v.blk.21.ln1.weight, tensor_size=4608, offset=706828608, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[354]: n_dims = 1, name = v.blk.21.ln1.bias, tensor_size=4608, offset=706833216, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[355]: n_dims = 2, name = v.blk.21.ffn_down.weight, tensor_size=9916416, offset=706837824, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[356]: n_dims = 1, name = v.blk.21.ffn_down.bias, tensor_size=17216, offset=716754240, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[357]: n_dims = 2, name = v.blk.21.ffn_up.weight, tensor_size=9916416, offset=716771456, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[358]: n_dims = 1, name = v.blk.21.ffn_up.bias, tensor_size=4608, offset=726687872, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[359]: n_dims = 1, name = v.blk.21.ln2.weight, tensor_size=4608, offset=726692480, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[360]: n_dims = 1, name = v.blk.21.ln2.bias, tensor_size=4608, offset=726697088, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[361]: n_dims = 2, name = v.blk.22.attn_q.weight, tensor_size=2654208, offset=726701696, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[362]: n_dims = 1, name = v.blk.22.attn_q.bias, tensor_size=4608, offset=729355904, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[363]: n_dims = 2, name = v.blk.22.attn_k.weight, tensor_size=2654208, offset=729360512, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[364]: n_dims = 1, name = v.blk.22.attn_k.bias, tensor_size=4608, offset=732014720, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[365]: n_dims = 2, name = v.blk.22.attn_v.weight, tensor_size=2654208, offset=732019328, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[366]: n_dims = 1, name = v.blk.22.attn_v.bias, tensor_size=4608, offset=734673536, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[367]: n_dims = 2, name = v.blk.22.attn_out.weight, tensor_size=2654208, offset=734678144, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[368]: n_dims = 1, name = v.blk.22.attn_out.bias, tensor_size=4608, offset=737332352, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[369]: n_dims = 1, name = v.blk.22.ln1.weight, tensor_size=4608, offset=737336960, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[370]: n_dims = 1, name = v.blk.22.ln1.bias, tensor_size=4608, offset=737341568, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[371]: n_dims = 2, name = v.blk.22.ffn_down.weight, tensor_size=9916416, offset=737346176, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[372]: n_dims = 1, name = v.blk.22.ffn_down.bias, tensor_size=17216, offset=747262592, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[373]: n_dims = 2, name = v.blk.22.ffn_up.weight, tensor_size=9916416, offset=747279808, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[374]: n_dims = 1, name = v.blk.22.ffn_up.bias, tensor_size=4608, offset=757196224, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[375]: n_dims = 1, name = v.blk.22.ln2.weight, tensor_size=4608, offset=757200832, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[376]: n_dims = 1, name = v.blk.22.ln2.bias, tensor_size=4608, offset=757205440, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[377]: n_dims = 2, name = v.blk.23.attn_q.weight, tensor_size=2654208, offset=757210048, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[378]: n_dims = 1, name = v.blk.23.attn_q.bias, tensor_size=4608, offset=759864256, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[379]: n_dims = 2, name = v.blk.23.attn_k.weight, tensor_size=2654208, offset=759868864, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[380]: n_dims = 1, name = v.blk.23.attn_k.bias, tensor_size=4608, offset=762523072, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[381]: n_dims = 2, name = v.blk.23.attn_v.weight, tensor_size=2654208, offset=762527680, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[382]: n_dims = 1, name = v.blk.23.attn_v.bias, tensor_size=4608, offset=765181888, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[383]: n_dims = 2, name = v.blk.23.attn_out.weight, tensor_size=2654208, offset=765186496, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[384]: n_dims = 1, name = v.blk.23.attn_out.bias, tensor_size=4608, offset=767840704, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[385]: n_dims = 1, name = v.blk.23.ln1.weight, tensor_size=4608, offset=767845312, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[386]: n_dims = 1, name = v.blk.23.ln1.bias, tensor_size=4608, offset=767849920, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[387]: n_dims = 2, name = v.blk.23.ffn_down.weight, tensor_size=9916416, offset=767854528, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[388]: n_dims = 1, name = v.blk.23.ffn_down.bias, tensor_size=17216, offset=777770944, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[389]: n_dims = 2, name = v.blk.23.ffn_up.weight, tensor_size=9916416, offset=777788160, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[390]: n_dims = 1, name = v.blk.23.ffn_up.bias, tensor_size=4608, offset=787704576, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[391]: n_dims = 1, name = v.blk.23.ln2.weight, tensor_size=4608, offset=787709184, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[392]: n_dims = 1, name = v.blk.23.ln2.bias, tensor_size=4608, offset=787713792, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[393]: n_dims = 2, name = v.blk.24.attn_q.weight, tensor_size=2654208, offset=787718400, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[394]: n_dims = 1, name = v.blk.24.attn_q.bias, tensor_size=4608, offset=790372608, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[395]: n_dims = 2, name = v.blk.24.attn_k.weight, tensor_size=2654208, offset=790377216, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[396]: n_dims = 1, name = v.blk.24.attn_k.bias, tensor_size=4608, offset=793031424, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[397]: n_dims = 2, name = v.blk.24.attn_v.weight, tensor_size=2654208, offset=793036032, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[398]: n_dims = 1, name = v.blk.24.attn_v.bias, tensor_size=4608, offset=795690240, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[399]: n_dims = 2, name = v.blk.24.attn_out.weight, tensor_size=2654208, offset=795694848, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[400]: n_dims = 1, name = v.blk.24.attn_out.bias, tensor_size=4608, offset=798349056, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[401]: n_dims = 1, name = v.blk.24.ln1.weight, tensor_size=4608, offset=798353664, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[402]: n_dims = 1, name = v.blk.24.ln1.bias, tensor_size=4608, offset=798358272, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[403]: n_dims = 2, name = v.blk.24.ffn_down.weight, tensor_size=9916416, offset=798362880, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[404]: n_dims = 1, name = v.blk.24.ffn_down.bias, tensor_size=17216, offset=808279296, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[405]: n_dims = 2, name = v.blk.24.ffn_up.weight, tensor_size=9916416, offset=808296512, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[406]: n_dims = 1, name = v.blk.24.ffn_up.bias, tensor_size=4608, offset=818212928, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[407]: n_dims = 1, name = v.blk.24.ln2.weight, tensor_size=4608, offset=818217536, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[408]: n_dims = 1, name = v.blk.24.ln2.bias, tensor_size=4608, offset=818222144, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[409]: n_dims = 2, name = v.blk.25.attn_q.weight, tensor_size=2654208, offset=818226752, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[410]: n_dims = 1, name = v.blk.25.attn_q.bias, tensor_size=4608, offset=820880960, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[411]: n_dims = 2, name = v.blk.25.attn_k.weight, tensor_size=2654208, offset=820885568, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[412]: n_dims = 1, name = v.blk.25.attn_k.bias, tensor_size=4608, offset=823539776, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[413]: n_dims = 2, name = v.blk.25.attn_v.weight, tensor_size=2654208, offset=823544384, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[414]: n_dims = 1, name = v.blk.25.attn_v.bias, tensor_size=4608, offset=826198592, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[415]: n_dims = 2, name = v.blk.25.attn_out.weight, tensor_size=2654208, offset=826203200, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[416]: n_dims = 1, name = v.blk.25.attn_out.bias, tensor_size=4608, offset=828857408, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[417]: n_dims = 1, name = v.blk.25.ln1.weight, tensor_size=4608, offset=828862016, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[418]: n_dims = 1, name = v.blk.25.ln1.bias, tensor_size=4608, offset=828866624, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[419]: n_dims = 2, name = v.blk.25.ffn_down.weight, tensor_size=9916416, offset=828871232, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[420]: n_dims = 1, name = v.blk.25.ffn_down.bias, tensor_size=17216, offset=838787648, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[421]: n_dims = 2, name = v.blk.25.ffn_up.weight, tensor_size=9916416, offset=838804864, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[422]: n_dims = 1, name = v.blk.25.ffn_up.bias, tensor_size=4608, offset=848721280, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[423]: n_dims = 1, name = v.blk.25.ln2.weight, tensor_size=4608, offset=848725888, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[424]: n_dims = 1, name = v.blk.25.ln2.bias, tensor_size=4608, offset=848730496, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[425]: n_dims = 2, name = v.blk.26.attn_q.weight, tensor_size=2654208, offset=848735104, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[426]: n_dims = 1, name = v.blk.26.attn_q.bias, tensor_size=4608, offset=851389312, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[427]: n_dims = 2, name = v.blk.26.attn_k.weight, tensor_size=2654208, offset=851393920, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[428]: n_dims = 1, name = v.blk.26.attn_k.bias, tensor_size=4608, offset=854048128, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[429]: n_dims = 2, name = v.blk.26.attn_v.weight, tensor_size=2654208, offset=854052736, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[430]: n_dims = 1, name = v.blk.26.attn_v.bias, tensor_size=4608, offset=856706944, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[431]: n_dims = 2, name = v.blk.26.attn_out.weight, tensor_size=2654208, offset=856711552, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[432]: n_dims = 1, name = v.blk.26.attn_out.bias, tensor_size=4608, offset=859365760, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[433]: n_dims = 1, name = v.blk.26.ln1.weight, tensor_size=4608, offset=859370368, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[434]: n_dims = 1, name = v.blk.26.ln1.bias, tensor_size=4608, offset=859374976, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[435]: n_dims = 2, name = v.blk.26.ffn_down.weight, tensor_size=9916416, offset=859379584, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[436]: n_dims = 1, name = v.blk.26.ffn_down.bias, tensor_size=17216, offset=869296000, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[437]: n_dims = 2, name = v.blk.26.ffn_up.weight, tensor_size=9916416, offset=869313216, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[438]: n_dims = 1, name = v.blk.26.ffn_up.bias, tensor_size=4608, offset=879229632, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[439]: n_dims = 1, name = v.blk.26.ln2.weight, tensor_size=4608, offset=879234240, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[440]: n_dims = 1, name = v.blk.26.ln2.bias, tensor_size=4608, offset=879238848, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[441]: n_dims = 2, name = v.blk.27.attn_q.weight, tensor_size=2654208, offset=879243456, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[442]: n_dims = 1, name = v.blk.27.attn_q.bias, tensor_size=4608, offset=881897664, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[443]: n_dims = 2, name = v.blk.27.attn_k.weight, tensor_size=2654208, offset=881902272, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[444]: n_dims = 1, name = v.blk.27.attn_k.bias, tensor_size=4608, offset=884556480, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[445]: n_dims = 2, name = v.blk.27.attn_v.weight, tensor_size=2654208, offset=884561088, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[446]: n_dims = 1, name = v.blk.27.attn_v.bias, tensor_size=4608, offset=887215296, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[447]: n_dims = 2, name = v.blk.27.attn_out.weight, tensor_size=2654208, offset=887219904, shape:[1152, 1152, 1, 1], type = f16
+clip_model_loader: tensor[448]: n_dims = 1, name = v.blk.27.attn_out.bias, tensor_size=4608, offset=889874112, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[449]: n_dims = 1, name = v.blk.27.ln1.weight, tensor_size=4608, offset=889878720, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[450]: n_dims = 1, name = v.blk.27.ln1.bias, tensor_size=4608, offset=889883328, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[451]: n_dims = 2, name = v.blk.27.ffn_down.weight, tensor_size=9916416, offset=889887936, shape:[1152, 4304, 1, 1], type = f16
+clip_model_loader: tensor[452]: n_dims = 1, name = v.blk.27.ffn_down.bias, tensor_size=17216, offset=899804352, shape:[4304, 1, 1, 1], type = f32
+clip_model_loader: tensor[453]: n_dims = 2, name = v.blk.27.ffn_up.weight, tensor_size=9916416, offset=899821568, shape:[4304, 1152, 1, 1], type = f16
+clip_model_loader: tensor[454]: n_dims = 1, name = v.blk.27.ffn_up.bias, tensor_size=4608, offset=909737984, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[455]: n_dims = 1, name = v.blk.27.ln2.weight, tensor_size=4608, offset=909742592, shape:[1152, 1, 1, 1], type = f32
+clip_model_loader: tensor[456]: n_dims = 1, name = v.blk.27.ln2.bias, tensor_size=4608, offset=909747200, shape:[1152, 1, 1, 1], type = f32
+clip_ctx: CLIP using CUDA0 backend
+load_hparams: projector:          mlp
+load_hparams: n_embd:             1152
+load_hparams: n_head:             16
+load_hparams: n_ff:               4304
+load_hparams: n_layer:            28
+load_hparams: ffn_op:             gelu
+load_hparams: projection_dim:     2048
+
+--- vision hparams ---
+load_hparams: image_size:         378
+load_hparams: patch_size:         14
+load_hparams: has_llava_proj:     1
+load_hparams: minicpmv_version:   0
+load_hparams: n_merge:            0
+load_hparams: n_wa_pattern:       0
+
+load_hparams: model size:         867.61 MiB
+load_hparams: metadata size:      0.16 MiB
+load_tensors: ffn up/down are swapped
+load_tensors: loaded 457 tensors from C:\Users\TheunisvanNiekerk\.ollama\models\blobs\sha256-4cc1cb3660d87ff56432ebeb7884ad35d67c48c7b9f6b2856f305e39c38eed8f
+warmup: warmup with image size = 378 x 378
+alloc_compute_meta:      CUDA0 compute buffer size =    30.83 MiB
+alloc_compute_meta:        CPU compute buffer size =     1.64 MiB
+alloc_compute_meta: graph splits = 1, nodes = 860
+warmup: flash attention is enabled
+time=2026-04-18T01:02:41.679-04:00 level=INFO source=server.go:1402 msg="llama runner started in 4.18 seconds"
+time=2026-04-18T01:02:41.679-04:00 level=INFO source=sched.go:561 msg="loaded runners" count=1
+time=2026-04-18T01:02:41.679-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-18T01:02:41.680-04:00 level=INFO source=server.go:1402 msg="llama runner started in 4.18 seconds"
+image_tokens->nx = 729
+image_tokens->ny = 1
+batch_f32 size = 1
+[GIN] 2026/04/18 - 01:03:21 | 200 |   44.4773698s |       127.0.0.1 | POST     "/api/generate"
+[GIN] 2026/04/18 - 01:04:33 | 200 |      1.6514ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 01:04:37 | 200 |      1.6573ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 01:04:37 | 200 |      1.6212ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 01:04:45 | 200 |      1.5867ms |       127.0.0.1 | GET      "/api/tags"
+[GIN] 2026/04/18 - 01:04:45 | 200 |            0s |       127.0.0.1 | HEAD     "/"
+time=2026-04-18T01:04:46.492-04:00 level=INFO source=download.go:179 msg="downloading 4e30e2665218 in 16 447 MB part(s)"
+time=2026-04-18T01:07:54.912-04:00 level=INFO source=download.go:179 msg="downloading 7339fa418c9a in 1 11 KB part(s)"
+time=2026-04-18T01:07:56.077-04:00 level=INFO source=download.go:179 msg="downloading 56380ca2ab89 in 1 42 B part(s)"
+time=2026-04-18T01:07:57.247-04:00 level=INFO source=download.go:179 msg="downloading c6bc3775a3fa in 1 473 B part(s)"
+[GIN] 2026/04/18 - 01:08:07 | 200 |         3m21s |       127.0.0.1 | POST     "/api/pull"
+time=2026-04-18T01:08:21.649-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53963"
+time=2026-04-18T01:08:22.111-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 53973"
+time=2026-04-18T01:09:09.749-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --port 56970"
+time=2026-04-18T01:09:09.934-04:00 level=INFO source=cpu_windows.go:148 msg=packages count=1
+time=2026-04-18T01:09:09.934-04:00 level=INFO source=cpu_windows.go:195 msg="" package=0 cores=12 efficiency=0 threads=24
+time=2026-04-18T01:09:10.113-04:00 level=INFO source=model.go:97 msg="gemma4: token IDs" image=255999 image_end=258882 audio=256000 audio_end=258883
+time=2026-04-18T01:09:10.115-04:00 level=INFO source=server.go:444 msg="starting runner" cmd="C:\\Users\\TheunisvanNiekerk\\AppData\\Local\\Programs\\Ollama\\ollama.exe runner --ollama-engine --model C:\\Users\\TheunisvanNiekerk\\.ollama\\models\\blobs\\sha256-4e30e2665218745ef463f722c0bf86be0cab6ee676320f1cfadf91e989107448 --port 56979"
+time=2026-04-18T01:09:10.120-04:00 level=INFO source=sched.go:484 msg="system memory" total="63.9 GiB" free="24.6 GiB" free_swap="7.0 GiB"
+time=2026-04-18T01:09:10.120-04:00 level=INFO source=sched.go:491 msg="gpu memory" id=GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 library=CUDA available="1.0 GiB" free="1.5 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-04-18T01:09:10.120-04:00 level=INFO source=server.go:771 msg="loading model" "model layers"=36 requested=-1
+time=2026-04-18T01:09:10.183-04:00 level=INFO source=runner.go:1417 msg="starting ollama engine"
+time=2026-04-18T01:09:10.185-04:00 level=INFO source=runner.go:1452 msg="Server listening on 127.0.0.1:56979"
+time=2026-04-18T01:09:10.194-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:36[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:36(0..35)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T01:09:10.252-04:00 level=INFO source=ggml.go:136 msg="" architecture=gemma4 file_type=Q4_K_M name="" description="" num_tensors=2012 num_key_values=55
+load_backend: loaded CPU backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\ggml-cpu-haswell.dll
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: Quadro P620, compute capability 6.1, VMM: yes, ID: GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2
+load_backend: loaded CUDA backend from C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\lib\ollama\cuda_v12\ggml-cuda.dll
+time=2026-04-18T01:09:10.343-04:00 level=INFO source=ggml.go:104 msg=system CPU.0.SSE3=1 CPU.0.SSSE3=1 CPU.0.AVX=1 CPU.0.AVX2=1 CPU.0.F16C=1 CPU.0.FMA=1 CPU.0.BMI2=1 CPU.0.LLAMAFILE=1 CPU.1.LLAMAFILE=1 CUDA.0.ARCHS=500,520,600,610,700,750,800,860,890,900,1200 CUDA.0.USE_GRAPHS=1 CUDA.0.PEER_MAX_BATCH_SIZE=128 compiler=cgo(clang)
+time=2026-04-18T01:09:10.360-04:00 level=INFO source=model.go:97 msg="gemma4: token IDs" image=255999 image_end=258882 audio=256000 audio_end=258883
+time=2026-04-18T01:09:10.377-04:00 level=INFO source=model.go:138 msg="vision: decode" elapsed=4.5284ms bounds=(0,0)-(2048,2048)
+time=2026-04-18T01:09:10.468-04:00 level=INFO source=model.go:145 msg="vision: preprocess" elapsed=91.5929ms size="[768 768]"
+time=2026-04-18T01:09:10.468-04:00 level=INFO source=model.go:148 msg="vision: pixelValues" shape="[768 768 3]" dim0=768 dim1=768 dim2=3
+time=2026-04-18T01:09:10.468-04:00 level=INFO source=model.go:152 msg="vision: patches" patchesX=48 patchesY=48 total=2304 patchSize=16
+time=2026-04-18T01:09:10.469-04:00 level=INFO source=model.go:156 msg="vision: encoded" elapsed=97.1281ms shape="[1536 256]"
+time=2026-04-18T01:09:10.599-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:fit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:19[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:19(16..34)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T01:09:10.664-04:00 level=INFO source=model.go:97 msg="gemma4: token IDs" image=255999 image_end=258882 audio=256000 audio_end=258883
+time=2026-04-18T01:09:10.677-04:00 level=INFO source=model.go:138 msg="vision: decode" elapsed=519.4µs bounds=(0,0)-(2048,2048)
+time=2026-04-18T01:09:10.767-04:00 level=INFO source=model.go:145 msg="vision: preprocess" elapsed=89.8478ms size="[768 768]"
+time=2026-04-18T01:09:10.767-04:00 level=INFO source=model.go:148 msg="vision: pixelValues" shape="[768 768 3]" dim0=768 dim1=768 dim2=3
+time=2026-04-18T01:09:10.767-04:00 level=INFO source=model.go:152 msg="vision: patches" patchesX=48 patchesY=48 total=2304 patchSize=16
+time=2026-04-18T01:09:10.767-04:00 level=INFO source=model.go:156 msg="vision: encoded" elapsed=90.8976ms shape="[1536 256]"
+time=2026-04-18T01:09:10.795-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:19[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:19(16..34)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T01:09:11.303-04:00 level=INFO source=model.go:97 msg="gemma4: token IDs" image=255999 image_end=258882 audio=256000 audio_end=258883
+time=2026-04-18T01:09:11.315-04:00 level=INFO source=model.go:138 msg="vision: decode" elapsed=611.8µs bounds=(0,0)-(2048,2048)
+time=2026-04-18T01:09:11.408-04:00 level=INFO source=model.go:145 msg="vision: preprocess" elapsed=92.0719ms size="[768 768]"
+time=2026-04-18T01:09:11.409-04:00 level=INFO source=model.go:148 msg="vision: pixelValues" shape="[768 768 3]" dim0=768 dim1=768 dim2=3
+time=2026-04-18T01:09:11.409-04:00 level=INFO source=model.go:152 msg="vision: patches" patchesX=48 patchesY=48 total=2304 patchSize=16
+time=2026-04-18T01:09:11.409-04:00 level=INFO source=model.go:156 msg="vision: encoded" elapsed=94.6563ms shape="[1536 256]"
+time=2026-04-18T01:09:11.770-04:00 level=INFO source=runner.go:1290 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:4096 KvCacheType: NumThreads:12 GPULayers:19[ID:GPU-91a234e0-fe68-22d7-3480-0da1a0cf45f2 Layers:19(16..34)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-04-18T01:09:11.770-04:00 level=INFO source=ggml.go:482 msg="offloading 19 repeating layers to GPU"
+time=2026-04-18T01:09:11.770-04:00 level=INFO source=ggml.go:486 msg="offloading output layer to CPU"
+time=2026-04-18T01:09:11.771-04:00 level=INFO source=ggml.go:494 msg="offloaded 19/36 layers to GPU"
+time=2026-04-18T01:09:11.771-04:00 level=INFO source=device.go:240 msg="model weights" device=CUDA0 size="715.5 MiB"
+time=2026-04-18T01:09:11.771-04:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="6.3 GiB"
+time=2026-04-18T01:09:11.771-04:00 level=INFO source=device.go:256 msg="kv cache" device=CPU size="72.0 MiB"
+time=2026-04-18T01:09:11.771-04:00 level=INFO source=device.go:262 msg="compute graph" device=CUDA0 size="334.8 MiB"
+time=2026-04-18T01:09:11.771-04:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="17.5 MiB"
+time=2026-04-18T01:09:11.771-04:00 level=INFO source=device.go:272 msg="total memory" size="7.4 GiB"
+time=2026-04-18T01:09:11.771-04:00 level=INFO source=sched.go:561 msg="loaded runners" count=1
+time=2026-04-18T01:09:11.771-04:00 level=INFO source=server.go:1364 msg="waiting for llama runner to start responding"
+time=2026-04-18T01:09:11.771-04:00 level=INFO source=server.go:1398 msg="waiting for server to become available" status="llm server loading model"
+time=2026-04-18T01:09:15.279-04:00 level=INFO source=server.go:1402 msg="llama runner started in 5.16 seconds"
+time=2026-04-18T01:09:15.468-04:00 level=INFO source=model.go:138 msg="vision: decode" elapsed=5.509ms bounds=(0,0)-(526,526)
+time=2026-04-18T01:09:15.498-04:00 level=INFO source=model.go:145 msg="vision: preprocess" elapsed=29.7871ms size="[768 768]"
+time=2026-04-18T01:09:15.500-04:00 level=INFO source=model.go:148 msg="vision: pixelValues" shape="[768 768 3]" dim0=768 dim1=768 dim2=3
+time=2026-04-18T01:09:15.500-04:00 level=INFO source=model.go:152 msg="vision: patches" patchesX=48 patchesY=48 total=2304 patchSize=16
+time=2026-04-18T01:09:15.501-04:00 level=INFO source=model.go:156 msg="vision: encoded" elapsed=38.929ms shape="[1536 256]"
+[GIN] 2026/04/18 - 01:10:40 | 200 |         1m30s |       127.0.0.1 | POST     "/api/generate"
+[2026-04-18T05:13:09Z] Stopping app-managed Ollama process.

@@ -1,0 +1,115 @@
+{
+  "configs": [
+    {
+      "context_window_trigger_percent": 70,
+      "frequency_every_n_prompts": 10,
+      "id": "cc_f98er24s",
+      "layers": {
+        "layer1": {
+          "enabled": true,
+          "max_pins": 10,
+          "pin_code_blocks": true,
+          "pin_explicit_instructions": true,
+          "pin_first_message": true,
+          "pin_numbers": true,
+          "pin_urls": true,
+          "pin_user_flagged": true
+        },
+        "layer2": {
+          "enabled": true,
+          "max_tokens": 400,
+          "model_id": "codex-MiniMax-M2.7",
+          "model_provider_id": "provider_1775726633372_1",
+          "trigger_threshold_turns": 8
+        },
+        "layer3": {
+          "enabled": true,
+          "max_tokens": 600,
+          "model_id": "codex-MiniMax-M2.7",
+          "model_provider_id": "provider_1775726633372_1"
+        },
+        "layer4": {
+          "enabled": true,
+          "min_recent_turns": 2
+        }
+      },
+      "name": "HSC",
+      "strategy": "hierarchical_structured",
+      "truncate_top_keep_messages": 6
+    },
+    {
+      "context_window_trigger_percent": 70,
+      "frequency_every_n_prompts": 10,
+      "id": "cc_1775990991086_8",
+      "layers": {
+        "layer1": {
+          "enabled": true,
+          "max_pins": 10,
+          "pin_code_blocks": true,
+          "pin_explicit_instructions": true,
+          "pin_first_message": true,
+          "pin_numbers": true,
+          "pin_urls": true,
+          "pin_user_flagged": false
+        },
+        "layer2": {
+          "enabled": true,
+          "max_tokens": 500,
+          "model_id": "",
+          "model_provider_id": "",
+          "trigger_threshold_turns": 8
+        },
+        "layer3": {
+          "enabled": true,
+          "max_tokens": 800,
+          "model_id": "",
+          "model_provider_id": ""
+        },
+        "layer4": {
+          "enabled": true,
+          "min_recent_turns": 2
+        }
+      },
+      "name": "small_roll",
+      "strategy": "truncate_top",
+      "truncate_top_keep_messages": 2
+    },
+    {
+      "context_window_trigger_percent": 70,
+      "frequency_every_n_prompts": 20,
+      "id": "cc_1776061350132_8",
+      "layers": {
+        "layer1": {
+          "enabled": true,
+          "max_pins": 10,
+          "pin_code_blocks": true,
+          "pin_explicit_instructions": true,
+          "pin_first_message": true,
+          "pin_numbers": true,
+          "pin_urls": true,
+          "pin_user_flagged": true
+        },
+        "layer2": {
+          "enabled": true,
+          "max_tokens": 500,
+          "model_id": "codex-MiniMax-M2.7",
+          "model_provider_id": "provider_1775726633372_1",
+          "trigger_threshold_turns": 8
+        },
+        "layer3": {
+          "enabled": true,
+          "max_tokens": 800,
+          "model_id": "codex-MiniMax-M2.7",
+          "model_provider_id": "provider_1775726633372_1"
+        },
+        "layer4": {
+          "enabled": true,
+          "min_recent_turns": 5
+        }
+      },
+      "name": "New Compression Config",
+      "strategy": "hierarchical_structured",
+      "truncate_top_keep_messages": 20
+    }
+  ]
+}
