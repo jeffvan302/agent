@@ -229,13 +229,234 @@ function renderMessages(messages) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function buildMessageRow(role, content) {
+const INGESTIBLE_UPLOAD_EXTS = new Set([
+  'pdf', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tif', 'tiff',
+  'doc', 'docx', 'docm', 'xls', 'xlsx', 'xlsm', 'ppt', 'pptx', 'pptm'
+]);
+
+function fileExtension(name) {
+  const text = String(name || '');
+  const idx = text.lastIndexOf('.');
+  return idx >= 0 ? text.slice(idx + 1).toLowerCase() : '';
+}
+
+function fileNeedsIngestion(record) {
+  if (!record) return false;
+  if (record.file_kind === 'processed') return true;
+  if (record.needs_ingestion === true) return true;
+  return INGESTIBLE_UPLOAD_EXTS.has(fileExtension(record.filename || record.name));
+}
+
+function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 1024) return n + ' B';
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = n / 1024;
+  let unit = units[0];
+  for (let i = 1; value >= 1024 && i < units.length; i++) {
+    value /= 1024;
+    unit = units[i];
+  }
+  return value.toFixed(value >= 10 ? 1 : 2).replace(/\.0$/, '') + ' ' + unit;
+}
+
+function normalizeFileUploadRecord(input) {
+  let record = {};
+  if (typeof File !== 'undefined' && input instanceof File) {
+    record = {
+      filename: input.name,
+      display_name: input.name,
+      size: input.size,
+      mime_type: input.type,
+      needs_ingestion: fileNeedsIngestion({ filename: input.name }),
+    };
+  } else if (typeof input === 'string') {
+    try {
+      record = JSON.parse(input);
+    } catch (_) {
+      record = { filename: input };
+    }
+  } else if (input && typeof input === 'object') {
+    record = Object.assign({}, input);
+  }
+
+  record.filename = record.filename || record.display_name || record.name || 'Uploaded file';
+  record.display_name = record.display_name || record.filename;
+  if (record.size === undefined && record.bytes !== undefined) record.size = record.bytes;
+  if (!record.status) {
+    record.status = record.extraction_success === false ? 'warning' : 'done';
+  }
+  return record;
+}
+
+function fileUploadIcon(status) {
+  switch (status) {
+    case 'done': return '\u2713';
+    case 'warning': return '\u26A0';
+    case 'error': return '!';
+    case 'pending': return '\u2191';
+    case 'uploading': return '\u2191';
+    case 'ingesting': return '';
+    default: return '\u2191';
+  }
+}
+
+function fileUploadStatusText(record) {
+  const ingestible = fileNeedsIngestion(record);
+  switch (record.status) {
+    case 'pending': return ingestible ? 'Ready for upload and ingestion' : 'Ready for upload';
+    case 'uploading': return 'Uploading';
+    case 'ingesting': return 'Ingesting';
+    case 'done': return ingestible ? 'Ingested' : 'Uploaded';
+    case 'warning': return 'Saved with warning';
+    case 'error': return 'Upload failed';
+    default: return 'Uploading';
+  }
+}
+
+function fileUploadDetailText(record) {
+  const ingestible = fileNeedsIngestion(record);
+  if (record.status === 'error') return record.error || 'The upload could not be completed.';
+  if (record.status === 'warning') {
+    return record.extraction_error || 'The file was saved, but the processed Markdown copy needs attention.';
+  }
+  if (record.status === 'pending') {
+    return ingestible
+      ? 'Waiting to create the readable .agent Markdown copy.'
+      : 'Waiting to place the file in the project folder.';
+  }
+  if (record.status === 'uploading') return 'Moving into the project folder.';
+  if (record.status === 'ingesting') return 'Creating the readable .agent Markdown copy.';
+  return ingestible
+    ? 'Ready in the project folder and available in this chat.'
+    : 'Ready in the project folder.';
+}
+
+function createFileUploadRow(input, initialStatus) {
+  let record = normalizeFileUploadRecord(input);
+  if (initialStatus) record.status = initialStatus;
+
   const row = document.createElement('div');
-  row.className = 'message-row ' + (role === 'user' ? 'user' : 'model');
+  row.className = 'message-row file';
 
   const lbl = document.createElement('div');
   lbl.className = 'message-role-label';
-  lbl.textContent = role === 'user' ? 'You' : role === 'error' ? '⚠' : 'Assistant';
+  lbl.textContent = 'File';
+
+  const card = document.createElement('div');
+  card.className = 'file-upload-card';
+
+  const mark = document.createElement('div');
+  mark.className = 'file-upload-status-mark';
+
+  const body = document.createElement('div');
+  body.className = 'file-upload-body';
+
+  const top = document.createElement('div');
+  top.className = 'file-upload-top';
+
+  const name = document.createElement('div');
+  name.className = 'file-upload-name';
+
+  const status = document.createElement('div');
+  status.className = 'file-upload-status';
+
+  const meta = document.createElement('div');
+  meta.className = 'file-upload-meta';
+
+  const detail = document.createElement('div');
+  detail.className = 'file-upload-detail';
+
+  const links = document.createElement('div');
+  links.className = 'file-upload-links';
+
+  const progress = document.createElement('div');
+  progress.className = 'file-upload-progress';
+  progress.appendChild(document.createElement('span'));
+
+  top.appendChild(name);
+  top.appendChild(status);
+  body.appendChild(top);
+  body.appendChild(meta);
+  body.appendChild(detail);
+  body.appendChild(links);
+  body.appendChild(progress);
+  card.appendChild(mark);
+  card.appendChild(body);
+  row.appendChild(lbl);
+  row.appendChild(card);
+
+  function render(nextRecord) {
+    record = normalizeFileUploadRecord(nextRecord);
+    const currentStatus = record.status || 'uploading';
+    row.dataset.status = currentStatus;
+    card.className = 'file-upload-card status-' + currentStatus;
+    mark.className = 'file-upload-status-mark ' + currentStatus;
+    mark.textContent = fileUploadIcon(currentStatus);
+    name.textContent = record.display_name || record.filename;
+    status.textContent = fileUploadStatusText(record);
+
+    const bits = [];
+    const size = formatBytes(record.size);
+    if (size) bits.push(size);
+    bits.push(fileNeedsIngestion(record) ? 'Processed file' : 'Project file');
+    if (record.project_folder_variable) bits.push(record.project_folder_variable);
+    meta.textContent = bits.join(' · ');
+    detail.textContent = fileUploadDetailText(record);
+
+    links.innerHTML = '';
+    const download = record.absolute_download_url || record.download_url;
+    if (download) {
+      const a = document.createElement('a');
+      a.href = download;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = 'Download';
+      links.appendChild(a);
+    }
+    if (record.agent_index_path) {
+      const span = document.createElement('span');
+      span.textContent = '.agent index ready';
+      links.appendChild(span);
+    }
+    links.hidden = links.childNodes.length === 0;
+    progress.hidden = !['pending', 'uploading', 'ingesting'].includes(currentStatus);
+  }
+
+  render(record);
+  return {
+    row,
+    update(update) {
+      render(Object.assign({}, record, update || {}));
+    },
+    snapshot() {
+      return normalizeFileUploadRecord(record);
+    },
+  };
+}
+
+function buildFileUploadRow(content) {
+  return createFileUploadRow(content).row;
+}
+
+function appendLiveFileUploadRow(file) {
+  const live = createFileUploadRow(file, 'pending');
+  if (messagesEl.contains(emptyState)) emptyState.remove();
+  messagesEl.appendChild(live.row);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return live;
+}
+
+function buildMessageRow(role, content) {
+  if (role === 'file') return buildFileUploadRow(content);
+
+  const row = document.createElement('div');
+  row.className = 'message-row ' + (role === 'user' ? 'user' : role === 'error' ? 'error' : 'model');
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = role === 'user' ? 'You' : role === 'error' ? '\u26A0' : 'Assistant';
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble' + (role === 'error' ? ' error' : '');
@@ -552,7 +773,10 @@ function startInlineRename(entry, nameSpan, projectId, chatId, currentName) {
 if (attachBtn && fileInput) {
   attachBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
-    for (const f of fileInput.files) state.pendingFiles.push(f);
+    for (const f of fileInput.files) {
+      f.status = 'pending';
+      state.pendingFiles.push(f);
+    }
     fileInput.value = '';
     renderAttachList();
   });
@@ -564,16 +788,13 @@ function renderAttachList() {
   for (let i = 0; i < state.pendingFiles.length; i++) {
     const f = state.pendingFiles[i];
     const chip = document.createElement('span');
-    let icon = '';
-    if (f.status === 'ingesting') icon = '⟳';
-    else if (f.status === 'done') icon = '✓';
-    else if (f.status === 'error') icon = '✗';
-    else if (f.status === 'pending') icon = '○';
-    chip.className = 'attach-chip attach-chip-' + (f.status || 'pending');
+    const chipStatus = f.status || 'pending';
+    const icon = chipStatus === 'ingesting' ? '' : fileUploadIcon(chipStatus);
+    chip.className = 'attach-chip attach-chip-' + chipStatus;
     chip.textContent = (icon ? icon + ' ' : '') + f.name;
-    if (f.status === 'pending') {
+    if (chipStatus === 'pending' || chipStatus === 'error' || chipStatus === 'warning') {
       const rm = document.createElement('button');
-      rm.textContent = '✕';
+      rm.textContent = '\u00D7';
       rm.addEventListener('click', () => {
         state.pendingFiles.splice(i, 1);
         renderAttachList();
@@ -588,30 +809,66 @@ function renderAttachList() {
 
 async function uploadPendingFiles(chatId) {
   const uploaded = [];
-  for (const f of state.pendingFiles) {
-    f.status = 'ingesting';
+  const files = [...state.pendingFiles];
+  for (const f of files) {
+    const live = appendLiveFileUploadRow(f);
+    f.status = 'uploading';
     renderAttachList();
+    live.update({ status: 'uploading' });
+
+    let ingestTimer = null;
+    if (fileNeedsIngestion({ filename: f.name })) {
+      ingestTimer = setTimeout(() => {
+        f.status = 'ingesting';
+        renderAttachList();
+        live.update({ status: 'ingesting' });
+      }, 500);
+    }
+
     const fd = new FormData();
     fd.append('file', f);
-    const resp = await fetch(`/api/chats/${chatId}/upload`, {
-      method: 'POST',
-      credentials: 'same-origin',
-      body: fd,
-    });
-    if (!resp.ok) {
-      f.status = 'error';
+    try {
+      const resp = await fetch(`/api/chats/${chatId}/upload`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd,
+      });
+      if (ingestTimer) {
+        clearTimeout(ingestTimer);
+        ingestTimer = null;
+      }
+      if (!resp.ok) {
+        f.status = 'error';
+        renderAttachList();
+        let errMsg = 'Upload failed';
+        try { errMsg = (await resp.json()).error || errMsg; } catch (_) {}
+        const failed = {
+          filename: f.name,
+          size: f.size,
+          status: 'error',
+          error: errMsg,
+          needs_ingestion: fileNeedsIngestion({ filename: f.name }),
+        };
+        live.update(failed);
+        state.messages.push({ role: 'file', content: JSON.stringify(failed), created_at: '' });
+        throw new Error(`${f.name}: ${errMsg}`);
+      }
+      const data = await resp.json();
+      const finalStatus = data.extraction_success === false ? 'warning' : 'done';
+      const finalRecord = Object.assign({}, data, { status: finalStatus });
+      f.status = finalStatus;
+      live.update(finalRecord);
+      uploaded.push(data.filename || f.name);
+      state.messages.push({ role: 'file', content: JSON.stringify(finalRecord), created_at: data.created_at || '' });
+
+      const idx = state.pendingFiles.indexOf(f);
+      if (idx >= 0) state.pendingFiles.splice(idx, 1);
       renderAttachList();
-      let errMsg = 'Upload failed';
-      try { errMsg = (await resp.json()).error || errMsg; } catch (_) {}
-      throw new Error(`${f.name}: ${errMsg}`);
+    } catch (e) {
+      if (ingestTimer) clearTimeout(ingestTimer);
+      throw e;
     }
-    const data = await resp.json();
-    f.status = 'done';
-    renderAttachList();
-    uploaded.push(data.filename);
   }
-  await new Promise(r => setTimeout(r, 800));
-  state.pendingFiles = [];
   renderAttachList();
   return uploaded;
 }
@@ -620,7 +877,7 @@ async function uploadPendingFiles(chatId) {
 async function sendMessage() {
   if (state.sending) return;
   const content = messageInput.value.trim();
-  if (!content || !state.selectedChatId) return;
+  if ((!content && state.pendingFiles.length === 0) || !state.selectedChatId) return;
 
   state.sending      = true;
   messageInput.value = '';
@@ -641,10 +898,18 @@ async function sendMessage() {
     return;
   }
 
+  if (!content) {
+    state.sending = false;
+    setInputEnabled(true);
+    messageInput.focus();
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return;
+  }
+
   // Build display content (append uploaded file names if any)
   let displayContent = content;
   if (uploadedFiles.length) {
-    displayContent += '\n\n📎 ' + uploadedFiles.join(', ');
+    displayContent += '\n\n\uD83D\uDCCE ' + uploadedFiles.join(', ');
   }
 
   // Show user message immediately

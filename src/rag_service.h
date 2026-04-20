@@ -129,6 +129,9 @@ private:
     void AppendImageIngestLogNoLock(const std::string& message) const;
     std::string ReadImageIngestLogTailNoLock(size_t max_bytes = 12000) const;
     void ShutdownManagedEmbeddingRuntimes() const;
+    void ShutdownManagedImageIngestRuntimes() const;
+    void EnsureImageVisionRuntimesNoLock(const RagImageIngestSettings& settings) const;
+    int ManagedImageOllamaProcessCountNoLock() const;
 
     std::vector<std::pair<std::string, std::filesystem::path>> LoadRegistryNoLock() const;
     void SaveRegistryNoLock(const std::vector<std::pair<std::string, std::filesystem::path>>& entries) const;
@@ -142,6 +145,8 @@ private:
     mutable std::mutex mutex_;
     mutable void* started_ollama_process_ = nullptr;
     mutable unsigned long started_ollama_process_id_ = 0;
+    mutable std::unordered_map<std::string, void*> started_image_ollama_processes_;
+    mutable std::unordered_map<std::string, unsigned long> started_image_ollama_process_ids_;
     // Per-library HNSW index cache (rag_id -> handle).  Lives only for the
     // duration of the process; saved to disk after each mutation.
     mutable std::unordered_map<std::string, std::unique_ptr<HnswHandle>> hnsw_cache_;

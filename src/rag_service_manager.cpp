@@ -122,16 +122,21 @@ enum ImageIngestSettingsControlId : int {
     kImageVisionModelEdit = 6316,
     kImageVisionPromptLabel = 6317,
     kImageVisionPromptEdit = 6318,
-    kImageIncludeOcr = 6319,
-    kImageIncludeVisualDescription = 6320,
-    kImageStatus = 6321,
-    kImageCheckStatus = 6322,
-    kImageInstallTesseract = 6323,
-    kImageInstallPaddle = 6324,
-    kImageInstallOllama = 6325,
-    kImagePullVisionModel = 6326,
-    kImageDiagnosticsLog = 6327,
-    kImageVisionModelHelp = 6328,
+    kImageOllamaInstanceCountLabel = 6319,
+    kImageOllamaInstanceCountEdit = 6320,
+    kImageOllamaStartPortLabel = 6321,
+    kImageOllamaStartPortEdit = 6322,
+    kImageIncludeOcr = 6323,
+    kImageIncludeVisualDescription = 6324,
+    kImageStatus = 6325,
+    kImageCheckStatus = 6326,
+    kImageInstallTesseract = 6327,
+    kImageInstallPaddle = 6328,
+    kImageInstallOllama = 6329,
+    kImagePullVisionModel = 6330,
+    kImageDiagnosticsLog = 6331,
+    kImageVisionModelHelp = 6332,
+    kImageOllamaStartLocally = 6333,
     kImageSaveButton = IDOK,
     kImageCancelButton = IDCANCEL,
 };
@@ -563,6 +568,11 @@ private:
     HWND vision_base_url_edit_ = nullptr;
     HWND vision_model_label_ = nullptr;
     HWND vision_model_edit_ = nullptr;
+    HWND ollama_instance_count_label_ = nullptr;
+    HWND ollama_instance_count_edit_ = nullptr;
+    HWND ollama_start_port_label_ = nullptr;
+    HWND ollama_start_port_edit_ = nullptr;
+    HWND ollama_start_locally_checkbox_ = nullptr;
     HWND vision_prompt_label_ = nullptr;
     HWND vision_prompt_edit_ = nullptr;
     HWND include_ocr_checkbox_ = nullptr;
@@ -1226,7 +1236,7 @@ bool RagImageIngestSettingsDialog::Show(HWND owner, RagService* rag_service) {
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         780,
-        760,
+        820,
         owner,
         nullptr,
         instance,
@@ -1321,10 +1331,15 @@ void RagImageIngestSettingsDialog::OnCreate() {
     paddle_language_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImagePaddleLanguageEdit), nullptr, nullptr);
     vision_provider_label_ = CreateWindowExW(0, L"STATIC", L"Vision provider", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionProviderLabel), nullptr, nullptr);
     vision_provider_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionProviderCombo), nullptr, nullptr);
-    vision_base_url_label_ = CreateWindowExW(0, L"STATIC", L"Vision base URL", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionBaseUrlLabel), nullptr, nullptr);
+    vision_base_url_label_ = CreateWindowExW(0, L"STATIC", L"Vision host / base URL", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionBaseUrlLabel), nullptr, nullptr);
     vision_base_url_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionBaseUrlEdit), nullptr, nullptr);
     vision_model_label_ = CreateWindowExW(0, L"BUTTON", L"Vision model", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionModelLabel), nullptr, nullptr);
     vision_model_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionModelEdit), nullptr, nullptr);
+    ollama_instance_count_label_ = CreateWindowExW(0, L"STATIC", L"Ollama worker instances", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageOllamaInstanceCountLabel), nullptr, nullptr);
+    ollama_instance_count_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageOllamaInstanceCountEdit), nullptr, nullptr);
+    ollama_start_port_label_ = CreateWindowExW(0, L"STATIC", L"Ollama starting port", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageOllamaStartPortLabel), nullptr, nullptr);
+    ollama_start_port_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageOllamaStartPortEdit), nullptr, nullptr);
+    ollama_start_locally_checkbox_ = CreateWindowExW(0, L"BUTTON", L"Start Ollama locally when needed", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageOllamaStartLocally), nullptr, nullptr);
     vision_prompt_label_ = CreateWindowExW(0, L"STATIC", L"Vision description prompt", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionPromptLabel), nullptr, nullptr);
     vision_prompt_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionPromptEdit), nullptr, nullptr);
     include_ocr_checkbox_ = CreateWindowExW(0, L"BUTTON", L"Include OCR text in extracted Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageIncludeOcr), nullptr, nullptr);
@@ -1339,7 +1354,7 @@ void RagImageIngestSettingsDialog::OnCreate() {
     save_button_ = CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageSaveButton), nullptr, nullptr);
     cancel_button_ = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageCancelButton), nullptr, nullptr);
 
-    for (HWND control : {enabled_checkbox_, cpu_radio_, paddle_radio_, vision_radio_, tesseract_language_label_, tesseract_language_edit_, paddle_python_label_, paddle_python_edit_, paddle_language_label_, paddle_language_edit_, vision_provider_label_, vision_provider_combo_, vision_base_url_label_, vision_base_url_edit_, vision_model_label_, vision_model_edit_, vision_prompt_label_, vision_prompt_edit_, include_ocr_checkbox_, include_visual_description_checkbox_, status_label_, check_status_button_, install_tesseract_button_, install_paddle_button_, install_ollama_button_, pull_vision_model_button_, diagnostics_log_edit_, save_button_, cancel_button_}) {
+    for (HWND control : {enabled_checkbox_, cpu_radio_, paddle_radio_, vision_radio_, tesseract_language_label_, tesseract_language_edit_, paddle_python_label_, paddle_python_edit_, paddle_language_label_, paddle_language_edit_, vision_provider_label_, vision_provider_combo_, vision_base_url_label_, vision_base_url_edit_, vision_model_label_, vision_model_edit_, ollama_instance_count_label_, ollama_instance_count_edit_, ollama_start_port_label_, ollama_start_port_edit_, ollama_start_locally_checkbox_, vision_prompt_label_, vision_prompt_edit_, include_ocr_checkbox_, include_visual_description_checkbox_, status_label_, check_status_button_, install_tesseract_button_, install_paddle_button_, install_ollama_button_, pull_vision_model_button_, diagnostics_log_edit_, save_button_, cancel_button_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
 
@@ -1394,10 +1409,18 @@ void RagImageIngestSettingsDialog::LayoutControls() const {
     MoveWindow(vision_model_edit_, margin + (column_width + gutter) * 2, y, column_width, edit_height, TRUE);
     y += edit_height + gutter;
 
+    MoveWindow(ollama_instance_count_label_, margin, y, column_width, label_height, TRUE);
+    MoveWindow(ollama_start_port_label_, margin + column_width + gutter, y, column_width, label_height, TRUE);
+    y += label_height + Scale(hwnd_, 4);
+    MoveWindow(ollama_instance_count_edit_, margin, y, column_width, edit_height, TRUE);
+    MoveWindow(ollama_start_port_edit_, margin + column_width + gutter, y, column_width, edit_height, TRUE);
+    MoveWindow(ollama_start_locally_checkbox_, margin + (column_width + gutter) * 2, y, column_width, edit_height, TRUE);
+    y += edit_height + gutter;
+
     MoveWindow(vision_prompt_label_, margin, y, width - margin * 2, label_height, TRUE);
     y += label_height + Scale(hwnd_, 4);
-    MoveWindow(vision_prompt_edit_, margin, y, width - margin * 2, Scale(hwnd_, 94), TRUE);
-    y += Scale(hwnd_, 94) + gutter;
+    MoveWindow(vision_prompt_edit_, margin, y, width - margin * 2, Scale(hwnd_, 86), TRUE);
+    y += Scale(hwnd_, 86) + gutter;
 
     MoveWindow(include_ocr_checkbox_, margin, y, width - margin * 2, Scale(hwnd_, 22), TRUE);
     y += Scale(hwnd_, 24);
@@ -1427,6 +1450,7 @@ void RagImageIngestSettingsDialog::OnCommand(int control_id) {
     case kImagePaddleMode:
     case kImageVisionMode:
     case kImageVisionProviderCombo:
+    case kImageOllamaStartLocally:
         RefreshStatus();
         break;
     case kImageInstallTesseract:
@@ -1471,6 +1495,13 @@ RagImageIngestSettings RagImageIngestSettingsDialog::BuildSettingsFromFields() c
     settings.vision_provider = ImageVisionProviderFromComboIndex(static_cast<int>(ComboBox_GetCurSel(vision_provider_combo_)));
     settings.vision_base_url = WideToUtf8(TrimWide(GetWindowTextString(vision_base_url_edit_)));
     settings.vision_model = WideToUtf8(TrimWide(GetWindowTextString(vision_model_edit_)));
+    if (const auto value = ParseInt(TrimWide(GetWindowTextString(ollama_instance_count_edit_)))) {
+        settings.ollama_instance_count = *value;
+    }
+    if (const auto value = ParseInt(TrimWide(GetWindowTextString(ollama_start_port_edit_)))) {
+        settings.ollama_start_port = *value;
+    }
+    settings.ollama_start_locally = Button_GetCheck(ollama_start_locally_checkbox_) == BST_CHECKED;
     settings.vision_prompt = WideToUtf8(TrimWide(GetWindowTextString(vision_prompt_edit_)));
     settings.include_ocr_text = Button_GetCheck(include_ocr_checkbox_) == BST_CHECKED;
     settings.include_visual_description = Button_GetCheck(include_visual_description_checkbox_) == BST_CHECKED;
@@ -1487,8 +1518,11 @@ void RagImageIngestSettingsDialog::LoadSettingsIntoFields() {
     SetWindowTextW(paddle_python_edit_, Utf8ToWide(settings_.paddle_python_command.empty() ? "python" : settings_.paddle_python_command).c_str());
     SetWindowTextW(paddle_language_edit_, Utf8ToWide(settings_.paddle_language.empty() ? "en" : settings_.paddle_language).c_str());
     ComboBox_SetCurSel(vision_provider_combo_, ImageVisionProviderComboIndex(settings_.vision_provider));
-    SetWindowTextW(vision_base_url_edit_, Utf8ToWide(settings_.vision_base_url.empty() ? "http://localhost:11434" : settings_.vision_base_url).c_str());
+    SetWindowTextW(vision_base_url_edit_, Utf8ToWide(settings_.vision_base_url.empty() ? "http://localhost" : settings_.vision_base_url).c_str());
     SetWindowTextW(vision_model_edit_, Utf8ToWide(settings_.vision_model.empty() ? "qwen2.5vl:7b" : settings_.vision_model).c_str());
+    SetWindowTextW(ollama_instance_count_edit_, std::to_wstring(std::max(1, settings_.ollama_instance_count)).c_str());
+    SetWindowTextW(ollama_start_port_edit_, std::to_wstring(settings_.ollama_start_port <= 0 ? 11434 : settings_.ollama_start_port).c_str());
+    Button_SetCheck(ollama_start_locally_checkbox_, settings_.ollama_start_locally ? BST_CHECKED : BST_UNCHECKED);
     SetWindowTextW(vision_prompt_edit_, Utf8ToWide(settings_.vision_prompt).c_str());
     Button_SetCheck(include_ocr_checkbox_, settings_.include_ocr_text ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(include_visual_description_checkbox_, settings_.include_visual_description ? BST_CHECKED : BST_UNCHECKED);
@@ -1513,7 +1547,13 @@ void RagImageIngestSettingsDialog::RefreshStatus() {
     log += L"- Python installed: " + std::wstring(status.python_installed ? L"yes" : L"no") + L"\r\n";
     log += L"- PaddleOCR installed: " + std::wstring(status.paddleocr_installed ? L"yes" : L"no") + L"\r\n";
     log += L"- Ollama installed: " + std::wstring(status.ollama_installed ? L"yes" : L"no") + L"\r\n";
+    log += L"- Start local Ollama: " + std::wstring(status.vision_ollama_start_locally ? L"yes" : L"no") + L"\r\n";
+    log += L"- App-managed Ollama endpoints: " + std::to_wstring(status.vision_ollama_managed_count) + L"\r\n";
     log += L"- Vision endpoint running: " + std::wstring(status.vision_endpoint_running ? L"yes" : L"no") + L"\r\n";
+    log += L"- Ollama endpoints: " + Utf8ToWide(status.vision_endpoint_summary.empty() ? std::string("(none)") : status.vision_endpoint_summary) + L"\r\n";
+    log += L"- Ollama endpoints responding: " + std::to_wstring(status.vision_ollama_running_count) + L"/" + std::to_wstring(status.vision_ollama_instance_count) + L"\r\n";
+    log += L"- Vision queue: " + std::to_wstring(status.vision_queue_active) + L" active, " + std::to_wstring(status.vision_queue_pending) + L" queued, " + std::to_wstring(status.vision_queue_workers) + L" worker(s)\r\n";
+    log += L"- Document extraction queue: " + std::to_wstring(status.document_queue_active) + L" active, " + std::to_wstring(status.document_queue_pending) + L" queued, " + std::to_wstring(status.document_queue_workers) + L" worker(s)\r\n";
     log += L"- Message: " + Utf8ToWide(status.message) + L"\r\n";
     SetWindowTextW(diagnostics_log_edit_, log.c_str());
     SendMessageW(diagnostics_log_edit_, EM_SETSEL, static_cast<WPARAM>(-1), static_cast<LPARAM>(-1));
@@ -1590,6 +1630,23 @@ bool RagImageIngestSettingsDialog::ValidateAndSave() {
         if (Trim(settings.vision_model).empty()) {
             MessageBoxW(hwnd_, L"Vision model is required for full vision mode.", L"Missing Vision Model", MB_OK | MB_ICONERROR);
             SetFocus(vision_model_edit_);
+            return false;
+        }
+        const auto instance_count = ParseInt(TrimWide(GetWindowTextString(ollama_instance_count_edit_)));
+        if (!instance_count || *instance_count < 1 || *instance_count > 32) {
+            MessageBoxW(hwnd_, L"Ollama worker instances must be a number from 1 to 32.", L"Invalid Ollama Worker Count", MB_OK | MB_ICONERROR);
+            SetFocus(ollama_instance_count_edit_);
+            return false;
+        }
+        const auto start_port = ParseInt(TrimWide(GetWindowTextString(ollama_start_port_edit_)));
+        if (!start_port || *start_port < 1 || *start_port > 65535) {
+            MessageBoxW(hwnd_, L"Ollama starting port must be a number from 1 to 65535.", L"Invalid Ollama Starting Port", MB_OK | MB_ICONERROR);
+            SetFocus(ollama_start_port_edit_);
+            return false;
+        }
+        if (*start_port + *instance_count - 1 > 65535) {
+            MessageBoxW(hwnd_, L"The Ollama port range cannot go above 65535.", L"Invalid Ollama Port Range", MB_OK | MB_ICONERROR);
+            SetFocus(ollama_start_port_edit_);
             return false;
         }
     }

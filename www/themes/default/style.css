@@ -36,6 +36,8 @@
   --color-accent-hover:       #1d4ed8;
   --color-accent-thinking:    #d97706;
   --color-accent-danger:      #dc2626;
+  --color-accent-success:     #16a34a;
+  --color-accent-warning:     #d97706;
 
   /* Borders */
   --color-border-main:        #e5e7eb;

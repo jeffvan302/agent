@@ -365,7 +365,8 @@ document.getElementById('cp-form').addEventListener('submit', async function(e) 
 });
 )ASSET";
 
-const char kBaseCss[] = R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
+const char kBaseCss[] =
+    R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
    base.css — Structural layout only.
    All colours, fonts, and radii are CSS custom properties defined by the
    active theme's style.css.  This file contains NO hardcoded values.
@@ -429,30 +430,15 @@ html, body {
   flex-direction: column;
   overflow-y: auto;
   flex-shrink: 0;
-  transition: width 0.2s ease;
 }
-#sidebar.collapsed { width: 0; overflow: hidden; }
 #sidebar-header {
-  padding: 8px 12px 8px 16px;
+  padding: 12px 16px 8px;
   font-size: var(--font-size-small);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
 }
-#sidebar-collapse-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--color-text-muted);
-  font-size: 14px;
-  padding: 2px 4px;
-  line-height: 1;
-}
-#sidebar-collapse-btn:hover { color: var(--color-text-sidebar); }
 .project-item {
   border-bottom: 1px solid rgba(255,255,255,0.04);
 }
@@ -541,11 +527,12 @@ html, body {
 }
 .message-row.user { align-self: flex-end; align-items: flex-end; }
 .message-row.model { align-self: flex-start; align-items: flex-start; }
+.message-row.file { align-self: stretch; align-items: stretch; max-width: 920px; }
 .message-role-label {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0;
   color: var(--color-text-muted);
   margin-bottom: 4px;
 }
@@ -649,7 +636,8 @@ html, body {
   overflow-x: auto;
   margin: 0.75em 0;
   padding: 10px;
-  border: 1px solid var(--color-border-main);
+)ASSET"
+    R"ASSET(  border: 1px solid var(--color-border-main);
   border-radius: var(--radius-card);
   background: var(--color-bg-main);
 }
@@ -681,6 +669,122 @@ html, body {
   color: var(--color-text-error);
 }
 
+/* ── File upload timeline rows ────────────────────────────────────────── */
+.file-upload-card {
+  --file-upload-active: var(--color-accent-primary);
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-main);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-message-model);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.file-upload-card.status-done { --file-upload-active: var(--color-accent-success, #16a34a); }
+.file-upload-card.status-warning { --file-upload-active: var(--color-accent-warning, #d97706); }
+.file-upload-card.status-error { --file-upload-active: var(--color-accent-danger); }
+.file-upload-status-mark {
+  width: 36px;
+  height: 36px;
+  border: 2px solid var(--file-upload-active);
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 36px;
+  color: var(--file-upload-active);
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 1;
+  background: var(--color-bg-main);
+}
+.file-upload-status-mark.uploading {
+  animation: file-upload-bob 1s ease-in-out infinite;
+}
+.file-upload-status-mark.ingesting::before {
+  content: '';
+  width: 18px;
+  height: 18px;
+  border: 3px solid var(--file-upload-active);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: file-upload-spin 0.8s linear infinite;
+}
+.file-upload-body {
+  min-width: 0;
+  flex: 1;
+}
+.file-upload-top {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.file-upload-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.file-upload-status {
+  flex: 0 0 auto;
+  color: var(--file-upload-active);
+  font-size: var(--font-size-small);
+  font-weight: 700;
+}
+.file-upload-meta,
+.file-upload-detail,
+.file-upload-links {
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-small);
+  overflow-wrap: anywhere;
+}
+.file-upload-detail { color: var(--color-text-primary); }
+.file-upload-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.file-upload-links a {
+  color: var(--color-text-link);
+  font-weight: 600;
+}
+.file-upload-progress {
+  position: relative;
+  overflow: hidden;
+  height: 7px;
+  margin-top: 10px;
+  border-radius: 7px;
+  background: var(--color-bg-tool-call);
+}
+.file-upload-progress span {
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  border-radius: inherit;
+  background: var(--file-upload-active);
+  animation: file-upload-progress 1.1s ease-in-out infinite;
+}
+@keyframes file-upload-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes file-upload-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+@keyframes file-upload-progress {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(240%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .file-upload-status-mark.uploading,
+  .file-upload-status-mark.ingesting::before,
+  .file-upload-progress span {
+    animation: none;
+  }
+}
+
 /* ── Attach bar ───────────────────────────────────────────────────────── */
 #attach-bar {
   padding: 6px 20px 0;
@@ -707,6 +811,26 @@ html, body {
   font-size: 10px;
 }
 .attach-chip button:hover { color: var(--color-accent-danger); }
+.attach-chip.uploading { opacity: 0.6; }
+.attach-chip-uploading { color: var(--color-accent-primary); }
+.attach-chip-ingesting { color: var(--color-accent-primary); }
+.attach-chip-ingesting::before {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--color-accent-primary);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-right: 2px;
+  vertical-align: middle;
+}
+.attach-chip-done { color: var(--color-accent-success, #16a34a); }
+.attach-chip-warning { color: var(--color-accent-warning, #d97706); }
+.attach-chip-error { color: var(--color-accent-danger); }
+.attach-chip-pending { color: var(--color-text-secondary); }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Compose bar ──────────────────────────────────────────────────────── */
 #compose {
@@ -807,7 +931,8 @@ html, body {
 .form-group { margin-bottom: 16px; }
 .form-group label {
   display: block;
-  font-size: var(--font-size-small);
+)ASSET"
+    R"ASSET(  font-size: var(--font-size-small);
   font-weight: 500;
   color: var(--color-text-secondary);
   margin-bottom: 5px;
@@ -847,6 +972,7 @@ html, body {
   font-size: var(--font-size-small);
   display: none;
 }
+
 )ASSET";
 
 const char kAppJs[] =
@@ -892,13 +1018,10 @@ let state = {
   sending:           false,
   username:          '',
   pendingFiles:      [],     // File objects queued for upload before send
-  sidebarCollapsed:  false,
-  abortCtrl:         null,   // AbortController for current streaming request
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const sidebarEl    = $('sidebar');
 const projectList  = $('project-list');
 const newChatBtn   = $('new-chat-btn');
 const chatTitle    = $('chat-title');
@@ -1072,8 +1195,6 @@ function showDiagramError(host, kind, err, source) {
     '<div>' + escapeHtml(message) + '</div>' +
     '<pre><code>' + escapeHtml(source) + '</code></pre>';
 }
-)ASSET"
-    R"ASSET(
 
 // ── Message rendering ─────────────────────────────────────────────────────
 function renderMessages(messages) {
@@ -1086,13 +1207,235 @@ function renderMessages(messages) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function buildMessageRow(role, content) {
+const INGESTIBLE_UPLOAD_EXTS = new Set([
+  'pdf', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tif', 'tiff',
+)ASSET"
+    R"ASSET(  'doc', 'docx', 'docm', 'xls', 'xlsx', 'xlsm', 'ppt', 'pptx', 'pptm'
+]);
+
+function fileExtension(name) {
+  const text = String(name || '');
+  const idx = text.lastIndexOf('.');
+  return idx >= 0 ? text.slice(idx + 1).toLowerCase() : '';
+}
+
+function fileNeedsIngestion(record) {
+  if (!record) return false;
+  if (record.file_kind === 'processed') return true;
+  if (record.needs_ingestion === true) return true;
+  return INGESTIBLE_UPLOAD_EXTS.has(fileExtension(record.filename || record.name));
+}
+
+function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 1024) return n + ' B';
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = n / 1024;
+  let unit = units[0];
+  for (let i = 1; value >= 1024 && i < units.length; i++) {
+    value /= 1024;
+    unit = units[i];
+  }
+  return value.toFixed(value >= 10 ? 1 : 2).replace(/\.0$/, '') + ' ' + unit;
+}
+
+function normalizeFileUploadRecord(input) {
+  let record = {};
+  if (typeof File !== 'undefined' && input instanceof File) {
+    record = {
+      filename: input.name,
+      display_name: input.name,
+      size: input.size,
+      mime_type: input.type,
+      needs_ingestion: fileNeedsIngestion({ filename: input.name }),
+    };
+  } else if (typeof input === 'string') {
+    try {
+      record = JSON.parse(input);
+    } catch (_) {
+      record = { filename: input };
+    }
+  } else if (input && typeof input === 'object') {
+    record = Object.assign({}, input);
+  }
+
+  record.filename = record.filename || record.display_name || record.name || 'Uploaded file';
+  record.display_name = record.display_name || record.filename;
+  if (record.size === undefined && record.bytes !== undefined) record.size = record.bytes;
+  if (!record.status) {
+    record.status = record.extraction_success === false ? 'warning' : 'done';
+  }
+  return record;
+}
+
+function fileUploadIcon(status) {
+  switch (status) {
+    case 'done': return '\u2713';
+    case 'warning': return '\u26A0';
+    case 'error': return '!';
+    case 'pending': return '\u2191';
+    case 'uploading': return '\u2191';
+    case 'ingesting': return '';
+    default: return '\u2191';
+  }
+}
+
+function fileUploadStatusText(record) {
+  const ingestible = fileNeedsIngestion(record);
+  switch (record.status) {
+    case 'pending': return ingestible ? 'Ready for upload and ingestion' : 'Ready for upload';
+    case 'uploading': return 'Uploading';
+    case 'ingesting': return 'Ingesting';
+    case 'done': return ingestible ? 'Ingested' : 'Uploaded';
+    case 'warning': return 'Saved with warning';
+    case 'error': return 'Upload failed';
+    default: return 'Uploading';
+  }
+}
+
+function fileUploadDetailText(record) {
+  const ingestible = fileNeedsIngestion(record);
+  if (record.status === 'error') return record.error || 'The upload could not be completed.';
+  if (record.status === 'warning') {
+    return record.extraction_error || 'The file was saved, but the processed Markdown copy needs attention.';
+  }
+  if (record.status === 'pending') {
+    return ingestible
+      ? 'Waiting to create the readable .agent Markdown copy.'
+      : 'Waiting to place the file in the project folder.';
+  }
+  if (record.status === 'uploading') return 'Moving into the project folder.';
+  if (record.status === 'ingesting') return 'Creating the readable .agent Markdown copy.';
+  return ingestible
+    ? 'Ready in the project folder and available in this chat.'
+    : 'Ready in the project folder.';
+}
+
+function createFileUploadRow(input, initialStatus) {
+  let record = normalizeFileUploadRecord(input);
+  if (initialStatus) record.status = initialStatus;
+
   const row = document.createElement('div');
-  row.className = 'message-row ' + (role === 'user' ? 'user' : 'model');
+  row.className = 'message-row file';
 
   const lbl = document.createElement('div');
   lbl.className = 'message-role-label';
-  lbl.textContent = role === 'user' ? 'You' : role === 'error' ? '⚠' : 'Assistant';
+  lbl.textContent = 'File';
+
+  const card = document.createElement('div');
+  card.className = 'file-upload-card';
+
+  const mark = document.createElement('div');
+  mark.className = 'file-upload-status-mark';
+
+  const body = document.createElement('div');
+  body.className = 'file-upload-body';
+
+  const top = document.createElement('div');
+  top.className = 'file-upload-top';
+
+  const name = document.createElement('div');
+  name.className = 'file-upload-name';
+
+  const status = document.createElement('div');
+  status.className = 'file-upload-status';
+
+  const meta = document.createElement('div');
+  meta.className = 'file-upload-meta';
+
+  const detail = document.createElement('div');
+  detail.className = 'file-upload-detail';
+
+  const links = document.createElement('div');
+  links.className = 'file-upload-links';
+
+  const progress = document.createElement('div');
+  progress.className = 'file-upload-progress';
+  progress.appendChild(document.createElement('span'));
+
+  top.appendChild(name);
+  top.appendChild(status);
+  body.appendChild(top);
+  body.appendChild(meta);
+  body.appendChild(detail);
+  body.appendChild(links);
+  body.appendChild(progress);
+  card.appendChild(mark);
+  card.appendChild(body);
+  row.appendChild(lbl);
+  row.appendChild(card);
+
+  function render(nextRecord) {
+    record = normalizeFileUploadRecord(nextRecord);
+    const currentStatus = record.status || 'uploading';
+    row.dataset.status = currentStatus;
+    card.className = 'file-upload-card status-' + currentStatus;
+    mark.className = 'file-upload-status-mark ' + currentStatus;
+    mark.textContent = fileUploadIcon(currentStatus);
+    name.textContent = record.display_name || record.filename;
+    status.textContent = fileUploadStatusText(record);
+
+    const bits = [];
+    const size = formatBytes(record.size);
+    if (size) bits.push(size);
+    bits.push(fileNeedsIngestion(record) ? 'Processed file' : 'Project file');
+    if (record.project_folder_variable) bits.push(record.project_folder_variable);
+    meta.textContent = bits.join(' · ');
+    detail.textContent = fileUploadDetailText(record);
+
+    links.innerHTML = '';
+    const download = record.absolute_download_url || record.download_url;
+    if (download) {
+      const a = document.createElement('a');
+      a.href = download;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = 'Download';
+      links.appendChild(a);
+    }
+    if (record.agent_index_path) {
+      const span = document.createElement('span');
+      span.textContent = '.agent index ready';
+      links.appendChild(span);
+    }
+    links.hidden = links.childNodes.length === 0;
+    progress.hidden = !['pending', 'uploading', 'ingesting'].includes(currentStatus);
+  }
+
+  render(record);
+  return {
+    row,
+    update(update) {
+      render(Object.assign({}, record, update || {}));
+    },
+    snapshot() {
+      return normalizeFileUploadRecord(record);
+    },
+  };
+}
+
+function buildFileUploadRow(content) {
+  return createFileUploadRow(content).row;
+}
+
+function appendLiveFileUploadRow(file) {
+  const live = createFileUploadRow(file, 'pending');
+  if (messagesEl.contains(emptyState)) emptyState.remove();
+  messagesEl.appendChild(live.row);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return live;
+}
+
+function buildMessageRow(role, content) {
+  if (role === 'file') return buildFileUploadRow(content);
+
+  const row = document.createElement('div');
+  row.className = 'message-row ' + (role === 'user' ? 'user' : role === 'error' ? 'error' : 'model');
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = role === 'user' ? 'You' : role === 'error' ? '\u26A0' : 'Assistant';
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble' + (role === 'error' ? ' error' : '');
@@ -1112,7 +1455,8 @@ function buildMessageRow(role, content) {
   return row;
 }
 
-// Create a streaming placeholder row.  Returns {row, bubble, updateText, finalize}.
+)ASSET"
+    R"ASSET(// Create a streaming placeholder row.  Returns {row, bubble, updateText, finalize}.
 function createStreamingRow() {
   const row = document.createElement('div');
   row.className = 'message-row model';
@@ -1300,6 +1644,7 @@ async function selectChat(projectId, chatId, chatName) {
   messageInput.disabled = false;
   sendBtn.disabled      = false;
   newChatBtn.disabled   = false;
+  if (attachBtn) attachBtn.disabled = false;
   await loadMessages(projectId, chatId);
 }
 
@@ -1342,7 +1687,8 @@ async function deleteChat(projectId, chatId) {
   if (listEl) renderChatItems(projectId, listEl);
 }
 
-// ── Chat rename ───────────────────────────────────────────────────────────
+)ASSET"
+    R"ASSET(// ── Chat rename ───────────────────────────────────────────────────────────
 async function renameChat(projectId, chatId, newName) {
   const resp = await api('PATCH', `/api/chats/${chatId}`, { name: newName });
   if (!resp || !resp.ok) return false;
@@ -1404,12 +1750,14 @@ function startInlineRename(entry, nameSpan, projectId, chatId, currentName) {
   input.addEventListener('click', e => e.stopPropagation());
 }
 
-// ── File attachment ─────────────────────────────────────────────────────)ASSET"
-    R"ASSET(──
+// ── File attachment ───────────────────────────────────────────────────────
 if (attachBtn && fileInput) {
   attachBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
-    for (const f of fileInput.files) state.pendingFiles.push(f);
+    for (const f of fileInput.files) {
+      f.status = 'pending';
+      state.pendingFiles.push(f);
+    }
     fileInput.value = '';
     renderAttachList();
   });
@@ -1421,15 +1769,19 @@ function renderAttachList() {
   for (let i = 0; i < state.pendingFiles.length; i++) {
     const f = state.pendingFiles[i];
     const chip = document.createElement('span');
-    chip.className = 'attach-chip';
-    chip.textContent = f.name;
-    const rm = document.createElement('button');
-    rm.textContent = '✕';
-    rm.addEventListener('click', () => {
-      state.pendingFiles.splice(i, 1);
-      renderAttachList();
-    });
-    chip.appendChild(rm);
+    const chipStatus = f.status || 'pending';
+    const icon = chipStatus === 'ingesting' ? '' : fileUploadIcon(chipStatus);
+    chip.className = 'attach-chip attach-chip-' + chipStatus;
+    chip.textContent = (icon ? icon + ' ' : '') + f.name;
+    if (chipStatus === 'pending' || chipStatus === 'error' || chipStatus === 'warning') {
+      const rm = document.createElement('button');
+      rm.textContent = '\u00D7';
+      rm.addEventListener('click', () => {
+        state.pendingFiles.splice(i, 1);
+        renderAttachList();
+      });
+      chip.appendChild(rm);
+    }
     attachList.appendChild(chip);
   }
   if (attachList.parentElement)
@@ -1438,23 +1790,66 @@ function renderAttachList() {
 
 async function uploadPendingFiles(chatId) {
   const uploaded = [];
-  for (const f of state.pendingFiles) {
+  const files = [...state.pendingFiles];
+  for (const f of files) {
+    const live = appendLiveFileUploadRow(f);
+    f.status = 'uploading';
+    renderAttachList();
+    live.update({ status: 'uploading' });
+
+    let ingestTimer = null;
+    if (fileNeedsIngestion({ filename: f.name })) {
+      ingestTimer = setTimeout(() => {
+        f.status = 'ingesting';
+        renderAttachList();
+        live.update({ status: 'ingesting' });
+      }, 500);
+    }
+
     const fd = new FormData();
     fd.append('file', f);
-    const resp = await fetch(`/api/chats/${chatId}/upload`, {
-      method: 'POST',
-      credentials: 'same-origin',
-      body: fd,
-    });
-    if (!resp.ok) {
-      let errMsg = 'Upload failed';
-      try { errMsg = (await resp.json()).error || errMsg; } catch (_) {}
-      throw new Error(`${f.name}: ${errMsg}`);
+    try {
+      const resp = await fetch(`/api/chats/${chatId}/upload`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd,
+      });
+      if (ingestTimer) {
+        clearTimeout(ingestTimer);
+        ingestTimer = null;
+      }
+      if (!resp.ok) {
+        f.status = 'error';
+        renderAttachList();
+        let errMsg = 'Upload failed';
+        try { errMsg = (await resp.json()).error || errMsg; } catch (_) {}
+        const failed = {
+          filename: f.name,
+          size: f.size,
+          status: 'error',
+          error: errMsg,
+          needs_ingestion: fileNeedsIngestion({ filename: f.name }),
+        };
+        live.update(failed);
+        state.messages.push({ role: 'file', content: JSON.stringify(failed), created_at: '' });
+        throw new Error(`${f.name}: ${errMsg}`);
+      }
+      const data = await resp.json();
+      const finalStatus = data.extraction_success === false ? 'warning' : 'done';
+      const finalRecord = Object.assign({}, data, { status: finalStatus });
+      f.status = finalStatus;
+      live.update(finalRecord);
+      uploaded.push(data.filename || f.name);
+      state.messages.push({ role: 'file', content: JSON.stringify(finalRecord), created_at: data.created_at || '' });
+
+      const idx = state.pendingFiles.indexOf(f);
+      if (idx >= 0) state.pendingFiles.splice(idx, 1);
+      renderAttachList();
+    } catch (e) {
+      if (ingestTimer) clearTimeout(ingestTimer);
+      throw e;
     }
-    const data = await resp.json();
-    uploaded.push(data.filename);
   }
-  state.pendingFiles = [];
   renderAttachList();
   return uploaded;
 }
@@ -1463,7 +1858,7 @@ async function uploadPendingFiles(chatId) {
 async function sendMessage() {
   if (state.sending) return;
   const content = messageInput.value.trim();
-  if (!content || !state.selectedChatId) return;
+  if ((!content && state.pendingFiles.length === 0) || !state.selectedChatId) return;
 
   state.sending      = true;
   messageInput.value = '';
@@ -1484,10 +1879,18 @@ async function sendMessage() {
     return;
   }
 
+  if (!content) {
+    state.sending = false;
+    setInputEnabled(true);
+    messageInput.focus();
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return;
+  }
+
   // Build display content (append uploaded file names if any)
   let displayContent = content;
   if (uploadedFiles.length) {
-    displayContent += '\n\n📎 ' + uploadedFiles.join(', ');
+    displayContent += '\n\n\uD83D\uDCCE ' + uploadedFiles.join(', ');
   }
 
   // Show user message immediately
@@ -1498,7 +1901,6 @@ async function sendMessage() {
   const { updateText, finalize, getAccumulated } = createStreamingRow();
 
   const abortCtrl = new AbortController();
-  state.abortCtrl = abortCtrl;
 
   try {
     const resp = await fetch(`/api/chats/${state.selectedChatId}/messages/stream`, {
@@ -1531,7 +1933,8 @@ async function sendMessage() {
       } else if (ev.error) {
         errorMsg = ev.error;
       }
-    }, abortCtrl.signal);
+)ASSET"
+    R"ASSET(    }, abortCtrl.signal);
 
     if (errorMsg) {
       finalize('');
@@ -1577,8 +1980,6 @@ function setInputEnabled(enabled) {
   messageInput.disabled = !enabled;
   sendBtn.disabled      = !enabled || !state.selectedChatId;
   if (attachBtn) attachBtn.disabled = !enabled;
-  const stopBtn = $('stop-btn');
-  if (stopBtn) stopBtn.style.display = enabled ? 'none' : 'inline-block';
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────
@@ -1594,55 +1995,6 @@ function escapeRegExp(str) {
 
 // ── Initialisation ────────────────────────────────────────────────────────
 async function init() {
-  // Set up sidebar collapse button
-  const sidebarHeader = document.querySelector('#sidebar-header');
-  if (sidebarHeader) {
-    const collapseBtn = document.createElement('button');
-    collapseBtn.id = 'sidebar-collapse-btn';
-    collapseBtn.title = 'Collapse sidebar';
-    collapseBtn.textContent = '◀';
-    sidebarHeader.appendChild(collapseBtn);
-    collapseBtn.addEventListener('click', () => {
-      state.sidebarCollapsed = !state.sidebarCollapsed;
-      sidebarEl.classList.toggle('collapsed', state.sidebarCollapsed);
-      collapseBtn.textContent = state.sidebarCollapsed ? '▶' : '◀';
-      collapseBtn.title = state.sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
-      localStorage.setItem('sidebar_collapsed', state.sidebarCollapsed ? '1' : '0');
-    });
-    // Restore collapsed state
-    if (localStorage.getItem('sidebar_collapsed') === '1') {
-      state.sidebarCollapsed = true;
-      sidebarEl.classList.add('collapsed');
-      collapseBtn.textContent = '▶';
-    }
-  }
-
-  // Create stop button in compose bar
-  const composeEl = $('compose');
-  if (composeEl) {
-    const stopBtn = document.createElement('button');
-    stopBtn.id = 'stop-btn';
-    stopBtn.textContent = 'Stop';
-    stopBtn.title = 'Stop generating';
-    stopBtn.style.cssText = 'display:none; padding:10px 20px; background:#dc2626; color:#fff; border:none; border-radius:var(--radius-button); cursor:pointer; font-weight:600; height:44px;';
-    stopBtn.addEventListener('click', async () => {
-      if (state.abortCtrl) {
-        state.abortCtrl.abort();
-        // Notify server to cancel in-progress request
-        if (state.selectedChatId) {
-          try {
-            await fetch(`/api/chats/${state.selectedChatId}/stream`, {
-              method: 'DELETE',
-              credentials: 'same-origin',
-            });
-          } catch (_) {}
-        }
-      }
-    });
-    // Insert stop button after send button
-    composeEl.appendChild(stopBtn);
-  }
-
   const [meResp, projResp] = await Promise.all([
     api('GET', '/api/me'),
     api('GET', '/api/projects'),
@@ -1670,9 +2022,11 @@ async function init() {
 }
 
 init();
+
 )ASSET";
 
-const char kThemeDefaultCss[] = R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
+const char kThemeDefaultCss[] =
+    R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
    Default Light Theme — overrides CSS custom properties defined in base.css
    ───────────────────────────────────────────────────────────────────────── */
 :root {
@@ -1710,6 +2064,8 @@ const char kThemeDefaultCss[] = R"ASSET(/* ────────────�
   --color-accent-hover:       #1d4ed8;
   --color-accent-thinking:    #d97706;
   --color-accent-danger:      #dc2626;
+  --color-accent-success:     #16a34a;
+  --color-accent-warning:     #d97706;
 
   /* Borders */
   --color-border-main:        #e5e7eb;
@@ -1730,6 +2086,7 @@ const char kThemeDefaultCss[] = R"ASSET(/* ────────────�
   --radius-input:   6px;
   --radius-card:    8px;
 }
+
 )ASSET";
 
 const char kThemeDefaultJson[] = R"ASSET({
@@ -1740,7 +2097,8 @@ const char kThemeDefaultJson[] = R"ASSET({
 }
 )ASSET";
 
-const char kThemeDarkCss[] = R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
+const char kThemeDarkCss[] =
+    R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
    Dark Theme — overrides CSS custom properties for a dark UI
    ───────────────────────────────────────────────────────────────────────── */
 :root {
@@ -1778,6 +2136,8 @@ const char kThemeDarkCss[] = R"ASSET(/* ─────────────�
   --color-accent-hover:       #7dd5f5;
   --color-accent-thinking:    #c9a227;
   --color-accent-danger:      #f48771;
+  --color-accent-success:     #2ea043;
+  --color-accent-warning:     #d29922;
 
   /* Borders */
   --color-border-main:        #3c3c3c;
@@ -1798,6 +2158,7 @@ const char kThemeDarkCss[] = R"ASSET(/* ─────────────�
   --radius-input:   4px;
   --radius-card:    6px;
 }
+
 )ASSET";
 
 const char kThemeDarkJson[] = R"ASSET({

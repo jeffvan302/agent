@@ -2204,6 +2204,17 @@ static std::string NowIso() {
     return buf;
 }
 
+static std::vector<MessageRecord>
+ModelVisibleMessages(const std::vector<MessageRecord>& messages) {
+    std::vector<MessageRecord> filtered;
+    filtered.reserve(messages.size());
+    for (const auto& message : messages) {
+        if (message.role == "file") continue;
+        filtered.push_back(message);
+    }
+    return filtered;
+}
+
 WebServer::ModelCallResult
 WebServer::CallModel(const std::string& project_id,
                      const std::string& chat_id,
@@ -2310,7 +2321,7 @@ WebServer::CallModel(const std::string& project_id,
     opts.system_prompt = system_prompt;
     opts.temperature  = 0.2;
     opts.max_tokens   = 1024;
-    opts.messages     = messages;
+    opts.messages     = ModelVisibleMessages(messages);
 
     const auto exposed_tools = (mcp_manager_ && selected_model.supports_tools)
         ? mcp_manager_->GetExposedToolsForProject(project_id, runtime_variables)
@@ -2330,7 +2341,7 @@ WebServer::CallModel(const std::string& project_id,
 
         for (int round = 0; round < kMaxToolRounds; ++round) {
             ChatRequestOptions loop_opts = opts;
-            loop_opts.messages = messages;
+            loop_opts.messages = ModelVisibleMessages(messages);
 
             const auto completion =
                 OpenAIClient::CreateToolAwareCompletion(loop_opts, tool_definitions);
@@ -2387,7 +2398,7 @@ WebServer::CallModel(const std::string& project_id,
 
         if (!success) {
             ChatRequestOptions final_opts = opts;
-            final_opts.messages = messages;
+            final_opts.messages = ModelVisibleMessages(messages);
             if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
             final_opts.system_prompt +=
                 "The MCP tool-call round limit has been reached. Do not call or "
@@ -2596,7 +2607,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
     opts.system_prompt = system_prompt;
     opts.temperature   = 0.2;
     opts.max_tokens    = 4096;  // allow longer outputs when streaming
-    opts.messages      = messages;
+    opts.messages      = ModelVisibleMessages(messages);
 
     const auto exposed_tools = (mcp_manager_ && selected_model.supports_tools)
         ? mcp_manager_->GetExposedToolsForProject(project_id, runtime_variables)
@@ -2618,7 +2629,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
 
         for (int round = 0; round < kMaxToolRounds; ++round) {
             ChatRequestOptions loop_opts = opts;
-            loop_opts.messages = messages;
+            loop_opts.messages = ModelVisibleMessages(messages);
 
             const auto completion = OpenAIClient::StreamToolAwareCompletion(
                 loop_opts, tool_definitions,
@@ -2695,7 +2706,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
 
         if (!success) {
             ChatRequestOptions final_opts = opts;
-            final_opts.messages = messages;
+            final_opts.messages = ModelVisibleMessages(messages);
             if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
             final_opts.system_prompt +=
                 "The MCP tool-call round limit has been reached. Do not call or "
@@ -2994,11 +3005,19 @@ void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
     AppendAuditLog(GetRemoteAddr(req_ptr), "upload",
                    session->username + " -> " + original_filename);
 
+    const std::string uploaded_at = NowIso();
+    const bool upload_warning =
+        creates_agent_markdown && (!artifact.created || !artifact.extraction_success);
+
     json resp = {
         {"filename",   original_filename},
+        {"display_name", original_filename},
         {"size",       file_info.content.size()},
+        {"mime_type",  file_info.content_type},
         {"chat_id",    chat_id},
         {"project_id", *project_id},
+        {"created_at", uploaded_at},
+        {"status",     upload_warning ? "warning" : "done"},
         {"stored_path", WideToUtf8(dest.wstring())},
         {"relative_path", original_relative},
         {"download_url", data_route},
@@ -3006,6 +3025,7 @@ void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
         {"project_folder", WideToUtf8(upload_dir.wstring())},
         {"project_folder_variable", upload_folder->variable_name},
         {"file_kind", creates_agent_markdown ? "processed" : "text"},
+        {"needs_ingestion", creates_agent_markdown},
         {"added_to_rag", false},
     };
     if (artifact.created) {
@@ -3021,6 +3041,16 @@ void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
             ? "Processed upload did not create an .agent Markdown artifact."
             : artifact.error;
     }
+
+    MessageRecord file_msg;
+    file_msg.role = "file";
+    file_msg.content = resp.dump();
+    file_msg.created_at = uploaded_at;
+    auto messages = storage_->LoadMessages(*project_id, chat_id);
+    messages.push_back(file_msg);
+    storage_->SaveMessages(*project_id, chat_id, messages);
+    NotifyContentChanged();
+
     SendJson(res_ptr, 200, resp.dump());
 }
 

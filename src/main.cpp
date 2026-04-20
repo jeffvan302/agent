@@ -1,6 +1,8 @@
 ﻿#include <windows.h>
 #include <commctrl.h>
 #include <richedit.h>
+#include <shellapi.h>
+#include <winhttp.h>
 
 #include "mcp_manager.h"
 #include "mcp_server_manager.h"
@@ -32,6 +34,7 @@
 #include <exception>
 #include <fstream>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -140,6 +143,587 @@ size_t EstimateMessageTokens(const MessageRecord& message) {
     tokens += EstimateTokenCount(message.tool_call_id);
     tokens += EstimateTokenCount(message.tool_calls_json);
     return tokens;
+}
+
+std::vector<MessageRecord> ModelVisibleMessages(const std::vector<MessageRecord>& messages) {
+    std::vector<MessageRecord> filtered;
+    filtered.reserve(messages.size());
+    for (const auto& message : messages) {
+        if (message.role == "file") {
+            continue;
+        }
+        filtered.push_back(message);
+    }
+    return filtered;
+}
+
+std::wstring FormatFileUploadForTranscript(const std::string& content) {
+    try {
+        const auto data = nlohmann::json::parse(content);
+        std::ostringstream out;
+        out << data.value("filename", data.value("display_name", "Uploaded file"));
+        const std::string status = data.value("status", "");
+        if (!status.empty()) {
+            out << " (" << status << ")";
+        }
+        if (data.contains("size") && data["size"].is_number_unsigned()) {
+            out << "\nSize: " << data["size"].get<size_t>() << " bytes";
+        }
+        const std::string download = data.value("absolute_download_url", data.value("download_url", ""));
+        if (!download.empty()) {
+            out << "\nDownload: " << download;
+        }
+        const std::string warning = data.value("extraction_error", "");
+        if (!warning.empty()) {
+            out << "\nWarning: " << warning;
+        }
+        return Utf8ToWide(out.str());
+    } catch (...) {
+        return Utf8ToWide(content);
+    }
+}
+
+enum class HeadlessCommandMode {
+    None,
+    OllamaSetup,
+    OllamaRemote,
+};
+
+struct HeadlessImageIngestSettings {
+    std::string vision_model = "qwen2.5vl:7b";
+    int ollama_instance_count = 1;
+    int ollama_start_port = 11434;
+};
+
+struct HeadlessManagedOllamaProcess {
+    HANDLE process = nullptr;
+    DWORD process_id = 0;
+    int port = 0;
+};
+
+HANDLE g_headless_stop_event = nullptr;
+
+int ClampHeadlessOllamaInstanceCount(int value) {
+    return std::clamp(value <= 0 ? 1 : value, 1, 32);
+}
+
+int ClampHeadlessOllamaStartPort(int value) {
+    return std::clamp(value <= 0 ? 11434 : value, 1, 65535);
+}
+
+void EnsureHeadlessConsoleAttached() {
+    static bool attempted = false;
+    if (attempted) {
+        return;
+    }
+    attempted = true;
+    if (!AttachConsole(ATTACH_PARENT_PROCESS) && GetLastError() != ERROR_ACCESS_DENIED) {
+        AllocConsole();
+    }
+}
+
+void HeadlessWriteLine(const std::wstring& text) {
+    EnsureHeadlessConsoleAttached();
+    const std::wstring line = text + L"\r\n";
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (output && output != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        if (WriteConsoleW(output, line.c_str(), static_cast<DWORD>(line.size()), &written, nullptr)) {
+            return;
+        }
+        const std::string utf8 = WideToUtf8(line);
+        WriteFile(output, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+        return;
+    }
+    OutputDebugStringW(line.c_str());
+}
+
+std::wstring QuoteProcessArgument(const std::wstring& value) {
+    std::wstring quoted = L"\"";
+    for (wchar_t ch : value) {
+        if (ch == L'"') {
+            quoted += L"\\\"";
+        } else {
+            quoted.push_back(ch);
+        }
+    }
+    quoted += L"\"";
+    return quoted;
+}
+
+std::wstring ExpandEnvironmentPath(const std::wstring& value) {
+    const DWORD needed = ExpandEnvironmentStringsW(value.c_str(), nullptr, 0);
+    if (needed == 0) {
+        return value;
+    }
+    std::wstring expanded(needed, L'\0');
+    const DWORD written = ExpandEnvironmentStringsW(value.c_str(), expanded.data(), needed);
+    if (written == 0 || written > needed) {
+        return value;
+    }
+    expanded.resize(written > 0 ? written - 1 : 0);
+    return expanded;
+}
+
+std::optional<std::filesystem::path> FindHeadlessExecutable(const std::wstring& executable_name) {
+    std::vector<wchar_t> buffer(32768, L'\0');
+    const DWORD found = SearchPathW(nullptr, executable_name.c_str(), nullptr, static_cast<DWORD>(buffer.size()), buffer.data(), nullptr);
+    if (found > 0 && found < buffer.size()) {
+        return std::filesystem::path(buffer.data());
+    }
+
+    if (_wcsicmp(executable_name.c_str(), L"ollama.exe") == 0) {
+        const std::vector<std::wstring> candidates = {
+            ExpandEnvironmentPath(L"%LOCALAPPDATA%\\Programs\\Ollama\\ollama.exe"),
+            ExpandEnvironmentPath(L"%ProgramFiles%\\Ollama\\ollama.exe"),
+            ExpandEnvironmentPath(L"%ProgramFiles(x86)%\\Ollama\\ollama.exe"),
+        };
+        for (const auto& candidate : candidates) {
+            std::error_code ec;
+            if (!candidate.empty() && std::filesystem::exists(candidate, ec)) {
+                return std::filesystem::path(candidate);
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+bool RunHeadlessCommandLine(std::wstring command_line, DWORD timeout_ms, DWORD* exit_code) {
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    BOOL inherit_handles = FALSE;
+    HANDLE std_output = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE std_error = GetStdHandle(STD_ERROR_HANDLE);
+    HANDLE std_input = GetStdHandle(STD_INPUT_HANDLE);
+    if (std_output && std_output != INVALID_HANDLE_VALUE &&
+        std_error && std_error != INVALID_HANDLE_VALUE) {
+        startup.dwFlags |= STARTF_USESTDHANDLES;
+        startup.hStdOutput = std_output;
+        startup.hStdError = std_error;
+        startup.hStdInput = (std_input && std_input != INVALID_HANDLE_VALUE) ? std_input : nullptr;
+        inherit_handles = TRUE;
+    }
+
+    std::vector<wchar_t> buffer(command_line.begin(), command_line.end());
+    buffer.push_back(L'\0');
+
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(nullptr, buffer.data(), nullptr, nullptr, inherit_handles, 0, nullptr, nullptr, &startup, &process)) {
+        HeadlessWriteLine(L"Failed to start command. CreateProcess error: " + std::to_wstring(GetLastError()));
+        return false;
+    }
+
+    const DWORD wait_result = WaitForSingleObject(process.hProcess, timeout_ms);
+    DWORD process_exit_code = 1;
+    if (wait_result == WAIT_TIMEOUT) {
+        TerminateProcess(process.hProcess, 1);
+        WaitForSingleObject(process.hProcess, 5000);
+        process_exit_code = 1;
+    } else {
+        GetExitCodeProcess(process.hProcess, &process_exit_code);
+    }
+
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    if (exit_code) {
+        *exit_code = process_exit_code;
+    }
+    return wait_result != WAIT_TIMEOUT && process_exit_code == 0;
+}
+
+std::optional<HeadlessImageIngestSettings> LoadHeadlessImageIngestSettings(
+    const std::filesystem::path& path,
+    std::string* error) {
+    try {
+        if (path.empty() || !std::filesystem::exists(path)) {
+            if (error) {
+                *error = "Settings JSON file was not found.";
+            }
+            return std::nullopt;
+        }
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open()) {
+            if (error) {
+                *error = "Could not open settings JSON file.";
+            }
+            return std::nullopt;
+        }
+        const std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        const auto data = nlohmann::json::parse(text);
+
+        HeadlessImageIngestSettings settings;
+        settings.vision_model = Trim(data.value("vision_model", "qwen2.5vl:7b"));
+        if (settings.vision_model.empty()) {
+            settings.vision_model = "qwen2.5vl:7b";
+        }
+        settings.ollama_instance_count = ClampHeadlessOllamaInstanceCount(data.value("ollama_instance_count", 1));
+        settings.ollama_start_port = ClampHeadlessOllamaStartPort(data.value("ollama_start_port", 11434));
+        if (settings.ollama_start_port + settings.ollama_instance_count - 1 > 65535) {
+            if (error) {
+                *error = "Ollama port range exceeds 65535.";
+            }
+            return std::nullopt;
+        }
+        return settings;
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    } catch (...) {
+        if (error) {
+            *error = "Unexpected error loading settings JSON.";
+        }
+    }
+    return std::nullopt;
+}
+
+bool EnsureHeadlessOllamaInstalled(std::filesystem::path* ollama_path) {
+    if (auto existing = FindHeadlessExecutable(L"ollama.exe")) {
+        if (ollama_path) {
+            *ollama_path = *existing;
+        }
+        HeadlessWriteLine(L"Ollama is already installed: " + existing->wstring());
+        return true;
+    }
+
+    if (!FindHeadlessExecutable(L"winget.exe")) {
+        HeadlessWriteLine(L"Ollama is missing and winget.exe was not found. Install Ollama manually first.");
+        return false;
+    }
+
+    HeadlessWriteLine(L"Ollama is not installed. Installing Ollama with winget...");
+    DWORD exit_code = 1;
+    const bool installed = RunHeadlessCommandLine(
+        L"cmd.exe /c winget install --id Ollama.Ollama -e --accept-package-agreements --accept-source-agreements",
+        INFINITE,
+        &exit_code);
+    if (!installed) {
+        HeadlessWriteLine(L"Ollama installer failed with exit code " + std::to_wstring(exit_code) + L".");
+        return false;
+    }
+
+    if (auto installed_path = FindHeadlessExecutable(L"ollama.exe")) {
+        if (ollama_path) {
+            *ollama_path = *installed_path;
+        }
+        HeadlessWriteLine(L"Ollama installed: " + installed_path->wstring());
+        return true;
+    }
+
+    HeadlessWriteLine(L"Ollama installation finished, but ollama.exe is not visible to this process yet. Restart this shell or provide Ollama on PATH.");
+    return false;
+}
+
+bool PullHeadlessOllamaModel(const std::filesystem::path& ollama_path, const std::string& model) {
+    HeadlessWriteLine(L"Pulling Ollama vision model: " + Utf8ToWide(model));
+    DWORD exit_code = 1;
+    const std::wstring command =
+        QuoteProcessArgument(ollama_path.wstring()) + L" pull " + QuoteProcessArgument(Utf8ToWide(model));
+    const bool pulled = RunHeadlessCommandLine(command, INFINITE, &exit_code);
+    if (!pulled) {
+        HeadlessWriteLine(L"Model pull failed with exit code " + std::to_wstring(exit_code) + L".");
+    }
+    return pulled;
+}
+
+struct HeadlessWinHttpCloser {
+    void operator()(void* handle) const {
+        if (handle) {
+            WinHttpCloseHandle(static_cast<HINTERNET>(handle));
+        }
+    }
+};
+
+using HeadlessWinHttpHandle = std::unique_ptr<void, HeadlessWinHttpCloser>;
+
+bool IsHeadlessOllamaEndpointAvailable(int port) {
+    HeadlessWinHttpHandle session(WinHttpOpen(
+        L"AgentImageIngestRemote/1.0",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0));
+    if (!session) {
+        return false;
+    }
+    HeadlessWinHttpHandle connection(WinHttpConnect(
+        static_cast<HINTERNET>(session.get()),
+        L"127.0.0.1",
+        static_cast<INTERNET_PORT>(port),
+        0));
+    if (!connection) {
+        return false;
+    }
+    HeadlessWinHttpHandle request(WinHttpOpenRequest(
+        static_cast<HINTERNET>(connection.get()),
+        L"GET",
+        L"/api/tags",
+        nullptr,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        0));
+    if (!request) {
+        return false;
+    }
+    WinHttpSetTimeouts(static_cast<HINTERNET>(request.get()), 1000, 1000, 1000, 1000);
+    if (!WinHttpSendRequest(static_cast<HINTERNET>(request.get()), WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+        return false;
+    }
+    if (!WinHttpReceiveResponse(static_cast<HINTERNET>(request.get()), nullptr)) {
+        return false;
+    }
+    DWORD status_code = 0;
+    DWORD status_size = sizeof(status_code);
+    if (!WinHttpQueryHeaders(static_cast<HINTERNET>(request.get()), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status_code, &status_size, WINHTTP_NO_HEADER_INDEX)) {
+        return false;
+    }
+    return status_code >= 200 && status_code < 500;
+}
+
+bool SetTemporaryEnvironmentVariable(
+    const std::wstring& name,
+    const std::wstring& value,
+    std::wstring* previous_value,
+    bool* had_previous_value) {
+    DWORD size = GetEnvironmentVariableW(name.c_str(), nullptr, 0);
+    if (had_previous_value) {
+        *had_previous_value = size > 0;
+    }
+    if (previous_value) {
+        previous_value->clear();
+        if (size > 0) {
+            previous_value->resize(size, L'\0');
+            const DWORD written = GetEnvironmentVariableW(name.c_str(), previous_value->data(), size);
+            previous_value->resize(written);
+        }
+    }
+    return SetEnvironmentVariableW(name.c_str(), value.c_str()) != FALSE;
+}
+
+void RestoreEnvironmentVariable(
+    const std::wstring& name,
+    const std::wstring& previous_value,
+    bool had_previous_value) {
+    if (had_previous_value) {
+        SetEnvironmentVariableW(name.c_str(), previous_value.c_str());
+    } else {
+        SetEnvironmentVariableW(name.c_str(), nullptr);
+    }
+}
+
+bool StartHeadlessOllamaServer(
+    const std::filesystem::path& ollama_path,
+    int port,
+    HeadlessManagedOllamaProcess* managed_process) {
+    const std::wstring host = L"0.0.0.0:" + std::to_wstring(port);
+    std::wstring previous_host;
+    bool had_previous_host = false;
+    SetTemporaryEnvironmentVariable(L"OLLAMA_HOST", host, &previous_host, &had_previous_host);
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    BOOL inherit_handles = FALSE;
+    HANDLE std_output = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE std_error = GetStdHandle(STD_ERROR_HANDLE);
+    HANDLE std_input = GetStdHandle(STD_INPUT_HANDLE);
+    if (std_output && std_output != INVALID_HANDLE_VALUE &&
+        std_error && std_error != INVALID_HANDLE_VALUE) {
+        startup.dwFlags |= STARTF_USESTDHANDLES;
+        startup.hStdOutput = std_output;
+        startup.hStdError = std_error;
+        startup.hStdInput = (std_input && std_input != INVALID_HANDLE_VALUE) ? std_input : nullptr;
+        inherit_handles = TRUE;
+    }
+
+    std::wstring command_line = QuoteProcessArgument(ollama_path.wstring()) + L" serve";
+    std::vector<wchar_t> buffer(command_line.begin(), command_line.end());
+    buffer.push_back(L'\0');
+    PROCESS_INFORMATION process{};
+    HeadlessWriteLine(L"Starting Ollama on 0.0.0.0:" + std::to_wstring(port) + L"...");
+    const BOOL created = CreateProcessW(nullptr, buffer.data(), nullptr, nullptr, inherit_handles, 0, nullptr, nullptr, &startup, &process);
+
+    RestoreEnvironmentVariable(L"OLLAMA_HOST", previous_host, had_previous_host);
+
+    if (!created) {
+        HeadlessWriteLine(L"Failed to start Ollama on port " + std::to_wstring(port) + L". CreateProcess error: " + std::to_wstring(GetLastError()));
+        return false;
+    }
+    CloseHandle(process.hThread);
+
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        Sleep(500);
+        if (IsHeadlessOllamaEndpointAvailable(port)) {
+            if (managed_process) {
+                managed_process->process = process.hProcess;
+                managed_process->process_id = process.dwProcessId;
+                managed_process->port = port;
+            } else {
+                CloseHandle(process.hProcess);
+            }
+            HeadlessWriteLine(L"Ollama is responding on port " + std::to_wstring(port) + L".");
+            return true;
+        }
+    }
+
+    TerminateProcess(process.hProcess, 1);
+    WaitForSingleObject(process.hProcess, 5000);
+    CloseHandle(process.hProcess);
+    HeadlessWriteLine(L"Ollama started but did not become ready on port " + std::to_wstring(port) + L".");
+    return false;
+}
+
+BOOL WINAPI HeadlessConsoleControlHandler(DWORD control_type) {
+    switch (control_type) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+    case CTRL_CLOSE_EVENT:
+    case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
+        if (g_headless_stop_event) {
+            SetEvent(g_headless_stop_event);
+            return TRUE;
+        }
+        break;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+void StopHeadlessManagedProcesses(std::vector<HeadlessManagedOllamaProcess>& processes) {
+    for (auto& process : processes) {
+        if (!process.process) {
+            continue;
+        }
+        DWORD exit_code = 0;
+        if (GetExitCodeProcess(process.process, &exit_code) && exit_code == STILL_ACTIVE) {
+            HeadlessWriteLine(L"Stopping Ollama on port " + std::to_wstring(process.port) + L"...");
+            TerminateProcess(process.process, 0);
+            WaitForSingleObject(process.process, 5000);
+        }
+        CloseHandle(process.process);
+        process.process = nullptr;
+    }
+}
+
+int RunHeadlessOllamaSetup(const std::filesystem::path& settings_path) {
+    std::string error;
+    const auto settings = LoadHeadlessImageIngestSettings(settings_path, &error);
+    if (!settings) {
+        HeadlessWriteLine(L"Could not load image ingest settings: " + Utf8ToWide(error));
+        return 2;
+    }
+
+    std::filesystem::path ollama_path;
+    if (!EnsureHeadlessOllamaInstalled(&ollama_path)) {
+        return 3;
+    }
+    if (!PullHeadlessOllamaModel(ollama_path, settings->vision_model)) {
+        return 4;
+    }
+
+    HeadlessWriteLine(L"Setup complete.");
+    HeadlessWriteLine(L"Run remote image ingestion services with:");
+    HeadlessWriteLine(L"  agent --olama-remote " + QuoteProcessArgument(settings_path.wstring()));
+    return 0;
+}
+
+int RunHeadlessOllamaRemote(const std::filesystem::path& settings_path) {
+    std::string error;
+    const auto settings = LoadHeadlessImageIngestSettings(settings_path, &error);
+    if (!settings) {
+        HeadlessWriteLine(L"Could not load image ingest settings: " + Utf8ToWide(error));
+        return 2;
+    }
+
+    const auto ollama_path = FindHeadlessExecutable(L"ollama.exe");
+    if (!ollama_path) {
+        HeadlessWriteLine(L"ollama.exe was not found. Run --olama-setup first or install Ollama manually.");
+        return 3;
+    }
+
+    g_headless_stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    SetConsoleCtrlHandler(HeadlessConsoleControlHandler, TRUE);
+
+    std::vector<HeadlessManagedOllamaProcess> managed_processes;
+    for (int i = 0; i < settings->ollama_instance_count; ++i) {
+        const int port = settings->ollama_start_port + i;
+        if (IsHeadlessOllamaEndpointAvailable(port)) {
+            HeadlessWriteLine(L"Ollama is already responding on port " + std::to_wstring(port) + L"; leaving that external process alone.");
+            continue;
+        }
+
+        HeadlessManagedOllamaProcess process;
+        if (!StartHeadlessOllamaServer(*ollama_path, port, &process)) {
+            StopHeadlessManagedProcesses(managed_processes);
+            if (g_headless_stop_event) {
+                CloseHandle(g_headless_stop_event);
+                g_headless_stop_event = nullptr;
+            }
+            return 4;
+        }
+        managed_processes.push_back(process);
+    }
+
+    HeadlessWriteLine(L"Remote image ingestion Ollama endpoints are ready.");
+    HeadlessWriteLine(L"Configure the desktop app's Vision host / base URL to this computer's address.");
+    HeadlessWriteLine(L"Starting port: " + std::to_wstring(settings->ollama_start_port) + L"; instances: " + std::to_wstring(settings->ollama_instance_count) + L".");
+    HeadlessWriteLine(L"Press Ctrl+C to stop app-managed Ollama processes.");
+
+    int exit_code = 0;
+    std::vector<HANDLE> wait_handles;
+    wait_handles.push_back(g_headless_stop_event);
+    for (const auto& process : managed_processes) {
+        if (process.process) {
+            wait_handles.push_back(process.process);
+        }
+    }
+
+    for (;;) {
+        const DWORD wait_result = WaitForMultipleObjects(static_cast<DWORD>(wait_handles.size()), wait_handles.data(), FALSE, 1000);
+        if (wait_result == WAIT_OBJECT_0) {
+            break;
+        }
+        if (wait_result > WAIT_OBJECT_0 && wait_result < WAIT_OBJECT_0 + wait_handles.size()) {
+            const size_t process_index = static_cast<size_t>(wait_result - WAIT_OBJECT_0 - 1);
+            const int port = process_index < managed_processes.size() ? managed_processes[process_index].port : 0;
+            std::wstring message = L"Managed Ollama process exited unexpectedly";
+            if (port > 0) {
+                message += L" on port " + std::to_wstring(port);
+            }
+            message += L".";
+            HeadlessWriteLine(message);
+            exit_code = 5;
+            break;
+        }
+    }
+
+    StopHeadlessManagedProcesses(managed_processes);
+    SetConsoleCtrlHandler(HeadlessConsoleControlHandler, FALSE);
+    if (g_headless_stop_event) {
+        CloseHandle(g_headless_stop_event);
+        g_headless_stop_event = nullptr;
+    }
+    return exit_code;
+}
+
+int RunHeadlessOllamaCommand(HeadlessCommandMode mode, const std::filesystem::path& settings_path) {
+    EnsureHeadlessConsoleAttached();
+    if (settings_path.empty()) {
+        HeadlessWriteLine(L"Missing image ingest settings JSON path.");
+        HeadlessWriteLine(L"Usage:");
+        HeadlessWriteLine(L"  agent --olama-setup rag_image_ingest_settings.json");
+        HeadlessWriteLine(L"  agent --olama-remote rag_image_ingest_settings.json");
+        return 2;
+    }
+    if (mode == HeadlessCommandMode::OllamaSetup) {
+        return RunHeadlessOllamaSetup(settings_path);
+    }
+    if (mode == HeadlessCommandMode::OllamaRemote) {
+        return RunHeadlessOllamaRemote(settings_path);
+    }
+    return 0;
 }
 
 size_t EstimateToolTokens(const McpExposedTool& tool) {
@@ -2186,6 +2770,7 @@ private:
     void OpenModelTools();
     void EditProjectSettings();
     void RunSetupSystem();
+    void RestartApplication();
     void EnsureWebServer();   // lazily creates web_server_ if not yet constructed
     void OpenAdminConfig();
     void SetupDefaultMcpServersIfEmpty();
@@ -3050,19 +3635,22 @@ void MainWindow::RunSetupSystem() {
         L"Setup System will configure this installation in one step:\n\n"
         L"- Write 6 default MCP servers (DuckDuckGo, file system, sequential\n"
         L"  thinking, time, git, desktop commander) if none are configured.\n"
+        L"- Check for Node.js, npm, npx, uv, and uvx; install missing\n"
+        L"  command runtimes used by the default MCP servers.\n"
         L"- Install Poppler pdftotext, Tesseract OCR, Pandoc, and LibreOffice\n"
         L"  (document extraction tools for the RAG service).\n"
         L"- Install Ollama (local AI runtime for embeddings).\n"
         L"- Pull the nomic-embed-text embedding model.\n";
     if (has_gpu) {
         confirm_msg +=
-            L"- Pull llava:7b vision model (dedicated GPU detected --\n"
-            L"  enables GPU-accelerated image processing in the RAG service).\n";
+            L"- Pull qwen2.5vl:7b vision model (dedicated GPU detected --\n"
+            L"  matches the default image ingestion model).\n";
     }
     confirm_msg +=
         L"\nAll package installs run in a single visible terminal window.\n"
         L"You can close the terminal at any time to skip remaining steps.\n\n"
         L"If MCP servers are already configured they will not be overwritten.\n\n"
+        L"This does not configure providers, web server users/groups, or RAG libraries.\n\n"
         L"Proceed with system setup?";
 
     if (MessageBoxW(hwnd_, confirm_msg.c_str(), L"Setup System",
@@ -3085,33 +3673,60 @@ void MainWindow::RunSetupSystem() {
            << L"echo  Agent System Setup\r\n"
            << L"echo ============================================================\r\n"
            << L"echo.\r\n"
+           // Node.js / npm / npx
+           << L"echo [1/8] Checking Node.js, npm, and npx...\r\n"
+           << L"set \"NEED_NODE=0\"\r\n"
+           << L"where node >nul 2>nul || set \"NEED_NODE=1\"\r\n"
+           << L"where npm >nul 2>nul || set \"NEED_NODE=1\"\r\n"
+           << L"where npx >nul 2>nul || set \"NEED_NODE=1\"\r\n"
+           << L"if \"%NEED_NODE%\"==\"1\" (\r\n"
+           << L"  echo Installing Node.js LTS because node/npm/npx is missing...\r\n"
+           << L"  winget install --id OpenJS.NodeJS.LTS -e "
+              L"--accept-package-agreements --accept-source-agreements\r\n"
+           << L") else (\r\n"
+           << L"  echo Node.js, npm, and npx are already available.\r\n"
+           << L")\r\n"
+           << L"echo.\r\n"
+           // uv / uvx
+           << L"echo [2/8] Checking uv and uvx...\r\n"
+           << L"set \"NEED_UV=0\"\r\n"
+           << L"where uv >nul 2>nul || set \"NEED_UV=1\"\r\n"
+           << L"where uvx >nul 2>nul || set \"NEED_UV=1\"\r\n"
+           << L"if \"%NEED_UV%\"==\"1\" (\r\n"
+           << L"  echo Installing uv because uv/uvx is missing...\r\n"
+           << L"  winget install --id astral-sh.uv -e "
+              L"--accept-package-agreements --accept-source-agreements\r\n"
+           << L") else (\r\n"
+           << L"  echo uv and uvx are already available.\r\n"
+           << L")\r\n"
+           << L"echo.\r\n"
            // Poppler
-           << L"echo [1/6] Installing Poppler pdftotext (PDF extraction)...\r\n"
+           << L"echo [3/8] Installing Poppler pdftotext (PDF extraction)...\r\n"
            << L"winget install --id oschwartz10612.Poppler -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
            // Tesseract
-           << L"echo [2/6] Installing Tesseract OCR...\r\n"
+           << L"echo [4/8] Installing Tesseract OCR...\r\n"
            << L"winget install --id tesseract-ocr.tesseract -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
            // Pandoc
-           << L"echo [3/6] Installing Pandoc...\r\n"
+           << L"echo [5/8] Installing Pandoc...\r\n"
            << L"winget install --id JohnMacFarlane.Pandoc -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
            // LibreOffice
-           << L"echo [4/6] Installing LibreOffice...\r\n"
+           << L"echo [6/8] Installing LibreOffice...\r\n"
            << L"winget install --id TheDocumentFoundation.LibreOffice -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
            // Ollama
-           << L"echo [5/6] Installing Ollama (local AI runtime)...\r\n"
+           << L"echo [7/8] Installing Ollama (local AI runtime)...\r\n"
            << L"winget install --id Ollama.Ollama -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
            // Pull embedding model (Ollama must be running after install)
-           << L"echo [6/6] Pulling nomic-embed-text embedding model...\r\n"
+           << L"echo [8/8] Pulling nomic-embed-text embedding model...\r\n"
            << L"echo (Ollama may need a moment to start after installation.)\r\n"
            << L"timeout /t 8 /nobreak >nul\r\n"
            << L"ollama pull nomic-embed-text\r\n"
@@ -3120,8 +3735,8 @@ void MainWindow::RunSetupSystem() {
     // GPU-only: vision model for image-aware RAG
     if (has_gpu) {
         script
-           << L"echo [GPU] Pulling llava:7b vision model for image processing...\r\n"
-           << L"ollama pull llava:7b\r\n"
+           << L"echo [GPU] Pulling qwen2.5vl:7b vision model for image processing...\r\n"
+           << L"ollama pull qwen2.5vl:7b\r\n"
            << L"echo.\r\n";
     }
 
@@ -3132,7 +3747,7 @@ void MainWindow::RunSetupSystem() {
     if (has_gpu) {
         script
            << L"echo  Select 'vision_language_gpu' image ingest mode in the RAG\r\n"
-           << L"echo  library settings to use the llava:7b vision model.\r\n";
+           << L"echo  library settings to use the qwen2.5vl:7b vision model.\r\n";
     }
     script << L"echo ============================================================\r\n"
            << L"echo.\r\n"
@@ -3163,10 +3778,13 @@ void MainWindow::RunSetupSystem() {
         MessageBoxW(hwnd_,
             L"Failed to open the setup terminal window.\n"
             L"Please run the following commands manually in a terminal:\n\n"
+            L"  winget install --id OpenJS.NodeJS.LTS -e\n"
+            L"  winget install --id astral-sh.uv -e\n"
             L"  winget install --id oschwartz10612.Poppler -e\n"
             L"  winget install --id tesseract-ocr.tesseract -e\n"
             L"  winget install --id Ollama.Ollama -e\n"
-            L"  ollama pull nomic-embed-text",
+            L"  ollama pull nomic-embed-text\n"
+            L"  ollama pull qwen2.5vl:7b",
             L"Setup System", MB_OK | MB_ICONWARNING);
         return;
     }
@@ -3187,6 +3805,35 @@ void MainWindow::RunSetupSystem() {
 
     MessageBoxW(hwnd_, done_msg.c_str(), L"Setup System", MB_OK | MB_ICONINFORMATION);
     UpdateStatus(L"System setup launched.");
+
+    const int restart = MessageBoxW(
+        hwnd_,
+        L"The setup process can update PATH and installed command runtimes.\n\n"
+        L"Restarting the application is required before those command changes are reliably visible to MCP servers and RAG tooling.\n\n"
+        L"Restart the application now?\n\n"
+        L"Choose No if you want to let the setup terminal finish first and restart manually later.",
+        L"Restart Required",
+        MB_YESNO | MB_ICONQUESTION);
+    if (restart == IDYES) {
+        RestartApplication();
+    }
+}
+
+void MainWindow::RestartApplication() {
+    wchar_t module_path[MAX_PATH] = {};
+    if (!GetModuleFileNameW(nullptr, module_path, static_cast<DWORD>(std::size(module_path)))) {
+        MessageBoxW(hwnd_, L"Could not locate the application executable to restart.", L"Restart Application", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    const std::filesystem::path exe_path(module_path);
+    const std::wstring working_dir = exe_path.parent_path().wstring();
+    const HINSTANCE launched = ShellExecuteW(hwnd_, L"open", module_path, nullptr, working_dir.c_str(), SW_SHOWNORMAL);
+    if (reinterpret_cast<intptr_t>(launched) <= 32) {
+        MessageBoxW(hwnd_, L"Could not launch a new application instance. Please close and reopen the app manually.", L"Restart Application", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    DestroyWindow(hwnd_);
 }
 
 void MainWindow::ReloadProjects(const std::string& preferred_project_id, const std::string& preferred_chat_id) {
@@ -3459,7 +4106,7 @@ void MainWindow::SendCurrentMessage() {
     std::vector<MessageRecord> full_messages = active_messages_;
     full_messages.push_back(user_message);
 
-    std::vector<MessageRecord> request_history = active_messages_;
+    std::vector<MessageRecord> request_history = ModelVisibleMessages(active_messages_);
     std::string compressed_context;
     auto proj_settings = storage_.LoadProjectSettings(active_project_id_);
     const auto runtime_variables = BuildRuntimeVariablesForChat(active_project_id_, active_chat_id_);
@@ -3483,13 +4130,14 @@ void MainWindow::SendCurrentMessage() {
     if (!proj_settings.selected_compression_config_id.empty()) {
         selected_compression_config = compression_service_.GetGlobalConfig(proj_settings.selected_compression_config_id);
         if (selected_compression_config) {
-            if (compression_service_.ShouldCompress(active_project_id_, active_chat_id_, active_messages_.size())) {
+            const auto compression_messages = ModelVisibleMessages(active_messages_);
+            if (compression_service_.ShouldCompress(active_project_id_, active_chat_id_, compression_messages.size())) {
                 auto model_caller = [&](const ChatRequestOptions& opts) -> std::optional<ChatCompletionResult> {
                     auto result = OpenAIClient::CreateSimpleCompletion(opts);
                     return result.success ? std::make_optional(result) : std::nullopt;
                 };
                 compressed_context = compression_service_.CompressConversation(
-                    active_messages_, active_project_id_, active_chat_id_, proj_settings.selected_compression_config_id, model_caller);
+                    compression_messages, active_project_id_, active_chat_id_, proj_settings.selected_compression_config_id, model_caller);
             }
 
             auto compression_state = compression_service_.LoadChatState(active_project_id_, active_chat_id_);
@@ -4063,7 +4711,7 @@ void MainWindow::CompressCurrentContext() {
     }
 
     // Load current messages
-    auto messages = storage_.LoadMessages(active_project_id_, active_chat_id_);
+    auto messages = ModelVisibleMessages(storage_.LoadMessages(active_project_id_, active_chat_id_));
     auto state_before = compression_service_.LoadChatState(active_project_id_, active_chat_id_);
     const size_t compressed_through_before = std::min(state_before.last_compression_message_index, messages.size());
     if (!state_before.current_compressed_context.empty() && compressed_through_before >= messages.size()) {
@@ -4293,6 +4941,13 @@ void MainWindow::RenderTranscript() {
             }
             if (message.role == "assistant" &&
                 (message.content.empty() || !message.tool_calls_json.empty())) {
+                continue;
+            }
+
+            if (message.role == "file") {
+                transcript += L"File:\r\n";
+                transcript += FormatFileUploadForTranscript(message.content);
+                transcript += L"\r\n\r\n";
                 continue;
             }
 
@@ -4533,40 +5188,73 @@ ChatInfo* MainWindow::FindChat(const std::string& project_id, const std::string&
 
 struct CommandLineArgs {
     bool web_config = false;
+    HeadlessCommandMode headless_mode = HeadlessCommandMode::None;
+    std::filesystem::path headless_settings_path;
     LogLevel log_level = LogLevel::Info;
     std::wstring log_level_str;
 };
 
 static CommandLineArgs ParseCommandLineArgs(PWSTR cmd_line) {
+    (void)cmd_line;
     CommandLineArgs args;
 
-    std::wstring cmd_w(cmd_line);
-    std::wistringstream iss(cmd_w);
-    std::wstring arg;
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argv) {
+        return args;
+    }
 
-    while (iss >> arg) {
+    for (int i = 1; i < argc; ++i) {
+        std::wstring arg = argv[i];
         if (arg == L"--web-config") {
             args.web_config = true;
         } else if (arg == L"--log-level") {
-            iss >> args.log_level_str;
+            if (i + 1 < argc) {
+                args.log_level_str = argv[++i];
+            }
             if (!args.log_level_str.empty()) {
                 if (args.log_level_str == L"error") args.log_level = LogLevel::Error;
                 else if (args.log_level_str == L"warn") args.log_level = LogLevel::Warn;
                 else if (args.log_level_str == L"info") args.log_level = LogLevel::Info;
                 else if (args.log_level_str == L"debug") args.log_level = LogLevel::Debug;
             }
+        } else if (arg == L"--olama-setup" || arg == L"--ollama-setup") {
+            args.headless_mode = HeadlessCommandMode::OllamaSetup;
+            if (i + 1 < argc) {
+                args.headless_settings_path = std::filesystem::path(argv[++i]);
+            }
+        } else if (arg.rfind(L"--olama-setup=", 0) == 0 || arg.rfind(L"--ollama-setup=", 0) == 0) {
+            args.headless_mode = HeadlessCommandMode::OllamaSetup;
+            const size_t equals = arg.find(L'=');
+            args.headless_settings_path = std::filesystem::path(arg.substr(equals + 1));
+        } else if (arg == L"--olama-remote" || arg == L"--ollama-remote") {
+            args.headless_mode = HeadlessCommandMode::OllamaRemote;
+            if (i + 1 < argc) {
+                args.headless_settings_path = std::filesystem::path(argv[++i]);
+            }
+        } else if (arg.rfind(L"--olama-remote=", 0) == 0 || arg.rfind(L"--ollama-remote=", 0) == 0) {
+            args.headless_mode = HeadlessCommandMode::OllamaRemote;
+            const size_t equals = arg.find(L'=');
+            args.headless_settings_path = std::filesystem::path(arg.substr(equals + 1));
         } else if (arg == L"--help" || arg == L"-h") {
             MessageBoxW(nullptr,
                 L"Agent Desktop Command Line Options:\n\n"
                 L"  --web-config     Open Web Config dialog directly\n"
                 L"  --log-level N    Set log level: error, warn, info, debug\n"
+                L"  --olama-setup FILE\n"
+                L"                   Install Ollama if needed and pull the configured image vision model\n"
+                L"  --olama-remote FILE\n"
+                L"                   Run local Ollama image vision endpoints from image ingest settings\n"
+                L"  --ollama-setup / --ollama-remote are also accepted\n"
                 L"  --help, -h       Show this help message\n\n"
                 L"Example:\n"
-                L"  agent.exe --web-config --log-level debug",
+                L"  agent.exe --web-config --log-level debug\n"
+                L"  agent.exe --olama-remote rag_image_ingest_settings.json",
                 L"Agent Desktop Help", MB_OK | MB_ICONINFORMATION);
         }
     }
 
+    LocalFree(argv);
     return args;
 }
 
@@ -4576,6 +5264,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmd_line, int show_comm
     Logger::Initialize(std::filesystem::current_path() / "logs", args.log_level);
     Logger::Info("Agent Desktop starting");
     Logger::Info("Command line: " + WideToUtf8(std::wstring(cmd_line)));
+
+    if (args.headless_mode != HeadlessCommandMode::None) {
+        const int exit_code = RunHeadlessOllamaCommand(args.headless_mode, args.headless_settings_path);
+        Logger::Info("Agent Desktop headless command complete: " + std::to_string(exit_code));
+        Logger::Shutdown();
+        return exit_code;
+    }
 
     LoadLibraryW(L"Msftedit.dll");
 

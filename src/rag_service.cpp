@@ -17,12 +17,16 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cctype>
 #include <cstring>
 #include <cmath>
 #include <cstdint>
+#include <cwchar>
 #include <cwctype>
+#include <deque>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <iterator>
 #include <limits>
@@ -32,6 +36,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 using json = nlohmann::json;
 
@@ -51,6 +56,7 @@ bool IsRichExtractionExtension(const std::filesystem::path& path);
 bool IsImageExtension(const std::filesystem::path& path);
 std::string ExtractRichDocumentToMarkdown(const std::filesystem::path& path, std::string* extractor_id);
 std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* extractor_id);
+std::optional<std::string> DescribeImageWithOllamaVisionDirect(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error);
 std::string SanitizeUtf8ForJson(const std::string& text);
 bool PythonModuleAvailable(const std::wstring& python_executable, const std::string& module_name);
 
@@ -101,6 +107,14 @@ std::string NormalizeImageVisionProvider(std::string provider) {
     return provider.empty() ? "none" : provider;
 }
 
+int ClampOllamaInstanceCount(int value) {
+    return std::clamp(value <= 0 ? 1 : value, 1, 32);
+}
+
+int ClampOllamaStartPort(int value) {
+    return std::clamp(value <= 0 ? 11434 : value, 1, 65535);
+}
+
 json RagImageIngestSettingsToJson(const RagImageIngestSettings& settings) {
     return json{
         {"enabled", settings.enabled},
@@ -109,9 +123,12 @@ json RagImageIngestSettingsToJson(const RagImageIngestSettings& settings) {
         {"paddle_python_command", settings.paddle_python_command.empty() ? "python" : settings.paddle_python_command},
         {"paddle_language", settings.paddle_language.empty() ? "en" : settings.paddle_language},
         {"vision_provider", NormalizeImageVisionProvider(settings.vision_provider)},
-        {"vision_base_url", settings.vision_base_url.empty() ? "http://localhost:11434" : settings.vision_base_url},
+        {"vision_base_url", settings.vision_base_url.empty() ? "http://localhost" : settings.vision_base_url},
         {"vision_model", settings.vision_model.empty() ? "qwen2.5vl:7b" : settings.vision_model},
         {"vision_prompt", settings.vision_prompt.empty() ? DefaultImageVisionPrompt() : settings.vision_prompt},
+        {"ollama_instance_count", ClampOllamaInstanceCount(settings.ollama_instance_count)},
+        {"ollama_start_port", ClampOllamaStartPort(settings.ollama_start_port)},
+        {"ollama_start_locally", settings.ollama_start_locally},
         {"include_ocr_text", settings.include_ocr_text},
         {"include_visual_description", settings.include_visual_description},
     };
@@ -134,9 +151,9 @@ RagImageIngestSettings RagImageIngestSettingsFromJson(const json& item) {
         settings.paddle_language = "en";
     }
     settings.vision_provider = NormalizeImageVisionProvider(item.value("vision_provider", "ollama"));
-    settings.vision_base_url = item.value("vision_base_url", "http://localhost:11434");
+    settings.vision_base_url = item.value("vision_base_url", "http://localhost");
     if (Trim(settings.vision_base_url).empty()) {
-        settings.vision_base_url = "http://localhost:11434";
+        settings.vision_base_url = "http://localhost";
     }
     settings.vision_model = item.value("vision_model", "qwen2.5vl:7b");
     if (Trim(settings.vision_model).empty()) {
@@ -146,6 +163,9 @@ RagImageIngestSettings RagImageIngestSettingsFromJson(const json& item) {
     if (Trim(settings.vision_prompt).empty()) {
         settings.vision_prompt = DefaultImageVisionPrompt();
     }
+    settings.ollama_instance_count = ClampOllamaInstanceCount(item.value("ollama_instance_count", 1));
+    settings.ollama_start_port = ClampOllamaStartPort(item.value("ollama_start_port", 11434));
+    settings.ollama_start_locally = item.value("ollama_start_locally", false);
     settings.include_ocr_text = item.value("include_ocr_text", true);
     settings.include_visual_description = item.value("include_visual_description", true);
     return settings;
@@ -2013,7 +2033,6 @@ bool RunProcessAndWait(std::wstring command_line, DWORD timeout_ms, std::string*
         }
         return false;
     }
-
     const DWORD wait_result = WaitForSingleObject(process.hProcess, timeout_ms);
     if (wait_result == WAIT_TIMEOUT) {
         TerminateProcess(process.hProcess, 1);
@@ -2037,6 +2056,117 @@ bool RunProcessAndWait(std::wstring command_line, DWORD timeout_ms, std::string*
         return false;
     }
     return true;
+}
+
+std::string NormalizeOllamaVisionBaseUrl(std::string base_url) {
+    base_url = Trim(base_url);
+    if (base_url.empty()) {
+        return "http://localhost";
+    }
+    if (base_url.find("://") == std::string::npos) {
+        base_url = "http://" + base_url;
+    }
+    return base_url;
+}
+
+std::vector<std::string> BuildOllamaVisionBaseUrls(const RagImageIngestSettings& settings) {
+    const int count = ClampOllamaInstanceCount(settings.ollama_instance_count);
+    const std::string base_url = NormalizeOllamaVisionBaseUrl(settings.vision_base_url);
+    std::string scheme = "http";
+    std::string host = "localhost";
+    try {
+        const ParsedUrl parsed = CrackUrl(base_url);
+        scheme = parsed.secure ? "https" : "http";
+        host = WideToUtf8(parsed.host);
+        if (Trim(host).empty()) {
+            host = "localhost";
+        }
+    } catch (...) {
+    }
+
+    const int start_port = ClampOllamaStartPort(settings.ollama_start_port);
+    std::vector<std::string> endpoints;
+    endpoints.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        const int port = std::min(65535, start_port + i);
+        endpoints.push_back(scheme + "://" + host + ":" + std::to_string(port));
+    }
+    return endpoints;
+}
+
+std::string JoinStrings(const std::vector<std::string>& values, const std::string& separator) {
+    std::ostringstream stream;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i) {
+            stream << separator;
+        }
+        stream << values[i];
+    }
+    return stream.str();
+}
+
+bool ImageSettingsNeedOllamaVisionRuntime(const RagImageIngestSettings& settings) {
+    return settings.enabled &&
+        NormalizeImageIngestMode(settings.mode) == "vision_language_gpu" &&
+        settings.include_visual_description &&
+        NormalizeImageVisionProvider(settings.vision_provider) == "ollama";
+}
+
+bool AnyPathNeedsOllamaVisionRuntime(
+    const std::vector<std::filesystem::path>& paths,
+    const RagImageIngestSettings& settings) {
+    if (!ImageSettingsNeedOllamaVisionRuntime(settings)) {
+        return false;
+    }
+    return std::any_of(paths.begin(), paths.end(), [](const std::filesystem::path& path) {
+        return IsImageExtension(path);
+    });
+}
+
+std::wstring LowerWide(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    return value;
+}
+
+std::vector<wchar_t> BuildEnvironmentBlockWithOverride(const std::wstring& name, const std::wstring& value) {
+    std::vector<std::wstring> entries;
+    const std::wstring prefix = LowerWide(name + L"=");
+
+    LPWCH environment = GetEnvironmentStringsW();
+    if (environment) {
+        for (LPWCH cursor = environment; *cursor != L'\0'; cursor += std::wcslen(cursor) + 1) {
+            std::wstring entry = cursor;
+            if (LowerWide(entry).rfind(prefix, 0) == 0) {
+                continue;
+            }
+            entries.push_back(std::move(entry));
+        }
+        FreeEnvironmentStringsW(environment);
+    }
+
+    entries.push_back(name + L"=" + value);
+    std::sort(entries.begin(), entries.end(), [](const std::wstring& left, const std::wstring& right) {
+        return LowerWide(left) < LowerWide(right);
+    });
+
+    std::vector<wchar_t> block;
+    for (const auto& entry : entries) {
+        block.insert(block.end(), entry.begin(), entry.end());
+        block.push_back(L'\0');
+    }
+    block.push_back(L'\0');
+    return block;
+}
+
+bool AnyOllamaVisionEndpointAvailable(const RagImageIngestSettings& settings) {
+    for (const auto& endpoint : BuildOllamaVisionBaseUrls(settings)) {
+        if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::string Base64Encode(const std::string& bytes) {
@@ -2240,7 +2370,7 @@ std::optional<std::string> ExtractImageWithPaddleOcr(const std::filesystem::path
     }
 }
 
-std::optional<std::string> DescribeImageWithOllamaVision(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+std::optional<std::string> DescribeImageWithOllamaVisionDirect(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
     if (NormalizeImageVisionProvider(settings.vision_provider) != "ollama") {
         if (error) {
             *error = "Only Ollama vision-language image description is currently wired in.";
@@ -2260,7 +2390,8 @@ std::optional<std::string> DescribeImageWithOllamaVision(const std::filesystem::
         body["prompt"] = Trim(settings.vision_prompt).empty() ? DefaultImageVisionPrompt() : settings.vision_prompt;
         body["stream"] = false;
         body["images"] = json::array({Base64Encode(ReadWholeFile(path))});
-        const std::string base_url = Trim(settings.vision_base_url).empty() ? "http://localhost:11434" : Trim(settings.vision_base_url);
+        const auto endpoints = BuildOllamaVisionBaseUrls(settings);
+        const std::string base_url = endpoints.empty() ? "http://localhost:11434" : endpoints.front();
         const json response = json::parse(HttpPostJson(JoinUrlPath(base_url, "/api/generate"), body.dump()));
         std::string description = response.value("response", "");
         description = NormalizeMarkdownWhitespace(description);
@@ -2281,6 +2412,172 @@ std::optional<std::string> DescribeImageWithOllamaVision(const std::filesystem::
         }
     }
     return std::nullopt;
+}
+
+struct ImageVisionQueueStats {
+    int pending = 0;
+    int active = 0;
+    int desired_workers = 1;
+    int worker_threads = 0;
+};
+
+struct ImageVisionQueueResult {
+    std::optional<std::string> description;
+    std::string error;
+    std::string endpoint;
+};
+
+struct ImageVisionQueueTask {
+    uint64_t id = 0;
+    std::filesystem::path path;
+    RagImageIngestSettings settings;
+    std::promise<ImageVisionQueueResult> completion;
+};
+
+class ImageVisionWorkerQueue {
+public:
+    ~ImageVisionWorkerQueue() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+        }
+        cv_.notify_all();
+        for (auto& worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+    }
+
+    ImageVisionQueueResult Enqueue(const std::filesystem::path& path, const RagImageIngestSettings& settings) {
+        auto task = std::make_shared<ImageVisionQueueTask>();
+        task->path = path;
+        task->settings = settings;
+        auto future = task->completion.get_future();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            task->id = ++next_task_id_;
+            desired_workers_ = static_cast<size_t>(ClampOllamaInstanceCount(settings.ollama_instance_count));
+            EnsureWorkersLocked(desired_workers_);
+            tasks_.push_back(task);
+        }
+        cv_.notify_all();
+        return future.get();
+    }
+
+    ImageVisionQueueStats ConfigureAndSnapshot(const RagImageIngestSettings& settings) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        desired_workers_ = static_cast<size_t>(ClampOllamaInstanceCount(settings.ollama_instance_count));
+        EnsureWorkersLocked(desired_workers_);
+        return SnapshotLocked();
+    }
+
+private:
+    void EnsureWorkersLocked(size_t desired) {
+        desired = std::max<size_t>(1, desired);
+        while (workers_.size() < desired) {
+            const size_t worker_index = workers_.size();
+            workers_.emplace_back([this, worker_index]() {
+                WorkerLoop(worker_index);
+            });
+        }
+        cv_.notify_all();
+    }
+
+    ImageVisionQueueStats SnapshotLocked() const {
+        ImageVisionQueueStats stats;
+        stats.pending = static_cast<int>(tasks_.size());
+        stats.active = active_workers_;
+        stats.desired_workers = static_cast<int>(desired_workers_);
+        stats.worker_threads = static_cast<int>(workers_.size());
+        return stats;
+    }
+
+    std::string PickEndpointLocked(const RagImageIngestSettings& settings) {
+        const auto endpoints = BuildOllamaVisionBaseUrls(settings);
+        if (endpoints.empty()) {
+            return "http://localhost:11434";
+        }
+        const size_t index = next_endpoint_index_++ % endpoints.size();
+        return endpoints[index];
+    }
+
+    void WorkerLoop(size_t worker_index) {
+        for (;;) {
+            std::shared_ptr<ImageVisionQueueTask> task;
+            std::string endpoint;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [&]() {
+                    return stopping_ ||
+                        (worker_index < desired_workers_ && !tasks_.empty());
+                });
+                if (stopping_) {
+                    return;
+                }
+                if (worker_index >= desired_workers_ || tasks_.empty()) {
+                    continue;
+                }
+                task = std::move(tasks_.front());
+                tasks_.pop_front();
+                endpoint = PickEndpointLocked(task->settings);
+                ++active_workers_;
+            }
+
+            ImageVisionQueueResult result;
+            result.endpoint = endpoint;
+            try {
+                RagImageIngestSettings worker_settings = task->settings;
+                worker_settings.vision_base_url = endpoint;
+                result.description = DescribeImageWithOllamaVisionDirect(
+                    task->path, worker_settings, &result.error);
+            } catch (const std::exception& ex) {
+                result.error = ex.what();
+            } catch (...) {
+                result.error = "Unexpected Ollama vision worker error.";
+            }
+            task->completion.set_value(std::move(result));
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (active_workers_ > 0) {
+                    --active_workers_;
+                }
+            }
+            cv_.notify_all();
+        }
+    }
+
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::deque<std::shared_ptr<ImageVisionQueueTask>> tasks_;
+    std::vector<std::thread> workers_;
+    bool stopping_ = false;
+    size_t desired_workers_ = 1;
+    int active_workers_ = 0;
+    uint64_t next_task_id_ = 0;
+    uint64_t next_endpoint_index_ = 0;
+};
+
+ImageVisionWorkerQueue& GetImageVisionWorkerQueue() {
+    static ImageVisionWorkerQueue queue;
+    return queue;
+}
+
+std::optional<std::string> DescribeImageWithOllamaVision(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    if (NormalizeImageVisionProvider(settings.vision_provider) != "ollama") {
+        return DescribeImageWithOllamaVisionDirect(path, settings, error);
+    }
+    const ImageVisionQueueResult result = GetImageVisionWorkerQueue().Enqueue(path, settings);
+    if (error) {
+        *error = result.error;
+        if (!result.description && !result.endpoint.empty()) {
+            *error += error->empty()
+                ? ("Ollama endpoint: " + result.endpoint)
+                : (" (Ollama endpoint: " + result.endpoint + ")");
+        }
+    }
+    return result.description;
 }
 
 std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* extractor_id) {
@@ -2369,6 +2666,156 @@ std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagI
     }
 
     return NormalizeMarkdownWhitespace(markdown.str());
+}
+
+struct MarkdownExtractionQueueStats {
+    int pending = 0;
+    int active = 0;
+    int desired_workers = 1;
+    int worker_threads = 0;
+};
+
+struct MarkdownExtractionQueueResult {
+    bool success = false;
+    std::string markdown;
+    std::string extractor_id;
+    std::string error;
+};
+
+struct MarkdownExtractionQueueTask {
+    uint64_t id = 0;
+    std::filesystem::path path;
+    RagImageIngestSettings settings;
+    std::promise<MarkdownExtractionQueueResult> completion;
+};
+
+class MarkdownExtractionWorkerQueue {
+public:
+    ~MarkdownExtractionWorkerQueue() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+        }
+        cv_.notify_all();
+        for (auto& worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+    }
+
+    MarkdownExtractionQueueResult Enqueue(const std::filesystem::path& path, const RagImageIngestSettings& settings) {
+        auto task = std::make_shared<MarkdownExtractionQueueTask>();
+        task->path = path;
+        task->settings = settings;
+        auto future = task->completion.get_future();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            task->id = ++next_task_id_;
+            desired_workers_ = static_cast<size_t>(ClampOllamaInstanceCount(settings.ollama_instance_count));
+            EnsureWorkersLocked(desired_workers_);
+            tasks_.push_back(task);
+        }
+        cv_.notify_all();
+        return future.get();
+    }
+
+    MarkdownExtractionQueueStats ConfigureAndSnapshot(const RagImageIngestSettings& settings) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        desired_workers_ = static_cast<size_t>(ClampOllamaInstanceCount(settings.ollama_instance_count));
+        EnsureWorkersLocked(desired_workers_);
+        return SnapshotLocked();
+    }
+
+private:
+    void EnsureWorkersLocked(size_t desired) {
+        desired = std::max<size_t>(1, desired);
+        while (workers_.size() < desired) {
+            const size_t worker_index = workers_.size();
+            workers_.emplace_back([this, worker_index]() {
+                WorkerLoop(worker_index);
+            });
+        }
+        cv_.notify_all();
+    }
+
+    MarkdownExtractionQueueStats SnapshotLocked() const {
+        MarkdownExtractionQueueStats stats;
+        stats.pending = static_cast<int>(tasks_.size());
+        stats.active = active_workers_;
+        stats.desired_workers = static_cast<int>(desired_workers_);
+        stats.worker_threads = static_cast<int>(workers_.size());
+        return stats;
+    }
+
+    void WorkerLoop(size_t worker_index) {
+        for (;;) {
+            std::shared_ptr<MarkdownExtractionQueueTask> task;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [&]() {
+                    return stopping_ ||
+                        (worker_index < desired_workers_ && !tasks_.empty());
+                });
+                if (stopping_) {
+                    return;
+                }
+                if (worker_index >= desired_workers_ || tasks_.empty()) {
+                    continue;
+                }
+                task = std::move(tasks_.front());
+                tasks_.pop_front();
+                ++active_workers_;
+            }
+
+            MarkdownExtractionQueueResult result;
+            try {
+                const bool image_document = IsImageExtension(task->path);
+                const bool rich_document = IsRichExtractionExtension(task->path);
+                if (!image_document && !rich_document) {
+                    result.error = "No processed Markdown extractor is available for this file type.";
+                } else {
+                    result.markdown = image_document
+                        ? ExtractImageToMarkdown(task->path, task->settings, &result.extractor_id)
+                        : ExtractRichDocumentToMarkdown(task->path, &result.extractor_id);
+                    result.success = true;
+                }
+            } catch (const std::exception& ex) {
+                result.error = ex.what();
+            } catch (...) {
+                result.error = "Unexpected processed-document extraction error.";
+            }
+            task->completion.set_value(std::move(result));
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (active_workers_ > 0) {
+                    --active_workers_;
+                }
+            }
+            cv_.notify_all();
+        }
+    }
+
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::deque<std::shared_ptr<MarkdownExtractionQueueTask>> tasks_;
+    std::vector<std::thread> workers_;
+    bool stopping_ = false;
+    size_t desired_workers_ = 1;
+    int active_workers_ = 0;
+    uint64_t next_task_id_ = 0;
+};
+
+MarkdownExtractionWorkerQueue& GetMarkdownExtractionWorkerQueue() {
+    static MarkdownExtractionWorkerQueue queue;
+    return queue;
+}
+
+MarkdownExtractionQueueResult ExtractProcessedFileToMarkdownQueued(
+    const std::filesystem::path& path,
+    const RagImageIngestSettings& settings) {
+    return GetMarkdownExtractionWorkerQueue().Enqueue(path, settings);
 }
 
 bool ExtractZipWithTar(const std::filesystem::path& source, const std::filesystem::path& destination, std::string* error) {
@@ -3249,8 +3696,13 @@ RagImportPreviewItem BuildImportPreviewItem(const RagLibraryConfig& library, con
             const std::string mode = NormalizeImageIngestMode(image_settings.mode);
             const bool tesseract_available = FindExecutableOnPath(L"tesseract.exe").has_value();
             const bool python_available = FindExecutableOnPath(L"python.exe").has_value();
-            const bool vision_endpoint_available = NormalizeImageVisionProvider(image_settings.vision_provider) == "ollama" &&
-                IsHttpEndpointAvailable(JoinUrlPath(Trim(image_settings.vision_base_url).empty() ? std::string("http://localhost:11434") : Trim(image_settings.vision_base_url), "/api/tags"));
+            const bool vision_endpoint_available =
+                NormalizeImageVisionProvider(image_settings.vision_provider) == "ollama" &&
+                AnyOllamaVisionEndpointAvailable(image_settings);
+            const bool local_vision_start_available =
+                ImageSettingsNeedOllamaVisionRuntime(image_settings) &&
+                image_settings.ollama_start_locally &&
+                FindExecutableOnPath(L"ollama.exe").has_value();
             if (mode == "tesseract_cpu") {
                 if (!tesseract_available) {
                     item.reason = "Image ingestion is enabled, but tesseract.exe is missing.";
@@ -3266,12 +3718,14 @@ RagImportPreviewItem BuildImportPreviewItem(const RagLibraryConfig& library, con
                 item.supported = true;
                 item.reason = "Ready to ingest as image Markdown with PaddleOCR when available, falling back to Tesseract OCR.";
             } else {
-                if (!vision_endpoint_available && !python_available && !tesseract_available) {
+                if (!vision_endpoint_available && !local_vision_start_available && !python_available && !tesseract_available) {
                     item.reason = "Full vision mode needs a running Ollama vision endpoint, python.exe for PaddleOCR, or tesseract.exe fallback.";
                     return item;
                 }
                 item.supported = true;
-                item.reason = "Ready to ingest as image Markdown with OCR plus configured vision-language description when available.";
+                item.reason = local_vision_start_available && !vision_endpoint_available
+                    ? "Ready to ingest as image Markdown; the app can start the configured local Ollama vision endpoint when needed."
+                    : "Ready to ingest as image Markdown with OCR plus configured vision-language description when available.";
             }
             return item;
         }
@@ -3372,9 +3826,18 @@ bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const s
         document.file_size = file_size;
         document.mime_type = MimeTypeForPath(file);
         std::string extractor_id;
-        const std::string extracted_text = image_document
-            ? ExtractImageToMarkdown(file, image_settings, &extractor_id)
-            : (rich_document ? ExtractRichDocumentToMarkdown(file, &extractor_id) : std::string());
+        std::string extracted_text;
+        if (image_document || rich_document) {
+            const MarkdownExtractionQueueResult extraction =
+                ExtractProcessedFileToMarkdownQueued(file, image_settings);
+            if (!extraction.success) {
+                throw std::runtime_error(extraction.error.empty()
+                    ? "Processed-document extraction failed."
+                    : extraction.error);
+            }
+            extractor_id = extraction.extractor_id;
+            extracted_text = extraction.markdown;
+        }
         const bool extracted_markdown_document = rich_document || image_document;
         const bool segmented_extraction = extracted_markdown_document && ShouldSegmentExtractedText(library, extracted_text);
         document.metadata_json = extracted_markdown_document
@@ -3456,6 +3919,7 @@ RagService::RagService(AppStorage* storage) : storage_(storage) {}
 
 RagService::~RagService() {
     ShutdownManagedEmbeddingRuntimes();
+    ShutdownManagedImageIngestRuntimes();
 }
 
 void RagService::ShutdownManagedEmbeddingRuntimes() const {
@@ -3470,6 +3934,161 @@ void RagService::ShutdownManagedEmbeddingRuntimes() const {
         CloseHandle(process);
         started_ollama_process_ = nullptr;
         started_ollama_process_id_ = 0;
+    }
+}
+
+void RagService::ShutdownManagedImageIngestRuntimes() const {
+    for (auto& [endpoint, process_handle] : started_image_ollama_processes_) {
+        if (!process_handle) {
+            continue;
+        }
+        HANDLE process = static_cast<HANDLE>(process_handle);
+        DWORD exit_code = 0;
+        if (GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
+            AppendImageIngestLogNoLock("Stopping app-managed image Ollama process for " + endpoint + ".");
+            TerminateProcess(process, 0);
+            WaitForSingleObject(process, 3000);
+        }
+        CloseHandle(process);
+    }
+    started_image_ollama_processes_.clear();
+    started_image_ollama_process_ids_.clear();
+}
+
+int RagService::ManagedImageOllamaProcessCountNoLock() const {
+    int count = 0;
+    for (auto it = started_image_ollama_processes_.begin(); it != started_image_ollama_processes_.end();) {
+        HANDLE process = static_cast<HANDLE>(it->second);
+        DWORD exit_code = 0;
+        if (process && GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
+            ++count;
+            ++it;
+            continue;
+        }
+        if (process) {
+            CloseHandle(process);
+        }
+        started_image_ollama_process_ids_.erase(it->first);
+        it = started_image_ollama_processes_.erase(it);
+    }
+    return count;
+}
+
+void RagService::EnsureImageVisionRuntimesNoLock(const RagImageIngestSettings& settings) const {
+    if (!ImageSettingsNeedOllamaVisionRuntime(settings) || !settings.ollama_start_locally) {
+        return;
+    }
+
+    const auto executable = FindExecutableOnPath(L"ollama.exe");
+    if (!executable) {
+        AppendImageIngestLogNoLock("Local Ollama start requested, but ollama.exe was not found on PATH.");
+        return;
+    }
+
+    std::filesystem::create_directories(ImageIngestLogPath().parent_path());
+    for (const auto& endpoint : BuildOllamaVisionBaseUrls(settings)) {
+        if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+            continue;
+        }
+
+        auto managed = started_image_ollama_processes_.find(endpoint);
+        if (managed != started_image_ollama_processes_.end()) {
+            HANDLE existing = static_cast<HANDLE>(managed->second);
+            DWORD exit_code = 0;
+            if (existing && GetExitCodeProcess(existing, &exit_code) && exit_code == STILL_ACTIVE) {
+                for (int attempt = 0; attempt < 5; ++attempt) {
+                    Sleep(400);
+                    if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+                        break;
+                    }
+                }
+                if (!IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+                    AppendImageIngestLogNoLock("App-managed Ollama process is running but not responding at " + endpoint + ".");
+                }
+                continue;
+            }
+            if (existing) {
+                CloseHandle(existing);
+            }
+            started_image_ollama_process_ids_.erase(endpoint);
+            started_image_ollama_processes_.erase(managed);
+        }
+
+        ParsedUrl parsed;
+        try {
+            parsed = CrackUrl(endpoint);
+        } catch (const std::exception& ex) {
+            AppendImageIngestLogNoLock("Could not start local Ollama for invalid endpoint " + endpoint + ": " + ex.what());
+            continue;
+        } catch (...) {
+            AppendImageIngestLogNoLock("Could not start local Ollama for invalid endpoint " + endpoint + ".");
+            continue;
+        }
+
+        const std::wstring ollama_host = parsed.host + L":" + std::to_wstring(parsed.port);
+        const std::vector<wchar_t> environment_block = BuildEnvironmentBlockWithOverride(L"OLLAMA_HOST", ollama_host);
+
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        SECURITY_ATTRIBUTES security{};
+        security.nLength = sizeof(security);
+        security.bInheritHandle = TRUE;
+        HANDLE log_handle = CreateFileW(
+            ImageIngestLogPath().wstring().c_str(),
+            FILE_APPEND_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &security,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        const BOOL inherit_handles = log_handle != INVALID_HANDLE_VALUE;
+        if (inherit_handles) {
+            startup.dwFlags |= STARTF_USESTDHANDLES;
+            startup.hStdOutput = log_handle;
+            startup.hStdError = log_handle;
+            startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        }
+
+        PROCESS_INFORMATION process_info{};
+        std::wstring command_line = QuoteCommandArgument(*executable) + L" serve";
+        std::vector<wchar_t> command_buffer(command_line.begin(), command_line.end());
+        command_buffer.push_back(L'\0');
+
+        AppendImageIngestLogNoLock("Starting local Ollama vision endpoint " + endpoint + " with OLLAMA_HOST=" + WideToUtf8(ollama_host) + ".");
+        const BOOL created = CreateProcessW(
+            nullptr,
+            command_buffer.data(),
+            nullptr,
+            nullptr,
+            inherit_handles,
+            CREATE_NO_WINDOW,
+            const_cast<wchar_t*>(environment_block.data()),
+            nullptr,
+            &startup,
+            &process_info);
+        if (log_handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(log_handle);
+        }
+        if (!created) {
+            AppendImageIngestLogNoLock("Failed to start local Ollama for " + endpoint + " (CreateProcess error " + std::to_string(GetLastError()) + ").");
+            continue;
+        }
+
+        CloseHandle(process_info.hThread);
+        started_image_ollama_processes_[endpoint] = process_info.hProcess;
+        started_image_ollama_process_ids_[endpoint] = process_info.dwProcessId;
+
+        bool ready = false;
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            Sleep(500);
+            if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+                ready = true;
+                break;
+            }
+        }
+        AppendImageIngestLogNoLock(ready
+            ? ("Local Ollama vision endpoint is responding at " + endpoint + ".")
+            : ("Local Ollama vision process started but did not become ready at " + endpoint + "."));
     }
 }
 
@@ -3551,12 +4170,15 @@ RagImageIngestSettings RagService::LoadImageIngestSettings() const {
 void RagService::SaveImageIngestSettings(const RagImageIngestSettings& settings) const {
     std::lock_guard<std::mutex> lock(mutex_);
     SaveJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(settings));
-    AppendImageIngestLogNoLock("Saved image ingest settings. Mode: " + NormalizeImageIngestMode(settings.mode) + ".");
+    AppendImageIngestLogNoLock(
+        "Saved image ingest settings. Mode: " + NormalizeImageIngestMode(settings.mode) +
+        ". Ollama workers: " + std::to_string(ClampOllamaInstanceCount(settings.ollama_instance_count)) +
+        ", start port: " + std::to_string(ClampOllamaStartPort(settings.ollama_start_port)) +
+        ", start locally: " + std::string(settings.ollama_start_locally ? "yes" : "no") + ".");
+    EnsureImageVisionRuntimesNoLock(settings);
 }
 
 RagMarkdownExtractionResult RagService::ExtractFileToMarkdown(const std::filesystem::path& file) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-
     RagMarkdownExtractionResult result;
     result.mime_type = MimeTypeForPath(file);
     try {
@@ -3581,9 +4203,24 @@ RagMarkdownExtractionResult RagService::ExtractFileToMarkdown(const std::filesys
         }
 
         std::string extractor_id;
-        result.markdown = image_document
-            ? ExtractImageToMarkdown(file, LoadImageIngestSettingsNoLock(), &extractor_id)
-            : ExtractRichDocumentToMarkdown(file, &extractor_id);
+        RagImageIngestSettings image_settings;
+        if (image_document || rich_document) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            image_settings = LoadImageIngestSettingsNoLock();
+            if (image_document) {
+                EnsureImageVisionRuntimesNoLock(image_settings);
+            }
+        }
+        const MarkdownExtractionQueueResult extraction =
+            ExtractProcessedFileToMarkdownQueued(file, image_settings);
+        if (!extraction.success) {
+            result.error = extraction.error.empty()
+                ? "Processed-document extraction failed."
+                : extraction.error;
+            return result;
+        }
+        result.markdown = extraction.markdown;
+        extractor_id = extraction.extractor_id;
         result.extractor_id = extractor_id;
         result.success = true;
         result.processed_document = true;
@@ -3604,12 +4241,35 @@ RagImageIngestRuntimeStatus RagService::GetImageIngestRuntimeStatus(const RagIma
     status.tesseract_installed = FindExecutableOnPath(L"tesseract.exe").has_value();
     status.python_installed = FindExecutableOnPath(L"python.exe").has_value();
     if (const auto python = FindExecutableOnPath(L"python.exe")) {
-        status.paddleocr_installed = PythonModuleAvailable(*python, "paddleocr");
+    status.paddleocr_installed = PythonModuleAvailable(*python, "paddleocr");
     }
     status.ollama_installed = FindExecutableOnPath(L"ollama.exe").has_value();
     const std::string provider = NormalizeImageVisionProvider(settings.vision_provider);
-    const std::string base_url = Trim(settings.vision_base_url).empty() ? "http://localhost:11434" : Trim(settings.vision_base_url);
-    status.vision_endpoint_running = provider == "ollama" && IsHttpEndpointAvailable(JoinUrlPath(base_url, "/api/tags"));
+    const auto endpoints = BuildOllamaVisionBaseUrls(settings);
+    status.vision_ollama_instance_count = ClampOllamaInstanceCount(settings.ollama_instance_count);
+    status.vision_ollama_start_locally = settings.ollama_start_locally;
+    if (provider == "ollama" && settings.ollama_start_locally) {
+        EnsureImageVisionRuntimesNoLock(settings);
+    }
+    status.vision_ollama_managed_count = ManagedImageOllamaProcessCountNoLock();
+    status.vision_endpoint_summary = JoinStrings(endpoints, ", ");
+    if (provider == "ollama") {
+        for (const auto& endpoint : endpoints) {
+            if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+                ++status.vision_ollama_running_count;
+            }
+        }
+    }
+    status.vision_endpoint_running = status.vision_ollama_running_count > 0;
+    const ImageVisionQueueStats queue_stats = GetImageVisionWorkerQueue().ConfigureAndSnapshot(settings);
+    status.vision_queue_pending = queue_stats.pending;
+    status.vision_queue_active = queue_stats.active;
+    status.vision_queue_workers = queue_stats.desired_workers;
+    const MarkdownExtractionQueueStats document_queue_stats =
+        GetMarkdownExtractionWorkerQueue().ConfigureAndSnapshot(settings);
+    status.document_queue_pending = document_queue_stats.pending;
+    status.document_queue_active = document_queue_stats.active;
+    status.document_queue_workers = document_queue_stats.desired_workers;
 
     if (!settings.enabled) {
         status.message = "Image ingestion is disabled.";
@@ -3627,7 +4287,13 @@ RagImageIngestRuntimeStatus RagService::GetImageIngestRuntimeStatus(const RagIma
         }
     } else {
         if (status.vision_endpoint_running && !Trim(settings.vision_model).empty()) {
-            status.message = "Full vision mode can call the configured Ollama vision-language endpoint.";
+            status.message = "Full vision mode can queue work across " +
+                std::to_string(status.vision_queue_workers) + " worker(s); " +
+                std::to_string(status.vision_ollama_running_count) + "/" +
+                std::to_string(status.vision_ollama_instance_count) +
+                " configured Ollama endpoint(s) are responding.";
+        } else if (settings.ollama_start_locally && status.ollama_installed) {
+            status.message = "Full vision mode is configured to start local Ollama endpoints, but no configured endpoint is responding yet.";
         } else if (status.ollama_installed) {
             status.message = "Full vision mode needs Ollama running and the configured vision model pulled.";
         } else {
@@ -3674,6 +4340,14 @@ RagExtractionToolInstallResult RagService::LaunchImageVisionModelInstaller(const
     }
     const std::string model = Trim(settings.vision_model).empty() ? "qwen2.5vl:7b" : Trim(settings.vision_model);
     result.command = "ollama pull " + model;
+    const auto endpoints = BuildOllamaVisionBaseUrls(settings);
+    if (!endpoints.empty()) {
+        try {
+            const ParsedUrl parsed = CrackUrl(endpoints.front());
+            result.command = "set \"OLLAMA_HOST=" + WideToUtf8(parsed.host) + ":" + std::to_string(parsed.port) + "\" && ollama pull " + model;
+        } catch (...) {
+        }
+    }
     AppendImageIngestLogNoLock("Launching visible Ollama vision model pull command: " + result.command);
     const std::wstring shell_command = L"/k " + Utf8ToWide(result.command);
     HINSTANCE launched = ShellExecuteW(nullptr, L"open", L"cmd.exe", shell_command.c_str(), nullptr, SW_SHOWNORMAL);
@@ -4096,6 +4770,11 @@ void RagService::EnsureInitialized() const {
     }
     if (!std::filesystem::exists(ImageIngestSettingsPath())) {
         SaveJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(RagImageIngestSettings{}));
+    }
+    try {
+        EnsureImageVisionRuntimesNoLock(LoadImageIngestSettingsNoLock());
+    } catch (...) {
+        // Startup should remain usable even if optional image vision runtimes cannot be started.
     }
     for (const auto& [rag_id, library_path] : LoadRegistryNoLock()) {
         const json data = LoadJsonFile(library_path / "rag.json", json::object());
@@ -4629,6 +5308,9 @@ RagIngestionResult RagService::ReindexDocument(const std::string& rag_id, const 
     source.original_source_uri = document->original_source_uri;
     source.display_name = document->display_name;
     source.metadata_json = document->metadata_json;
+    if (IsImageExtension(source.source_path)) {
+        EnsureImageVisionRuntimesNoLock(image_settings);
+    }
     IngestOneSourceNoLock(db.get(), library, library_path, source, false, image_settings, embedding_provider.get(), result);
     if (library.vector_backend == "hnswlib") {
         SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
@@ -4860,6 +5542,9 @@ RagIngestionResult RagService::IngestFiles(const std::string& rag_id, const std:
         return result;
     }
     const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
+    if (AnyPathNeedsOllamaVisionRuntime(files, image_settings)) {
+        EnsureImageVisionRuntimesNoLock(image_settings);
+    }
 
     for (const auto& file : files) {
         RagFileIngestionSource source;
@@ -4944,6 +5629,11 @@ RagIngestionResult RagService::IngestFolder(const std::string& rag_id, const std
         return result;
     }
     const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
+    if (std::any_of(sources.begin(), sources.end(), [](const RagFileIngestionSource& source) {
+        return IsImageExtension(source.source_path);
+    })) {
+        EnsureImageVisionRuntimesNoLock(image_settings);
+    }
 
     for (const auto& source : sources) {
         IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, embedding_provider.get(), result);
@@ -5062,6 +5752,11 @@ RagIngestionResult RagService::RebuildLibrary(const std::string& rag_id, std::fu
         source.display_name = document.display_name;
         source.metadata_json = document.metadata_json;
         sources.push_back(std::move(source));
+    }
+    if (std::any_of(sources.begin(), sources.end(), [](const RagFileIngestionSource& source) {
+        return IsImageExtension(source.source_path);
+    })) {
+        EnsureImageVisionRuntimesNoLock(image_settings);
     }
 
     auto publish = [&](int processed, const std::string& stage, const std::string& current_item) {
