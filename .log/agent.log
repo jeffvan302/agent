@@ -1,0 +1,1918 @@
+
+=== Logger initialized at 2026-04-23T12:41:41Z ===
+2026-04-23T12:41:41Z [INFO]  Agent Desktop starting
+2026-04-23T12:41:41Z [INFO]  Command line: 
+2026-04-23T12:41:41Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T12:41:41Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T12:41:41Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T12:41:41Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T12:42:16Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-23T12:42:16Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-23T12:42:16Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-23T12:42:32Z [INFO]  Agent Desktop shutting down
+2026-04-23T12:42:32Z [INFO]  [WebServer] Listener thread exited.
+2026-04-23T12:42:32Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-23T12:42:32Z [INFO]  [WebServer] Server stopped.
+2026-04-23T12:42:33Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-23T12:45:03Z ===
+2026-04-23T12:45:03Z [INFO]  Agent Desktop starting
+2026-04-23T12:45:03Z [INFO]  Command line: 
+2026-04-23T12:45:03Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T12:45:03Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T12:45:03Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T12:45:03Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T12:45:27Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-23T12:45:27Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-23T12:45:27Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-23T12:45:58Z [INFO]  Agent Desktop shutting down
+2026-04-23T12:45:58Z [INFO]  [WebServer] Listener thread exited.
+2026-04-23T12:45:58Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-23T12:45:58Z [INFO]  [WebServer] Server stopped.
+2026-04-23T12:45:58Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-23T13:25:24Z ===
+2026-04-23T13:25:24Z [INFO]  Agent Desktop starting
+2026-04-23T13:25:24Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-2817c49fc75640d98453be2e3ec3e34e.json
+2026-04-23T13:25:24Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T13:25:24Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T13:25:24Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T13:25:24Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T13:25:24Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T13:25:24Z ===
+2026-04-23T13:25:24Z [INFO]  Agent Desktop starting
+2026-04-23T13:25:24Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-bc54fadc15a5444bbc51ffcd28c99b8b.json
+2026-04-23T13:25:24Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T13:25:24Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T13:25:24Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T13:25:24Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T13:25:26Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T13:25:27Z ===
+2026-04-23T13:25:27Z [INFO]  Agent Desktop starting
+2026-04-23T13:25:27Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-f076f1da17f3465385ae39e0deb235da.json
+2026-04-23T13:25:27Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T13:25:27Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T13:25:27Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T13:25:27Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T13:25:27Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T13:25:27Z ===
+2026-04-23T13:25:27Z [INFO]  Agent Desktop starting
+2026-04-23T13:25:27Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-fe208e3150984046a9b27bda4bde8f01.json
+2026-04-23T13:25:27Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T13:25:27Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T13:25:27Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T13:25:27Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T13:25:27Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T13:48:31Z ===
+2026-04-23T13:48:31Z [INFO]  Agent Desktop starting
+2026-04-23T13:48:31Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-f2adb40fbd0b4ed3811b0358ea013782.json
+2026-04-23T13:48:31Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T13:48:31Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T13:48:31Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T13:48:31Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T13:48:31Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T13:48:31Z ===
+2026-04-23T13:48:31Z [INFO]  Agent Desktop starting
+2026-04-23T13:48:31Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-9e0dddcd2af94c9f97a14ad0a7c17843.json
+2026-04-23T13:48:31Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T13:48:31Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T13:48:31Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T13:48:31Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T13:48:34Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T13:48:34Z ===
+2026-04-23T13:48:34Z [INFO]  Agent Desktop starting
+2026-04-23T13:48:34Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-0863d64dc99543b1ac010de3a23c1953.json
+2026-04-23T13:48:34Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T13:48:34Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T13:48:34Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T13:48:34Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T13:48:34Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T13:48:34Z ===
+2026-04-23T13:48:34Z [INFO]  Agent Desktop starting
+2026-04-23T13:48:34Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-f0a4f51670294324ba75e6c2c0bda7c5.json
+2026-04-23T13:48:34Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T13:48:34Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T13:48:34Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T13:48:34Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T13:48:34Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T13:49:00Z ===
+2026-04-23T13:49:00Z [INFO]  Agent Desktop starting
+2026-04-23T13:49:00Z [INFO]  Command line: 
+2026-04-23T13:49:00Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T13:49:00Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T13:49:00Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T13:49:00Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T13:49:23Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-23T13:49:23Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-23T13:49:23Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-23T13:50:46Z [INFO]  Agent Desktop shutting down
+2026-04-23T13:50:46Z [INFO]  [WebServer] Listener thread exited.
+2026-04-23T13:50:46Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-23T13:50:46Z [INFO]  [WebServer] Server stopped.
+2026-04-23T13:50:46Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-23T14:09:00Z ===
+2026-04-23T14:09:00Z [INFO]  Agent Desktop starting
+2026-04-23T14:09:00Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-38248aba80ea464791721460417b2c9b.json
+2026-04-23T14:09:00Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T14:09:00Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T14:09:00Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T14:09:00Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T14:09:00Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T14:09:00Z ===
+2026-04-23T14:09:00Z [INFO]  Agent Desktop starting
+2026-04-23T14:09:00Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-86955ccf3e5349cd9db702e4f1d62a9a.json
+2026-04-23T14:09:00Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T14:09:00Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T14:09:00Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T14:09:00Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T14:09:02Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T14:09:02Z ===
+2026-04-23T14:09:02Z [INFO]  Agent Desktop starting
+2026-04-23T14:09:02Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-76fba072587d479e8bdfebe0bb113e7b.json
+2026-04-23T14:09:02Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T14:09:02Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T14:09:02Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T14:09:02Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T14:09:02Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T14:09:03Z ===
+2026-04-23T14:09:03Z [INFO]  Agent Desktop starting
+2026-04-23T14:09:03Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-93c35aed010e4c038a85b13bc94a9985.json
+2026-04-23T14:09:03Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T14:09:03Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T14:09:03Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T14:09:03Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T14:09:03Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T14:09:03Z ===
+2026-04-23T14:09:03Z [INFO]  Agent Desktop starting
+2026-04-23T14:09:03Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-cb051a2581f24e84bc4108c0fe7e5e78.json
+2026-04-23T14:09:03Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T14:09:03Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T14:09:03Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T14:09:03Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T14:09:03Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T14:09:03Z ===
+2026-04-23T14:09:03Z [INFO]  Agent Desktop starting
+2026-04-23T14:09:03Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-1c8fa0265c084daf8187403644247201.json
+2026-04-23T14:09:03Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T14:09:03Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T14:09:03Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T14:09:03Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T14:09:03Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T14:09:04Z ===
+2026-04-23T14:09:04Z [INFO]  Agent Desktop starting
+2026-04-23T14:09:04Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-65199a6d45ec41aab5559f2e5415568d.json
+2026-04-23T14:09:04Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T14:09:04Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T14:09:04Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T14:09:04Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T14:09:04Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T14:10:31Z ===
+2026-04-23T14:10:31Z [INFO]  Agent Desktop starting
+2026-04-23T14:10:31Z [INFO]  Command line: 
+2026-04-23T14:10:31Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T14:10:31Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T14:10:31Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T14:10:31Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T14:10:54Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-23T14:10:54Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-23T14:10:54Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-23T14:14:23Z [INFO]  Agent Desktop shutting down
+2026-04-23T14:14:23Z [INFO]  [WebServer] Listener thread exited.
+2026-04-23T14:14:23Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-23T14:14:23Z [INFO]  [WebServer] Server stopped.
+2026-04-23T14:14:24Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-23T16:58:59Z ===
+2026-04-23T16:58:59Z [INFO]  Agent Desktop starting
+2026-04-23T16:58:59Z [INFO]  Command line: 
+2026-04-23T16:58:59Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T16:58:59Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T16:58:59Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T16:58:59Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T16:59:22Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-23T16:59:22Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-23T16:59:22Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-23T17:46:13Z [INFO]  Agent Desktop shutting down
+2026-04-23T17:46:13Z [INFO]  [WebServer] Listener thread exited.
+2026-04-23T17:46:13Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-23T17:46:13Z [INFO]  [WebServer] Server stopped.
+2026-04-23T17:46:14Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-23T17:58:37Z ===
+2026-04-23T17:58:37Z [INFO]  Agent Desktop starting
+2026-04-23T17:58:37Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-7b606720012d431298f95557991d0cd5.json
+2026-04-23T17:58:37Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T17:58:37Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T17:58:37Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T17:58:37Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T17:58:37Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T17:58:38Z ===
+2026-04-23T17:58:38Z [INFO]  Agent Desktop starting
+2026-04-23T17:58:38Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-dd3a1c549d1a432a96d4bb5ab6a0074f.json
+2026-04-23T17:58:38Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T17:58:38Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T17:58:38Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T17:58:38Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T17:58:40Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T17:58:40Z ===
+2026-04-23T17:58:40Z [INFO]  Agent Desktop starting
+2026-04-23T17:58:40Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-8d34a0fb018848f8a63850ce56930869.json
+2026-04-23T17:58:40Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T17:58:40Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T17:58:40Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T17:58:40Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T17:58:40Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T17:58:41Z ===
+2026-04-23T17:58:41Z [INFO]  Agent Desktop starting
+2026-04-23T17:58:41Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-2dd82eb1fac2405a84129f2f6547d5d7.json
+2026-04-23T17:58:41Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T17:58:41Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T17:58:41Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T17:58:41Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T17:58:41Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T17:58:41Z ===
+2026-04-23T17:58:41Z [INFO]  Agent Desktop starting
+2026-04-23T17:58:41Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-a376d0309bd047bdb9eb2cb849f7c20c.json
+2026-04-23T17:58:41Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T17:58:41Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T17:58:41Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T17:58:41Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T17:58:41Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T17:58:41Z ===
+2026-04-23T17:58:41Z [INFO]  Agent Desktop starting
+2026-04-23T17:58:41Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-015b5b4919984133befb0c5512d1621b.json
+2026-04-23T17:58:41Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T17:58:41Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T17:58:41Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T17:58:41Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T17:58:41Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T17:58:42Z ===
+2026-04-23T17:58:42Z [INFO]  Agent Desktop starting
+2026-04-23T17:58:42Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-5e017a59b7924426a3e0437f097db6ce.json
+2026-04-23T17:58:42Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T17:58:42Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T17:58:42Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T17:58:42Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T17:58:42Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T17:58:42Z ===
+2026-04-23T17:58:42Z [INFO]  Agent Desktop starting
+2026-04-23T17:58:42Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-687999d3b87c43b29ece3e0ada259e83.json
+2026-04-23T17:58:42Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T17:58:42Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T17:58:42Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T17:58:42Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T17:58:42Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T17:59:25Z ===
+2026-04-23T17:59:25Z [INFO]  Agent Desktop starting
+2026-04-23T17:59:25Z [INFO]  Command line: 
+2026-04-23T17:59:25Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T17:59:25Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T17:59:25Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T17:59:25Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T17:59:50Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-23T17:59:50Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-23T17:59:50Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-23T18:00:10Z [INFO]  Agent Desktop shutting down
+2026-04-23T18:00:10Z [INFO]  [WebServer] Listener thread exited.
+2026-04-23T18:00:10Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-23T18:00:10Z [INFO]  [WebServer] Server stopped.
+2026-04-23T18:00:11Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-23T18:02:19Z ===
+2026-04-23T18:02:19Z [INFO]  Agent Desktop starting
+2026-04-23T18:02:19Z [INFO]  Command line: 
+2026-04-23T18:02:19Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:02:19Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:02:19Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:02:19Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:02:43Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-23T18:02:43Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-23T18:02:43Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-23T18:08:05Z [INFO]  Agent Desktop shutting down
+2026-04-23T18:08:05Z [INFO]  [WebServer] Listener thread exited.
+2026-04-23T18:08:05Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-23T18:08:05Z [INFO]  [WebServer] Server stopped.
+2026-04-23T18:08:06Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-23T18:44:33Z ===
+2026-04-23T18:44:33Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:33Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-9b1df90c8af4458395c8adab50896ad3.json
+2026-04-23T18:44:33Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:33Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:33Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:33Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:33Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:44:34Z ===
+2026-04-23T18:44:34Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:34Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-0cbef5257b3643a59ac2666f390b1954.json
+2026-04-23T18:44:34Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:34Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:34Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:34Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:36Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:44:36Z ===
+2026-04-23T18:44:36Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:36Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-dfc707d1a1914e2b97834b87af2f1962.json
+2026-04-23T18:44:36Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:36Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:36Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:36Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:36Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:44:36Z ===
+2026-04-23T18:44:36Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:36Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-99120e98cbd74cd8891626c2f5e8c12a.json
+2026-04-23T18:44:36Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:36Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:36Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:36Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:36Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:44:37Z ===
+2026-04-23T18:44:37Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:37Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-fcab624ca4544aac9adbc00325b76327.json
+2026-04-23T18:44:37Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:37Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:37Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:37Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:37Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:44:37Z ===
+2026-04-23T18:44:37Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:37Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-670a76a4adc4400491b2adcba1bb3400.json
+2026-04-23T18:44:37Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:37Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:37Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:37Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:37Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:44:37Z ===
+2026-04-23T18:44:37Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:37Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-f6d425ae3cfb42428fd835a34243d710.json
+2026-04-23T18:44:37Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:37Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:37Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:37Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:37Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:44:38Z ===
+2026-04-23T18:44:38Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:38Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-03ab3503dbf64b8a9c77757f00936373.json
+2026-04-23T18:44:38Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:38Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:38Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:38Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:38Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:44:38Z ===
+2026-04-23T18:44:38Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:38Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-9a56a4e06be04fc9a1e1315e3548f4cd.json
+2026-04-23T18:44:38Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:38Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:38Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:38Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:38Z [INFO]  Agent Desktop headless command complete: 1
+
+=== Logger initialized at 2026-04-23T18:44:39Z ===
+2026-04-23T18:44:39Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:39Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-e8fbb93060624137a76efb876d8acae0.json
+2026-04-23T18:44:39Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:39Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:39Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:39Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:39Z [INFO]  Agent Desktop headless command complete: 1
+
+=== Logger initialized at 2026-04-23T18:44:39Z ===
+2026-04-23T18:44:39Z [INFO]  Agent Desktop starting
+2026-04-23T18:44:39Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-d742bd2b0ac047e2b20c6b46e4f707dc.json
+2026-04-23T18:44:39Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:44:39Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:44:39Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:44:39Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:44:39Z [INFO]  Agent Desktop headless command complete: 1
+
+=== Logger initialized at 2026-04-23T18:45:01Z ===
+2026-04-23T18:45:01Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:01Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\manual_binding_contract.json
+2026-04-23T18:45:01Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:01Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:01Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:01Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:01Z [INFO]  Agent Desktop headless command complete: 1
+
+=== Logger initialized at 2026-04-23T18:45:14Z ===
+2026-04-23T18:45:14Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:14Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-b1924d944fb4491f892c081bb25e32e5.json
+2026-04-23T18:45:14Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:14Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:14Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:14Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:14Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:45:15Z ===
+2026-04-23T18:45:15Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:15Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-fa9213898f424d269b150c97fc4d9dd5.json
+2026-04-23T18:45:15Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:15Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:15Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:15Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:17Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:45:17Z ===
+2026-04-23T18:45:17Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:17Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-d70fa781938b4fc280940290ab76c1a0.json
+2026-04-23T18:45:17Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:17Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:17Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:17Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:17Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:45:18Z ===
+2026-04-23T18:45:18Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:18Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-e4285d18df8840bf9c5420f74082c1a4.json
+2026-04-23T18:45:18Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:18Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:18Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:18Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:18Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:45:18Z ===
+2026-04-23T18:45:18Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:18Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-d9b382b7f17645d9bac494ff6e12e752.json
+2026-04-23T18:45:18Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:18Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:18Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:18Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:18Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:45:18Z ===
+2026-04-23T18:45:18Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:18Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-b4e1e93611b4475690ea787467423c74.json
+2026-04-23T18:45:18Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:18Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:18Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:18Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:18Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:45:19Z ===
+2026-04-23T18:45:19Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:19Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-0fd875f720104221a8f96e99c135b468.json
+2026-04-23T18:45:19Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:19Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:19Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:19Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:19Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:45:19Z ===
+2026-04-23T18:45:19Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:19Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-e6f871a90fb54001ba3d94b2c4f5660f.json
+2026-04-23T18:45:19Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:19Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:19Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:19Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:19Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:45:20Z ===
+2026-04-23T18:45:20Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:20Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-6f739f5541fd4863aec5a94b39bac118.json
+2026-04-23T18:45:20Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:20Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:20Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:20Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:20Z [INFO]  Agent Desktop headless command complete: 1
+
+=== Logger initialized at 2026-04-23T18:45:20Z ===
+2026-04-23T18:45:20Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:20Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-d6134f4bae1a478bbd8be086306b4836.json
+2026-04-23T18:45:20Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:20Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:20Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:20Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:20Z [INFO]  Agent Desktop headless command complete: 1
+
+=== Logger initialized at 2026-04-23T18:45:21Z ===
+2026-04-23T18:45:21Z [INFO]  Agent Desktop starting
+2026-04-23T18:45:21Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-6b56550e2b7740fb8beca253dd8fee4e.json
+2026-04-23T18:45:21Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:45:21Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:45:21Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:45:21Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:45:21Z [INFO]  Agent Desktop headless command complete: 1
+
+=== Logger initialized at 2026-04-23T18:47:17Z ===
+2026-04-23T18:47:17Z [INFO]  Agent Desktop starting
+2026-04-23T18:47:17Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\manual-bind2\contract.json
+2026-04-23T18:47:17Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:47:17Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:47:17Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:47:17Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:47:17Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:47:54Z ===
+2026-04-23T18:47:54Z [INFO]  Agent Desktop starting
+2026-04-23T18:47:54Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-675499a8ce1d4aadb3b8b678d49ff494.json
+2026-04-23T18:47:54Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:47:54Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:47:54Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:47:54Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:47:54Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:08Z ===
+2026-04-23T18:48:08Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:08Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-d5520db2fa8e4bd1a8cb78e57e27bf60.json
+2026-04-23T18:48:08Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:08Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:08Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:08Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:08Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:08Z ===
+2026-04-23T18:48:08Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:08Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-1e3b3eb0362e495984d63538146e0fa8.json
+2026-04-23T18:48:08Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:08Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:08Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:08Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:10Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:11Z ===
+2026-04-23T18:48:11Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:11Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-189f35e891924a5d86380c1c3e73fca7.json
+2026-04-23T18:48:11Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:11Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:11Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:11Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:11Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:11Z ===
+2026-04-23T18:48:11Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:11Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-f9cc798041e54bd0935dcec88d6305b4.json
+2026-04-23T18:48:11Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:11Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:11Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:11Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:11Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:11Z ===
+2026-04-23T18:48:11Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:11Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-8ff9400c75504ad8a5f6a4867f628d15.json
+2026-04-23T18:48:11Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:11Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:11Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:11Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:11Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:12Z ===
+2026-04-23T18:48:12Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:12Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-0912d1efcf024e3f90ba7d0160ba41c8.json
+2026-04-23T18:48:12Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:12Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:12Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:12Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:12Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:12Z ===
+2026-04-23T18:48:12Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:12Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-c25d6af9e87847d5b5298962ffcaf74c.json
+2026-04-23T18:48:12Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:12Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:12Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:12Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:12Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:12Z ===
+2026-04-23T18:48:12Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:12Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-adf3f7d7095e42ec82f3a7c5eef252da.json
+2026-04-23T18:48:12Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:12Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:12Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:12Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:12Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:13Z ===
+2026-04-23T18:48:13Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:13Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-2a79c7b7ee3b47ea82bfe7f2edf2d04d.json
+2026-04-23T18:48:13Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:13Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:13Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:13Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:13Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:13Z ===
+2026-04-23T18:48:13Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:13Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-3da1c85b3b47457a9b8e6f64d3705301.json
+2026-04-23T18:48:13Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:13Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:13Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:13Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:13Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:13Z ===
+2026-04-23T18:48:13Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:13Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-ebb55bc94f4f4a779c16224e914b34a0.json
+2026-04-23T18:48:13Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:13Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:13Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:13Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:13Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:14Z ===
+2026-04-23T18:48:14Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:14Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-7ad4584132754751ad7519b5f675e778.json
+2026-04-23T18:48:14Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:14Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:14Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:14Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:14Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:48:14Z ===
+2026-04-23T18:48:14Z [INFO]  Agent Desktop starting
+2026-04-23T18:48:14Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-33e147f890084842a7232375dc8fe1b4.json
+2026-04-23T18:48:14Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:48:14Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:48:14Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:48:14Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:48:14Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T18:57:49Z ===
+2026-04-23T18:57:49Z [INFO]  Agent Desktop starting
+2026-04-23T18:57:49Z [INFO]  Command line: 
+2026-04-23T18:57:49Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T18:57:49Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T18:57:49Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T18:57:49Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T18:58:14Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-23T18:58:14Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-23T18:58:14Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-23T19:39:10Z [INFO]  Agent Desktop shutting down
+2026-04-23T19:39:10Z [INFO]  [WebServer] Listener thread exited.
+2026-04-23T19:39:10Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-23T19:39:10Z [INFO]  [WebServer] Server stopped.
+2026-04-23T19:39:12Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-23T19:45:52Z ===
+2026-04-23T19:45:52Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:52Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-65df38c9b3104ab482513fd13e8d1848.json
+2026-04-23T19:45:52Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:52Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:52Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:52Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:52Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:53Z ===
+2026-04-23T19:45:53Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:53Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-ca804721daea472792bd91007aaaf154.json
+2026-04-23T19:45:53Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:53Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:53Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:53Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:55Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:55Z ===
+2026-04-23T19:45:55Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:55Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-ab33f50d4ecc4ed390effe80e11035ca.json
+2026-04-23T19:45:55Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:55Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:55Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:55Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:55Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:55Z ===
+2026-04-23T19:45:55Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:55Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-72a2d55342774956a1c8be7cd292c746.json
+2026-04-23T19:45:55Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:55Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:55Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:55Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:55Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:56Z ===
+2026-04-23T19:45:56Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:56Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-263beb7fb540400b836688fc287ef03b.json
+2026-04-23T19:45:56Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:56Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:56Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:56Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:56Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:56Z ===
+2026-04-23T19:45:56Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:56Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-9183301298674028bf8dc288d781d348.json
+2026-04-23T19:45:56Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:56Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:56Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:56Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:56Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:56Z ===
+2026-04-23T19:45:56Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:56Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-76899564cedb427ca52fe790beecf686.json
+2026-04-23T19:45:56Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:56Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:56Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:56Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:56Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:57Z ===
+2026-04-23T19:45:57Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:57Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-4fe3255837ec4b079aab4b945686b3cd.json
+2026-04-23T19:45:57Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:57Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:57Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:57Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:57Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:57Z ===
+2026-04-23T19:45:57Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:57Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-919c721aab204646879d8574feec070a.json
+2026-04-23T19:45:57Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:57Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:57Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:57Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:57Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:57Z ===
+2026-04-23T19:45:57Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:57Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-86ce1f2d441d4c09a33060ac226581be.json
+2026-04-23T19:45:57Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:57Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:57Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:57Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:57Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:58Z ===
+2026-04-23T19:45:58Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:58Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-5c23a99e531545aa8e3b9a4c04eb5251.json
+2026-04-23T19:45:58Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:58Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:58Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:58Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:58Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:58Z ===
+2026-04-23T19:45:58Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:58Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-ffa2ccdf0ec1400199d5c3d0818a38d1.json
+2026-04-23T19:45:58Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:58Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:58Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:58Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:58Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:59Z ===
+2026-04-23T19:45:59Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:59Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-e2aab7bb4bcf43b597456e03b69925d9.json
+2026-04-23T19:45:59Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:59Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:59Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:59Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:59Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-23T19:45:59Z ===
+2026-04-23T19:45:59Z [INFO]  Agent Desktop starting
+2026-04-23T19:45:59Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-7e1b429555844c009270ab724a000f24.json
+2026-04-23T19:45:59Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-23T19:45:59Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-23T19:45:59Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-23T19:45:59Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-23T19:45:59Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:37:05Z ===
+2026-04-24T01:37:05Z [INFO]  Agent Desktop starting
+2026-04-24T01:37:05Z [INFO]  Command line: 
+2026-04-24T01:37:05Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:37:05Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:37:05Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:37:05Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:37:31Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T01:37:31Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T01:37:31Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T01:38:03Z [INFO]  Agent Desktop shutting down
+2026-04-24T01:38:03Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T01:38:03Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T01:38:03Z [INFO]  [WebServer] Server stopped.
+2026-04-24T01:38:04Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T01:57:46Z ===
+2026-04-24T01:57:46Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:46Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-76a19d9aea80471096a75bf054336b68.json
+2026-04-24T01:57:46Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:46Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:46Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:46Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:46Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:46Z ===
+2026-04-24T01:57:46Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:46Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-d44e8f1a3f40425080e40823c72ff7fb.json
+2026-04-24T01:57:46Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:46Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:46Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:46Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:48Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:49Z ===
+2026-04-24T01:57:49Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:49Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-028e6a93150c482cb223f2a0e1af78bf.json
+2026-04-24T01:57:49Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:49Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:49Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:49Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:49Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:49Z ===
+2026-04-24T01:57:49Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:49Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-a28be98109e94fdc9d347d63d6eb0910.json
+2026-04-24T01:57:49Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:49Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:49Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:49Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:49Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:49Z ===
+2026-04-24T01:57:49Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:49Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-a45e7c53b2a64490b7d979a1d9247245.json
+2026-04-24T01:57:49Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:49Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:49Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:49Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:49Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:50Z ===
+2026-04-24T01:57:50Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:50Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-4e0bb49e6aad46478cb46dba30ec64a0.json
+2026-04-24T01:57:50Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:50Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:50Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:50Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:50Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:50Z ===
+2026-04-24T01:57:50Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:50Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-e2939947839845fd961c71b5af461a58.json
+2026-04-24T01:57:50Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:50Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:50Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:50Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:50Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:50Z ===
+2026-04-24T01:57:50Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:50Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-bb0a25d5ee6449968bce0ac60cd7cb7c.json
+2026-04-24T01:57:50Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:50Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:50Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:50Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:50Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:50Z ===
+2026-04-24T01:57:50Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:50Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-0794c6f08def4b598ed47ad3408251e4.json
+2026-04-24T01:57:50Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:50Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:50Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:50Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:51Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:51Z ===
+2026-04-24T01:57:51Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:51Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-a933eba37b15439a860acf132d8516be.json
+2026-04-24T01:57:51Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:51Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:51Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:51Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:51Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:52Z ===
+2026-04-24T01:57:52Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:52Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-03db9065fdb54c65bec4c6a877721c9b.json
+2026-04-24T01:57:52Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:52Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:52Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:52Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:52Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:52Z ===
+2026-04-24T01:57:52Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:52Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-9923a9efa6e2411cb18a1728ab49b810.json
+2026-04-24T01:57:52Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:52Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:52Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:52Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:52Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:52Z ===
+2026-04-24T01:57:52Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:52Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-17e28afb249742c2b4f3a728f296ce14.json
+2026-04-24T01:57:52Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:52Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:52Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:52Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:52Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:53Z ===
+2026-04-24T01:57:53Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:53Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-518818f830cb44e08326bdc5d013aa82.json
+2026-04-24T01:57:53Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:53Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:53Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:53Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:53Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:57:53Z ===
+2026-04-24T01:57:53Z [INFO]  Agent Desktop starting
+2026-04-24T01:57:53Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-ffd58212ae7348da91686650e84e6ec4.json
+2026-04-24T01:57:53Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:57:53Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:57:53Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:57:53Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:57:53Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:36Z ===
+2026-04-24T01:58:36Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:36Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-90a5a5d640c44c3c86d048b8f81ff152.json
+2026-04-24T01:58:36Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:36Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:36Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:36Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:36Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:37Z ===
+2026-04-24T01:58:37Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:37Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-83ea0a95b9d64bbebb097f3cff677f25.json
+2026-04-24T01:58:37Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:37Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:37Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:37Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:39Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:39Z ===
+2026-04-24T01:58:39Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:39Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-a2233b4c2b484f2d8f328eb2fc076380.json
+2026-04-24T01:58:39Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:39Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:39Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:39Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:39Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:40Z ===
+2026-04-24T01:58:40Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:40Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-5e2e6f7d6e404f62af1bd1d5663efc05.json
+2026-04-24T01:58:40Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:40Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:40Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:40Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:40Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:40Z ===
+2026-04-24T01:58:40Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:40Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-aa4250ecf7c34104b04ca017fb16ba2b.json
+2026-04-24T01:58:40Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:40Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:40Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:40Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:40Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:40Z ===
+2026-04-24T01:58:40Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:40Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-6aed92277d6c4bafb7558c894f83ba2e.json
+2026-04-24T01:58:40Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:40Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:40Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:40Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:40Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:41Z ===
+2026-04-24T01:58:41Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:41Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-f5dc7b94b01740dda047daa4bc439b10.json
+2026-04-24T01:58:41Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:41Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:41Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:41Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:41Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:41Z ===
+2026-04-24T01:58:41Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:41Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-f9f7f87b887447e3bf1734560f5563b3.json
+2026-04-24T01:58:41Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:41Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:41Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:41Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:41Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:41Z ===
+2026-04-24T01:58:41Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:41Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-da79b070e12b4856b611c1c1eb2a521c.json
+2026-04-24T01:58:41Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:41Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:41Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:41Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:41Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:42Z ===
+2026-04-24T01:58:42Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:42Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-50b6a37b378a47b2a4f43d2c8b8e1907.json
+2026-04-24T01:58:42Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:42Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:42Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:42Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:42Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:42Z ===
+2026-04-24T01:58:42Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:42Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-c9b3612a472e4c3d8960f024b03844e7.json
+2026-04-24T01:58:42Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:42Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:42Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:42Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:42Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:43Z ===
+2026-04-24T01:58:43Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:43Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-cec4dfce16a34cf9a8c409d16757ee5e.json
+2026-04-24T01:58:43Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:43Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:43Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:43Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:43Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:43Z ===
+2026-04-24T01:58:43Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:43Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-5e2ac690c0e34f4e85b99645a4333566.json
+2026-04-24T01:58:43Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:43Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:43Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:43Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:43Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:43Z ===
+2026-04-24T01:58:43Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:43Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-541de77319784cc3b47d93efa7f3ae4d.json
+2026-04-24T01:58:43Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:43Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:43Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:43Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:43Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T01:58:43Z ===
+2026-04-24T01:58:43Z [INFO]  Agent Desktop starting
+2026-04-24T01:58:43Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-b1d683c9f83946f8ba1c6f600fe67e5e.json
+2026-04-24T01:58:43Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T01:58:43Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T01:58:43Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T01:58:43Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T01:58:43Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:00:52Z ===
+2026-04-24T02:00:52Z [INFO]  Agent Desktop starting
+2026-04-24T02:00:52Z [INFO]  Command line: 
+2026-04-24T02:00:52Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:00:52Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:00:52Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:00:52Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:01:14Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T02:01:14Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T02:01:14Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T02:04:39Z [INFO]  Agent Desktop shutting down
+2026-04-24T02:04:39Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T02:04:39Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T02:04:39Z [INFO]  [WebServer] Server stopped.
+2026-04-24T02:04:39Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T02:05:50Z ===
+2026-04-24T02:05:50Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:50Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-c7c2c40fcf324d788152c2759003db32.json
+2026-04-24T02:05:50Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:50Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:50Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:50Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:50Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:50Z ===
+2026-04-24T02:05:50Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:50Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-7b43746884654101bd2b25b4ba0d9a62.json
+2026-04-24T02:05:50Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:50Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:50Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:50Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:52Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:52Z ===
+2026-04-24T02:05:52Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:52Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-d6f2568b87964bc799c04b962084413d.json
+2026-04-24T02:05:52Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:52Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:52Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:52Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:53Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:53Z ===
+2026-04-24T02:05:53Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:53Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-2ba4fa7a96ea4104bd65417aeba4212e.json
+2026-04-24T02:05:53Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:53Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:53Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:53Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:53Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:53Z ===
+2026-04-24T02:05:53Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:53Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-edc4ff05752d47b591900f6ebfdd1f3b.json
+2026-04-24T02:05:53Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:53Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:53Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:53Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:53Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:54Z ===
+2026-04-24T02:05:54Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:54Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-c2b5f52aafb945c0b6aad5a656d2b1e7.json
+2026-04-24T02:05:54Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:54Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:54Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:54Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:54Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:54Z ===
+2026-04-24T02:05:54Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:54Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-4b4f2950b2264863976034a5e8fd8e17.json
+2026-04-24T02:05:54Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:54Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:54Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:54Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:54Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:54Z ===
+2026-04-24T02:05:54Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:54Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-ff6fc823bdd348ce91cfb5be134c29e2.json
+2026-04-24T02:05:54Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:54Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:54Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:54Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:54Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:55Z ===
+2026-04-24T02:05:55Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:55Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-bfcfceacadb844748da6ea6bf51c1f8a.json
+2026-04-24T02:05:55Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:55Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:55Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:55Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:55Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:55Z ===
+2026-04-24T02:05:55Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:55Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-8edbddf930f548af82a07dfcceb12dae.json
+2026-04-24T02:05:55Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:55Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:55Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:55Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:55Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:56Z ===
+2026-04-24T02:05:56Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:56Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-008d68765225446685dcc1d355b1d4dc.json
+2026-04-24T02:05:56Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:56Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:56Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:56Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:56Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:56Z ===
+2026-04-24T02:05:56Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:56Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-3b0742b720b24c68abe1dd858b494745.json
+2026-04-24T02:05:56Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:56Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:56Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:56Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:56Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:56Z ===
+2026-04-24T02:05:56Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:56Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-7d0fffb167af4debadf8eed7fc23c167.json
+2026-04-24T02:05:56Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:56Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:56Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:56Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:56Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:57Z ===
+2026-04-24T02:05:57Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:57Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-abdff4f0779d4e788d79a52ee731450c.json
+2026-04-24T02:05:57Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:57Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:57Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:57Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:57Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:05:57Z ===
+2026-04-24T02:05:57Z [INFO]  Agent Desktop starting
+2026-04-24T02:05:57Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-b2e45d58a70f4081a3bb8fbb765203a7.json
+2026-04-24T02:05:57Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:05:57Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:05:57Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:05:57Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:05:57Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:08:24Z ===
+2026-04-24T02:08:24Z [INFO]  Agent Desktop starting
+2026-04-24T02:08:24Z [INFO]  Command line: 
+2026-04-24T02:08:24Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:08:24Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:08:24Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:08:24Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:08:49Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T02:08:49Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T02:08:49Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T02:09:42Z [INFO]  Agent Desktop shutting down
+2026-04-24T02:09:42Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T02:09:42Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T02:09:42Z [INFO]  [WebServer] Server stopped.
+2026-04-24T02:09:43Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T02:10:18Z ===
+2026-04-24T02:10:18Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:18Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-3f3147bc70a349b09aba902ea51ac2c5.json
+2026-04-24T02:10:18Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:18Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:18Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:18Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:18Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:19Z ===
+2026-04-24T02:10:19Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:19Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-edd5e49a3ff74b47bda1df8fe879d0b3.json
+2026-04-24T02:10:19Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:19Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:19Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:19Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:21Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:21Z ===
+2026-04-24T02:10:21Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:21Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-e7af0be583204376833b60de2688f473.json
+2026-04-24T02:10:21Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:21Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:21Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:21Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:21Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:21Z ===
+2026-04-24T02:10:21Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:21Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-f8e4a6e53f844326b8fb41237cfb4a49.json
+2026-04-24T02:10:21Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:21Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:21Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:21Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:21Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:22Z ===
+2026-04-24T02:10:22Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:22Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-4bb4f9bfe431471587d0f043a52f6e9e.json
+2026-04-24T02:10:22Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:22Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:22Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:22Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:22Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:22Z ===
+2026-04-24T02:10:22Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:22Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-7536949903ed4d0e98ad49eb6e47b741.json
+2026-04-24T02:10:22Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:22Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:22Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:22Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:22Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:22Z ===
+2026-04-24T02:10:22Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:22Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-c85f6a96200340e39d306fc32e3e9340.json
+2026-04-24T02:10:22Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:22Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:22Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:22Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:22Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:23Z ===
+2026-04-24T02:10:23Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:23Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-1ce679fd5b424db181a38f90b41942e4.json
+2026-04-24T02:10:23Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:23Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:23Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:23Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:23Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:23Z ===
+2026-04-24T02:10:23Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:23Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-9403f4e97b75440492ad09852ec251a5.json
+2026-04-24T02:10:23Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:23Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:23Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:23Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:23Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:23Z ===
+2026-04-24T02:10:23Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:23Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-b4e8f1f7592b4f0785fe765a14b0ade6.json
+2026-04-24T02:10:23Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:23Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:23Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:23Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:23Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:24Z ===
+2026-04-24T02:10:24Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:24Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-9a67912395a34b9da89f881353c05d19.json
+2026-04-24T02:10:24Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:24Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:24Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:24Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:24Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:25Z ===
+2026-04-24T02:10:25Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:25Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-b86c38c421a84e2c8898137b35bcf6fa.json
+2026-04-24T02:10:25Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:25Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:25Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:25Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:25Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:25Z ===
+2026-04-24T02:10:25Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:25Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-ec5a8d700506463d96915000045f8a1d.json
+2026-04-24T02:10:25Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:25Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:25Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:25Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:25Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:25Z ===
+2026-04-24T02:10:25Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:25Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-62c2a5688c704e358d00d681f2a75f6e.json
+2026-04-24T02:10:25Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:25Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:25Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:25Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:25Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:10:25Z ===
+2026-04-24T02:10:25Z [INFO]  Agent Desktop starting
+2026-04-24T02:10:25Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-6a15fc7b10ca471a87f4d96c1f2074c2.json
+2026-04-24T02:10:25Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:10:25Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:10:25Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:10:25Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:10:25Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:13:28Z ===
+2026-04-24T02:13:28Z [INFO]  Agent Desktop starting
+2026-04-24T02:13:28Z [INFO]  Command line: --provider-contract C:\Users\THEUNI~1\AppData\Local\Temp\agent-oauth-debug-1963dc4d-5cce-41cb-8c53-0d1e392836a6\contract.json
+2026-04-24T02:13:28Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:13:28Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:13:28Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:13:28Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:13:28Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:13:44Z ===
+2026-04-24T02:13:44Z [INFO]  Agent Desktop starting
+2026-04-24T02:13:44Z [INFO]  Command line: --provider-contract C:\Users\THEUNI~1\AppData\Local\Temp\agent-oauth-debug-818a618b-5abd-46eb-b7ef-56a99ab4a668\contract.json
+2026-04-24T02:13:44Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:13:44Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:13:44Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:13:44Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:13:44Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:14:07Z ===
+2026-04-24T02:14:07Z [INFO]  Agent Desktop starting
+2026-04-24T02:14:07Z [INFO]  Command line: --provider-contract C:\Users\THEUNI~1\AppData\Local\Temp\agent-oauth-debug-55d9b293-2c7c-4367-ac0d-fddaa5d887fd\contract.json
+2026-04-24T02:14:07Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:14:07Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:14:07Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:14:07Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:14:07Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:14:34Z ===
+2026-04-24T02:14:34Z [INFO]  Agent Desktop starting
+2026-04-24T02:14:34Z [INFO]  Command line: --provider-contract C:\Users\THEUNI~1\AppData\Local\Temp\agent-oauth-debug-2c6445c8-bb7a-4c6a-8da8-32d07e111369\contract.json
+2026-04-24T02:14:34Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:14:34Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:14:34Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:14:34Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:14:34Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:27Z ===
+2026-04-24T02:15:27Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:27Z [INFO]  Command line: --provider-contract C:\Users\THEUNI~1\AppData\Local\Temp\agent-oauth-fake-68cc81de-2002-4482-ad41-33314b1c48ed\contract.json
+2026-04-24T02:15:27Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:27Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:27Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:27Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:27Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:36Z ===
+2026-04-24T02:15:36Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:36Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-6a40758344204e7a87cc0c2f0ef5b0cc.json
+2026-04-24T02:15:36Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:36Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:36Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:36Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:36Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:36Z ===
+2026-04-24T02:15:36Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:36Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-8189b6a4cc15473f867db307d0afe77c.json
+2026-04-24T02:15:36Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:36Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:36Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:36Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:38Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:39Z ===
+2026-04-24T02:15:39Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:39Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-17483a07d46b4430b142544f89640461.json
+2026-04-24T02:15:39Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:39Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:39Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:39Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:39Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:39Z ===
+2026-04-24T02:15:39Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:39Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-a59c5d71d18148e9a32d2c34d247d1b3.json
+2026-04-24T02:15:39Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:39Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:39Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:39Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:39Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:39Z ===
+2026-04-24T02:15:39Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:39Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-7e3d45fba65a4a78a5ed343fd7da5ad1.json
+2026-04-24T02:15:39Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:39Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:39Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:39Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:39Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:40Z ===
+2026-04-24T02:15:40Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:40Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-e8f54c6df61e4c10a3bec4acd543cef9.json
+2026-04-24T02:15:40Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:40Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:40Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:40Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:40Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:40Z ===
+2026-04-24T02:15:40Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:40Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-e6ea5bc29ab94663aa1aa5842d07b0a7.json
+2026-04-24T02:15:40Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:40Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:40Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:40Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:40Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:40Z ===
+2026-04-24T02:15:40Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:40Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-a1be0211db2c4ae398ca12f3d5240fb0.json
+2026-04-24T02:15:40Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:40Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:40Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:40Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:40Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:40Z ===
+2026-04-24T02:15:40Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:40Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-47f8aa5fa6d149ec956ea10f7bcdde11.json
+2026-04-24T02:15:40Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:40Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:40Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:40Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:41Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:41Z ===
+2026-04-24T02:15:41Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:41Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-01027c629a414b29a57970d891c49141.json
+2026-04-24T02:15:41Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:41Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:41Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:41Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:41Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:42Z ===
+2026-04-24T02:15:42Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:42Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-5ca310920cc345bb975ef17053f8f360.json
+2026-04-24T02:15:42Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:42Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:42Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:42Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:42Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:42Z ===
+2026-04-24T02:15:42Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:42Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-51d0ce49460444e7bc56cf4d36346815.json
+2026-04-24T02:15:42Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:42Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:42Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:42Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:42Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:42Z ===
+2026-04-24T02:15:42Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:42Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-b0e7ef92f35c4ae898fa7219ef6fdaa4.json
+2026-04-24T02:15:42Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:42Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:42Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:42Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:42Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:43Z ===
+2026-04-24T02:15:43Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:43Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-90fd00f1efcc405289537f64b2a1ed1e.json
+2026-04-24T02:15:43Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:43Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:43Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:43Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:43Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:15:43Z ===
+2026-04-24T02:15:43Z [INFO]  Agent Desktop starting
+2026-04-24T02:15:43Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-8b8e6ebc6fbf4dc9ad2d026a87559551.json
+2026-04-24T02:15:43Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:15:43Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:15:43Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:15:43Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:15:43Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T02:17:31Z ===
+2026-04-24T02:17:31Z [INFO]  Agent Desktop starting
+2026-04-24T02:17:31Z [INFO]  Command line: 
+2026-04-24T02:17:31Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T02:17:31Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T02:17:31Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T02:17:31Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T02:17:54Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T02:17:54Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T02:17:54Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T02:27:57Z [INFO]  Agent Desktop shutting down
+2026-04-24T02:27:57Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T02:28:19Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T02:28:19Z [INFO]  [WebServer] Server stopped.
+2026-04-24T02:28:19Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T03:09:53Z ===
+2026-04-24T03:09:53Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:53Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-f979369c93c74bbcac00cb9948fedea9.json
+2026-04-24T03:09:53Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:53Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:53Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:53Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:53Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:53Z ===
+2026-04-24T03:09:53Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:53Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-aa51d6e81b904c6eb626b10645ee2f38.json
+2026-04-24T03:09:53Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:53Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:53Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:53Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:55Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:55Z ===
+2026-04-24T03:09:55Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:55Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-7b82a7164a85425c99243c72aaaedc2d.json
+2026-04-24T03:09:55Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:55Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:55Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:55Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:55Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:56Z ===
+2026-04-24T03:09:56Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:56Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-bf8c7655c7d040c193c32b10fe3e2b64.json
+2026-04-24T03:09:56Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:56Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:56Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:56Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:56Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:56Z ===
+2026-04-24T03:09:56Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:56Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-ff03910869804dc89056e636e78c6d37.json
+2026-04-24T03:09:56Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:56Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:56Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:56Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:56Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:56Z ===
+2026-04-24T03:09:56Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:56Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-9059280303974a258527373720b9b0e0.json
+2026-04-24T03:09:56Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:56Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:56Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:56Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:57Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:57Z ===
+2026-04-24T03:09:57Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:57Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-d2491ab07005488a9c7ddfb0e04e7e33.json
+2026-04-24T03:09:57Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:57Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:57Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:57Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:57Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:57Z ===
+2026-04-24T03:09:57Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:57Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-a2a2c6102c874249b9ad935457164592.json
+2026-04-24T03:09:57Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:57Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:57Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:57Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:57Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:57Z ===
+2026-04-24T03:09:57Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:57Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-e0ddc11ef2414b7ca1e4c2841af075ce.json
+2026-04-24T03:09:57Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:57Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:57Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:57Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:57Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:58Z ===
+2026-04-24T03:09:58Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:58Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-7f66445962c54131b775c63251735cee.json
+2026-04-24T03:09:58Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:58Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:58Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:58Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:58Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:58Z ===
+2026-04-24T03:09:58Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:58Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-2d03a855bc9049cc9b5d53cdfca12eec.json
+2026-04-24T03:09:58Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:58Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:58Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:58Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:58Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:59Z ===
+2026-04-24T03:09:59Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:59Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-d55efc8077c5438cac80c938dad8b983.json
+2026-04-24T03:09:59Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:59Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:59Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:59Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:59Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:59Z ===
+2026-04-24T03:09:59Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:59Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-58af5fdd519241b8a8806a675974fdb1.json
+2026-04-24T03:09:59Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:59Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:59Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:59Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:59Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:09:59Z ===
+2026-04-24T03:09:59Z [INFO]  Agent Desktop starting
+2026-04-24T03:09:59Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-5c3cd20a15194281a318f91bf6499368.json
+2026-04-24T03:09:59Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:09:59Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:09:59Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:09:59Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:09:59Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:10:00Z ===
+2026-04-24T03:10:00Z [INFO]  Agent Desktop starting
+2026-04-24T03:10:00Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-9744e8ed62084374902e456d59a9a229.json
+2026-04-24T03:10:00Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:10:00Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:10:00Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:10:00Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:10:00Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:10:00Z ===
+2026-04-24T03:10:00Z [INFO]  Agent Desktop starting
+2026-04-24T03:10:00Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-38f3015078ee4c2c8398df38df69a64b.json
+2026-04-24T03:10:00Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:10:00Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:10:00Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:10:00Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:10:00Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:10:00Z ===
+2026-04-24T03:10:00Z [INFO]  Agent Desktop starting
+2026-04-24T03:10:00Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-6322b939185643e8ac00472d5941ce54.json
+2026-04-24T03:10:00Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:10:00Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:10:00Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:10:00Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:10:00Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:10:01Z ===
+2026-04-24T03:10:01Z [INFO]  Agent Desktop starting
+2026-04-24T03:10:01Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-700e65be0b364e58a576ba9a8ed4d18c.json
+2026-04-24T03:10:01Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:10:01Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:10:01Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:10:01Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:10:01Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:10:01Z ===
+2026-04-24T03:10:01Z [INFO]  Agent Desktop starting
+2026-04-24T03:10:01Z [INFO]  Command line: --provider-contract C:\Users\TheunisvanNiekerk\Code\agent\tests\provider_contract\.tmp\provider-contract-1614914814ee4599afffb27d83a0d5e1.json
+2026-04-24T03:10:01Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:10:01Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:10:01Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:10:01Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:10:01Z [INFO]  Agent Desktop headless command complete: 0
+
+=== Logger initialized at 2026-04-24T03:17:10Z ===
+2026-04-24T03:17:10Z [INFO]  Agent Desktop starting
+2026-04-24T03:17:10Z [INFO]  Command line: 
+2026-04-24T03:17:10Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:17:10Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:17:10Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:17:10Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:17:36Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T03:17:36Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T03:17:36Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T03:19:49Z [INFO]  Agent Desktop shutting down
+2026-04-24T03:19:49Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T03:19:49Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T03:19:49Z [INFO]  [WebServer] Server stopped.
+2026-04-24T03:19:50Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T03:20:07Z ===
+2026-04-24T03:20:07Z [INFO]  Agent Desktop starting
+2026-04-24T03:20:07Z [INFO]  Command line: 
+2026-04-24T03:20:07Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T03:20:07Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T03:20:07Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T03:20:07Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T03:20:29Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T03:20:29Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T03:20:29Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T03:21:48Z [INFO]  Agent Desktop shutting down
+2026-04-24T03:21:48Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T03:21:48Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T03:21:48Z [INFO]  [WebServer] Server stopped.
+2026-04-24T03:21:48Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T05:17:11Z ===
+2026-04-24T05:17:11Z [INFO]  Agent Desktop starting
+2026-04-24T05:17:11Z [INFO]  Command line: 
+2026-04-24T05:17:11Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T05:17:11Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T05:17:11Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T05:17:11Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T05:17:28Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T05:17:28Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T05:17:28Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T05:19:44Z [INFO]  Agent Desktop shutting down
+2026-04-24T05:19:44Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T05:19:44Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T05:19:44Z [INFO]  [WebServer] Server stopped.
+2026-04-24T05:19:45Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T07:17:55Z ===
+2026-04-24T07:17:55Z [INFO]  Agent Desktop starting
+2026-04-24T07:17:55Z [INFO]  Command line: 
+2026-04-24T07:17:55Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T07:17:55Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T07:17:55Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T07:17:55Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T07:18:13Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T07:18:13Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T07:18:13Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T07:26:54Z [INFO]  Agent Desktop shutting down
+2026-04-24T07:26:54Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T07:26:54Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T07:26:54Z [INFO]  [WebServer] Server stopped.
+2026-04-24T07:26:55Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T08:51:37Z ===
+2026-04-24T08:51:37Z [INFO]  Agent Desktop starting
+2026-04-24T08:51:37Z [INFO]  Command line: 
+2026-04-24T08:51:37Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T08:51:37Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T08:51:37Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T08:51:37Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T08:51:53Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T08:51:53Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T08:51:53Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T08:52:02Z [INFO]  Agent Desktop shutting down
+2026-04-24T08:52:02Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T08:52:02Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T08:52:02Z [INFO]  [WebServer] Server stopped.
+2026-04-24T08:52:03Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T18:50:16Z ===
+2026-04-24T18:50:16Z [INFO]  Agent Desktop starting
+2026-04-24T18:50:16Z [INFO]  Command line: 
+2026-04-24T18:50:16Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T18:50:16Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T18:50:16Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T18:50:16Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T18:50:39Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T18:50:39Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T18:50:39Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T18:52:25Z [INFO]  Agent Desktop shutting down
+2026-04-24T18:52:25Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T18:52:25Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T18:52:25Z [INFO]  [WebServer] Server stopped.
+2026-04-24T18:52:26Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T21:06:29Z ===
+2026-04-24T21:06:29Z [INFO]  Agent Desktop starting
+2026-04-24T21:06:29Z [INFO]  Command line: 
+2026-04-24T21:06:29Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T21:06:29Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T21:06:29Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T21:06:29Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T21:07:03Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T21:07:03Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T21:07:03Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T21:07:53Z [INFO]  Agent Desktop shutting down
+2026-04-24T21:07:53Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T21:07:53Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T21:07:53Z [INFO]  [WebServer] Server stopped.
+2026-04-24T21:07:54Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-24T22:53:04Z ===
+2026-04-24T22:53:04Z [INFO]  Agent Desktop starting
+2026-04-24T22:53:04Z [INFO]  Command line: 
+2026-04-24T22:53:04Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-24T22:53:04Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-24T22:53:04Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-24T22:53:04Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-24T22:53:29Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-24T22:53:29Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-24T22:53:29Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-24T22:58:25Z [INFO]  Agent Desktop shutting down
+2026-04-24T22:58:25Z [INFO]  [WebServer] Listener thread exited.
+2026-04-24T22:58:25Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-24T22:58:25Z [INFO]  [WebServer] Server stopped.
+2026-04-24T22:58:26Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-25T00:51:33Z ===
+2026-04-25T00:51:33Z [INFO]  Agent Desktop starting
+2026-04-25T00:51:33Z [INFO]  Command line: 
+2026-04-25T00:51:33Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-25T00:51:33Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-25T00:51:33Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-25T00:51:33Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-25T00:51:58Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-25T00:51:58Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-25T00:51:58Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-25T00:59:19Z [INFO]  Agent Desktop shutting down
+2026-04-25T00:59:19Z [INFO]  [WebServer] Listener thread exited.
+2026-04-25T00:59:19Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-25T00:59:19Z [INFO]  [WebServer] Server stopped.
+2026-04-25T00:59:19Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-25T01:14:19Z ===
+2026-04-25T01:14:19Z [INFO]  Agent Desktop starting
+2026-04-25T01:14:19Z [INFO]  Command line: 
+2026-04-25T01:14:19Z [INFO]  Runtime startup root: C:\Users\TheunisvanNiekerk\Code\agent
+2026-04-25T01:14:19Z [INFO]  Runtime config root: C:\Users\TheunisvanNiekerk\Code\agent\.config
+2026-04-25T01:14:19Z [INFO]  Runtime data root: C:\Users\TheunisvanNiekerk\Code\agent\.data
+2026-04-25T01:14:19Z [INFO]  Runtime log root: C:\Users\TheunisvanNiekerk\Code\agent\.log
+2026-04-25T01:14:45Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-25T01:14:45Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-25T01:14:45Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-25T01:15:16Z [INFO]  Agent Desktop shutting down
+2026-04-25T01:15:16Z [INFO]  [WebServer] Listener thread exited.
+2026-04-25T01:15:16Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-25T01:15:16Z [INFO]  [WebServer] Server stopped.
+2026-04-25T01:15:16Z [INFO]  Agent Desktop shutdown complete

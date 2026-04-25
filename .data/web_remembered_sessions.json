@@ -1,0 +1,16 @@
+{
+  "sessions": [
+    {
+      "created_at_unix": 1776852740,
+      "force_password_reset": false,
+      "last_activity_unix": 1776852740,
+      "needs_password_reset": false,
+      "persistent": true,
+      "persistent_until_unix": 1779444740,
+      "remote_addr": "127.0.0.1",
+      "token": "b3020cbfc230de68f4dd312ba54bc0043ab064b0f81c4eb5ef0775356c835ecd",
+      "user_id": "3593868E-3A09-47E2-BEF0-CCBDFFAB7292",
+      "username": "admin"
+    }
+  ]
+}

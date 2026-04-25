@@ -16,6 +16,9 @@ struct RuntimePaths {
 class AppStorage {
 public:
     explicit AppStorage(RuntimePaths runtime_paths);
+    // Backward-compatible constructor for code that hasn't migrated to RuntimePaths.
+    explicit AppStorage(std::filesystem::path root_path)
+        : AppStorage(RuntimePaths{root_path, root_path / ".config", root_path / ".data", root_path / ".log"}) {}
 
     void EnsureInitialized() const;
 

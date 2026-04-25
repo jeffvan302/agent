@@ -96,6 +96,16 @@ public:
               RuntimePaths runtime_paths,
               McpManager* mcp_manager = nullptr,
               RagService* rag_service = nullptr);
+    // Backward-compatible constructor.
+    WebServer(AppStorage* storage,
+              WebUserStore* user_store,
+              WebServerConfig config,
+              std::filesystem::path app_root,
+              McpManager* mcp_manager = nullptr,
+              RagService* rag_service = nullptr)
+        : WebServer(storage, user_store, std::move(config),
+                    RuntimePaths{app_root, app_root / ".config", app_root / ".data", app_root / ".log"},
+                    mcp_manager, rag_service) {}
     ~WebServer();
 
     // Non-copyable, non-movable (owns threads + mutex)

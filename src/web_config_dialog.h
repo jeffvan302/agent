@@ -24,3 +24,13 @@ bool ShowWebConfigDialog(HWND                        owner,
                          WebServer*                  server,   // may be nullptr
                          WebServerConfig*            config,
                          const RuntimePaths&         runtime_paths);
+
+// Backward-compatible overload for callers passing a single app-root path.
+inline bool ShowWebConfigDialog(HWND                        owner,
+                         WebServer*                  server,
+                         WebServerConfig*            config,
+                         std::filesystem::path       app_root)
+{
+    const RuntimePaths rt{app_root, app_root / ".config", app_root / ".data", app_root / ".log"};
+    return ShowWebConfigDialog(owner, server, config, rt);
+}

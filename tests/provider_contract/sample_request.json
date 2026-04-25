@@ -1,0 +1,25 @@
+{
+  "mode": "simple",
+  "provider": {
+    "name": "Sample Provider",
+    "provider_type": "openai_compatible",
+    "base_url": "http://127.0.0.1:8000"
+  },
+  "model": {
+    "id": "sample-model",
+    "display_name": "Sample Model",
+    "supports_streaming": true,
+    "supports_tools": false,
+    "output_tokens_parameter": "auto"
+  },
+  "request": {
+    "temperature": 0.0,
+    "max_tokens": 32,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply with the single word pong."
+      }
+    ]
+  }
+}

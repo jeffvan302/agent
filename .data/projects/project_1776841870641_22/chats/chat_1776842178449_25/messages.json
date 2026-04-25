@@ -1,0 +1,22 @@
+[
+  {
+    "content": "Which model is this?",
+    "created_at": "2026-04-22T07:16:35Z",
+    "role": "user"
+  },
+  {
+    "content": "Which model is this?",
+    "created_at": "2026-04-22T09:11:18Z",
+    "role": "user"
+  },
+  {
+    "content": "I’m an OpenAI AI assistant running through an API, but I don’t have access to the exact model identifier from inside this chat.\n\nIf you need the precise model name, check:\n- your API request configuration\n- the platform/dashboard logs\n- the client code that instantiated this session\n\nIf you want, I can help you figure it out from your code or API response.",
+    "created_at": "2026-04-22T09:11:24Z",
+    "role": "assistant"
+  },
+  {
+    "content": "Can you identify which provider you're from?",
+    "created_at": "2026-04-23T19:37:37Z",
+    "role": "user"
+  }
+]
