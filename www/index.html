@@ -17,7 +17,9 @@
   <header id="header">
     <span id="header-title">Agent Chat</span>
     <div id="header-user">
-      <span id="header-username"></span>
+      <button id="header-account-btn" type="button">
+        <span id="header-username"></span>
+      </button>
       <a id="logout-link" href="/logout">Sign out</a>
     </div>
   </header>
@@ -56,6 +58,49 @@
   </div>
 </div>
 
+<div id="account-modal" class="app-modal" hidden>
+  <div class="app-modal-backdrop" data-close-account-modal="true"></div>
+  <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+    <div class="app-modal-header">
+      <h2 id="account-modal-title">Account</h2>
+      <button type="button" class="app-modal-close" id="account-close-btn" aria-label="Close">×</button>
+    </div>
+    <form id="account-form" class="account-form">
+      <div class="form-group">
+        <label for="account-username">Username</label>
+        <input type="text" id="account-username" readonly>
+      </div>
+      <div class="form-group">
+        <label for="account-display-name">Display Name</label>
+        <input type="text" id="account-display-name" autocomplete="name">
+      </div>
+      <div class="form-group">
+        <label for="account-email">Email</label>
+        <input type="email" id="account-email" autocomplete="email">
+      </div>
+      <div class="account-form-divider">Change password</div>
+      <div class="form-group">
+        <label for="account-current-password">Current Password</label>
+        <input type="password" id="account-current-password" autocomplete="current-password">
+      </div>
+      <div class="form-group">
+        <label for="account-new-password">New Password</label>
+        <input type="password" id="account-new-password" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label for="account-confirm-password">Confirm New Password</label>
+        <input type="password" id="account-confirm-password" autocomplete="new-password">
+      </div>
+      <p class="account-form-help">Leave the password boxes blank if you only want to update your display name or email.</p>
+      <div id="account-error"></div>
+      <div class="app-modal-actions">
+        <button type="button" class="secondary-btn" id="account-cancel-btn">Cancel</button>
+        <button type="submit" class="login-btn" id="account-save-btn">Save Changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script src="/js/vendor/highlight.min.js"></script>
 <script src="/js/vendor/marked.min.js"></script>
 <script src="/js/vendor/purify.min.js"></script>
@@ -63,6 +108,7 @@
 <script src="/js/vendor/vega.min.js"></script>
 <script src="/js/vendor/vega-lite.min.js"></script>
 <script src="/js/vendor/vega-embed.min.js"></script>
+<script src="/js/vendor/cytoscape.min.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

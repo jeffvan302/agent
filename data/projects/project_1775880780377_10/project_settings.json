@@ -27,26 +27,39 @@
     {
       "server_id": "mcp_server_1775857473938_6",
       "variables": []
-    },
-    {
-      "server_id": "mcp_server_1775879351362_7",
-      "variables": []
     }
   ],
   "model_tool_ids": [],
   "preferred_model_id": "codex-MiniMax-M2.7",
   "preferred_provider_id": "provider_1775726633372_1",
-  "project_instructions": "Use the user's name to identify them in the chats.  In addition to that, when preparing content make sure the user gets the credit.\r\nThe user's name is \"$USER$\".\r\n\r\nUser \"Sample RAG Document\" as a first source of information.  If the returned confidence it below 0.4 on all information returned and there are no relavent sources of information; then search the web for more detailed information.\r\n\r\nMake sure to always link and list sources of information.\r\n\r\nThe MCP Server \"file-system\" is the most reliable method of creating files.  As a very last resort the \"desktop_command_mcp\" server can be used.  The best use of the \"desktop_command_mcp\" MCP Server is to execute commands on the Windows system.",
+  "project_instructions": "Use the user's name to identify them in the chats.  In addition to that, when preparing content make sure the user gets the credit.\r\nThe user's name is \"$USER$\".\r\n\r\nUser \"Sample RAG Document\" as a first source of information.  If the returned confidence it below 0.4 on all information returned and there are no relavent sources of information; then search the web for more detailed information.\r\n\r\nMake sure to always link and list sources of information.\r\n\r\nThe MCP Server \"file-system\" is the most reliable method of creating and editing files.",
   "project_name": "New Project",
   "project_variables": [
     {
       "description": "This folder is where the user has their project files.",
       "inject_into_context": true,
       "name": "ProjectFolder",
-      "value": "K:\\tester\\$USERNAME$\\$CHATNAME_$\\"
+      "value": "\\\\vanusdisk\\Code\\tester\\$USERNAME$\\$CHATNAME_$\\"
     }
   ],
   "rag_bindings": [
+    {
+      "can_delete": false,
+      "can_export": true,
+      "can_read": true,
+      "can_write": true,
+      "default_ingest_target": true,
+      "default_max_confidence": 1.0,
+      "default_min_confidence": 0.0,
+      "enabled": true,
+      "export_path_template": "$ProjectFolder$",
+      "expose_as_tool": true,
+      "inject_on_start": false,
+      "max_chunks": 8,
+      "rag_id": "rag_1776836047281_54",
+      "retrieval_mode": "both",
+      "retrieval_priority": 20
+    },
     {
       "can_delete": false,
       "can_export": true,
@@ -65,5 +78,5 @@
       "retrieval_priority": 20
     }
   ],
-  "selected_compression_config_id": "cc_f98er24s"
+  "selected_compression_config_id": "cc_1776744536752_9"
 }

@@ -15,9 +15,12 @@
 // and drop it at that path before building.
 // ──────────────────────────────────────────────────────────────────────────────
 
+#include "context_compression.h"
+#include "openai_client.h"
 #include "storage.h"
 #include "web_user_store.h"
 
+#include <cstddef>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -49,7 +52,7 @@ struct WebServerConfig {
 
     // ── TLS / HTTPS ───────────────────────────────────────────────────────────
     // tls_mode: ""            = plain HTTP (default)
-    //           "self_signed" = auto-generate cert/key under <app_root>/certs/
+    //           "self_signed" = auto-generate cert/key under <startup_root>/certs/
     //           "pem"         = load tls_cert_file + tls_key_file (PEM)
     //           "pfx"         = load tls_pfx_file with tls_pfx_passphrase
     std::string tls_mode;
@@ -90,7 +93,7 @@ public:
     WebServer(AppStorage* storage,
               WebUserStore* user_store,
               WebServerConfig config,
-              std::filesystem::path app_root,
+              RuntimePaths runtime_paths,
               McpManager* mcp_manager = nullptr,
               RagService* rag_service = nullptr);
     ~WebServer();
@@ -118,7 +121,7 @@ public:
     void SetContentChangedCallback(ContentChangedCallback callback);
 
     // ── TLS status (public — used by Web Config dialog) ───────────────────
-    // Returns the directory used for auto-generated certs (<app_root>/certs/).
+    // Returns the directory used for auto-generated certs (<startup_root>/certs/).
     std::filesystem::path TlsCertsDir() const;
 
     // Returns days until the configured certificate expires, or -1 if
@@ -132,18 +135,28 @@ private:
         std::string username;
         bool        force_password_reset = false;
         bool        needs_password_reset = false;
+        bool        persistent = false;
         std::string remote_addr;
         std::chrono::system_clock::time_point created_at
             = std::chrono::system_clock::now();
-        std::chrono::steady_clock::time_point last_activity;
+        std::chrono::system_clock::time_point last_activity
+            = std::chrono::system_clock::now();
+        std::chrono::system_clock::time_point persistent_until{};
     };
 
     std::string         CreateSession(const WebUser& user,
-                                       const std::string& remote_addr);
+                                       const std::string& remote_addr,
+                                       bool remember_me = false);
     std::optional<Session> FindSession(const std::string& token) const;
     bool                TouchSession(const std::string& token);  // returns false if expired
     void                DeleteSession(const std::string& token);
     void                PurgeExpiredSessions();
+    std::filesystem::path PersistentSessionsPath() const;
+    void                LoadPersistentSessions();
+    void                SavePersistentSessions() const;
+    void                SavePersistentSessionsLocked() const;
+    bool                IsSessionExpired(const Session& session,
+                                         std::chrono::system_clock::time_point now) const;
     static std::string  GenerateToken();
     static std::string  GetCookieValue(const std::string& cookie_header,
                                         const std::string& name);
@@ -177,6 +190,7 @@ private:
     void HandleLogin         (const void* req, void* res);
     void HandleLogout        (const void* req, void* res);
     void HandleChangePassword(const void* req, void* res);
+    void HandleUpdateMe      (const void* req, void* res);
 
     // ── API routes (require auth) ─────────────────────────────────────────
     void HandleGetProjects    (const void* req, void* res);
@@ -225,7 +239,12 @@ private:
                             const std::string& user_content,
                             const std::string& username,
                             const std::function<bool(const std::string&)>& on_delta,
-                            const std::vector<std::string>& attachments = {});
+                            const std::vector<std::string>& attachments = {},
+                            const std::function<void(size_t, size_t)>& on_context_usage = {},
+                            const std::function<void(const std::string&, const std::string&)>& on_status = {},
+                            const std::function<void(const ProviderQueueStatus&)>& on_queue_status = {},
+                            const std::function<void(const std::string&, const std::string&)>& on_activity_status = {},
+                            const std::function<void(const std::string&, const std::string&, const std::string&, const std::string&, const std::string&)>& on_tool_status = {});
                             // on_delta returns false to abort early
 
     // Build a PATCH /api/chats/:id rename handler
@@ -300,8 +319,9 @@ private:
     WebUserStore*                     user_store_;
     McpManager*                       mcp_manager_;
     RagService*                       rag_service_;
+    ContextCompressionService         compression_service_;
     WebServerConfig                   config_;
-    std::filesystem::path             app_root_;
+    RuntimePaths                      runtime_paths_;
     std::unique_ptr<WebServerImpl>    impl_;
     ContentChangedCallback            content_changed_callback_;
 

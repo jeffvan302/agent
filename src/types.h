@@ -5,21 +5,105 @@
 #include <string>
 #include <vector>
 
+enum class BindingRoutingMode {
+    TopDownFailover,
+    RoundRobin,
+};
+
+struct BindingTargetConfig {
+    std::string provider_id;
+    std::string model_id;
+    bool enabled = true;
+    int priority = 100;
+    int busy_retry_interval_seconds = 15;
+    int busy_retry_budget_seconds = 90;
+    int busy_cooldown_seconds = 300;
+    int limit_cooldown_seconds = 900;
+    int error_cooldown_seconds = 300;
+};
+
+struct BindingTargetRuntimeState {
+    std::string provider_id;
+    std::string model_id;
+    std::string last_status;
+    std::string last_used_at;
+    std::string last_success_at;
+    std::string last_busy_at;
+    std::string last_limit_at;
+    std::string last_error_at;
+    std::string cooldown_until;
+    int consecutive_busy_count = 0;
+    int consecutive_limit_count = 0;
+    int consecutive_failure_count = 0;
+};
+
+struct BindingModelRuntimeState {
+    std::string provider_id;
+    std::string model_id;
+    int next_round_robin_index = 0;
+    std::vector<BindingTargetRuntimeState> targets;
+};
+
 struct ModelConfig {
     std::string id;
     std::string display_name;
     int context_window = 0;
+    int max_output_tokens = 0;
     bool supports_streaming = true;
     bool supports_tools = false;
     bool supports_vision = false;
+    bool prefer_max_completion_tokens = false;
+    std::string output_tokens_parameter = "auto";  // auto | max_tokens | max_completion_tokens
+    std::string catalog_source = "manual";         // manual | bundled | discovered | agent_health
+    std::vector<std::string> reasoning_efforts;
+    std::vector<std::string> text_verbosity_modes;
+    std::string default_reasoning_effort;
+    std::string default_text_verbosity;
+    int ollama_keep_alive_seconds = 0; // 0 = let Ollama use its default unload policy
+    int ollama_num_threads = 0;        // 0 = auto (Ollama decides)
+    bool ollama_no_gpu = false;        // true = force CPU-only
+    int ollama_gpu_layers = 0;           // 0 = let Ollama decide; >0 = specific layer count
+    int ollama_context_length = 0;       // 0 = model default
+    bool ollama_verbose = false;           // show LLM stats in CLI output
+    bool is_binding_model = false;
+    BindingRoutingMode binding_routing_mode = BindingRoutingMode::TopDownFailover;
+    std::vector<BindingTargetConfig> binding_targets;
 };
 
 struct ProviderConfig {
     std::string id;
     std::string name;
+    std::string provider_type = "openai_compatible";
     std::string base_url;
     std::string api_key;
+    std::string tls_certificate_fingerprint;
+    std::string auth_mode;
+    std::string oauth_credential_id;
+    std::string oauth_account_label;
+    bool oauth_authenticated = false;
+    bool oauth_store_remote_history = false;
+    std::string model_catalog_mode = "manual"; // manual | bundled | remote_endpoint
+    int max_active_requests = 0;
+    int max_queue_size = 0;
+    int ollama_local_port = 0; // 0 = use default Ollama port (11434); custom port for managed local server
     std::vector<ModelConfig> models;
+};
+
+struct ProviderAuthRecord {
+    std::string credential_id;
+    std::string provider_id;
+    std::string auth_mode;
+    std::string api_key;
+    std::string id_token;
+    std::string access_token;
+    std::string refresh_token;
+    std::string token_type = "Bearer";
+    std::string account_id;
+    std::string account_email;
+    std::string account_display_name;
+    std::string scope;
+    std::string expires_at;
+    std::string last_refresh;
 };
 
 struct MessageRecord {
@@ -310,10 +394,17 @@ struct RagImageIngestSettings {
     std::string vision_provider = "ollama";
     std::string vision_base_url = "http://localhost";
     std::string vision_model = "qwen2.5vl:7b";
+    std::string remote_agent_model;
     std::string vision_prompt;
     int ollama_instance_count = 1;
     int ollama_start_port = 11434;
     bool ollama_start_locally = false;
+    std::string remote_agent_base_url = "https://127.0.0.1";
+    int remote_agent_https_port = 8765;
+    std::string remote_agent_shared_secret;
+    std::string remote_agent_certificate_fingerprint;
+    std::string remote_agent_worker_name;
+    std::string remote_agent_config_json;
     bool include_ocr_text = true;
     bool include_visual_description = true;
 };
@@ -337,6 +428,10 @@ struct RagImageIngestRuntimeStatus {
     int document_queue_pending = 0;
     int document_queue_active = 0;
     int document_queue_workers = 0;
+    bool remote_agent_configured = false;
+    std::string remote_agent_worker_name;
+    std::string remote_agent_model;
+    int remote_agent_https_port = 8765;
     std::string vision_endpoint_summary;
     std::string log_path;
     std::string recent_log;
@@ -409,12 +504,25 @@ struct Layer1Config {
     bool pin_user_flagged = true;  // user may add [PIN] or explicit remember/important markers
 };
 
+struct Layer0Config {
+    bool enabled = false;
+    std::string capture_model_id;
+    std::string capture_model_provider_id;
+    std::string capture_prompt_template;
+    std::string selection_model_id;
+    std::string selection_model_provider_id;
+    std::string selection_prompt_template;
+    std::string storage_folder_template = "$ProjectFolder$\\.agent\\.memory\\$CHATID$";
+    int max_injected_rows = 12;
+};
+
 struct Layer2Config {
     bool enabled = true;
     std::string model_id;
     std::string model_provider_id;
     int max_tokens = 500;
     int trigger_threshold_turns = 8;
+    std::string prompt_template;
 };
 
 struct Layer3Config {
@@ -422,6 +530,7 @@ struct Layer3Config {
     std::string model_id;
     std::string model_provider_id;
     int max_tokens = 800;
+    std::string prompt_template;
 };
 
 struct Layer4Config {
@@ -430,6 +539,7 @@ struct Layer4Config {
 };
 
 struct ContextCompressionLayerSettings {
+    Layer0Config layer0;
     Layer1Config layer1;
     Layer2Config layer2;
     Layer3Config layer3;
@@ -456,6 +566,10 @@ struct ChatCompressionState {
     size_t last_compression_message_index = 0;
     std::string latest_snapshot_id;
     std::string current_compressed_context;
+    size_t layer0_last_processed_message_index = 0;
+    std::string layer0_current_index_block;
+    std::string layer0_last_index_hash;
+    std::string layer0_storage_path;
     std::string layer2_previous_summary;
     std::string layer3_previous_state_json;
     std::vector<MessageRecord> layer1_pinned_messages;
@@ -473,6 +587,10 @@ struct ChatCompressionSnapshot {
     size_t compressed_through_message_index = 0;
     std::string previous_compressed_context;
     std::string compressed_context;
+    std::vector<std::string> layer0_selected_artifact_ids;
+    std::string layer0_index_block;
+    std::string layer0_previous_index_hash;
+    std::string layer0_index_hash;
     std::string layer2_summary;
     std::string layer3_state_json;
     std::vector<MessageRecord> pinned_messages;

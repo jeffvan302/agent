@@ -3,16 +3,32 @@
 #include "types.h"
 
 #include <filesystem>
+#include <optional>
 #include <vector>
+
+struct RuntimePaths {
+    std::filesystem::path startup_root;
+    std::filesystem::path config_root;
+    std::filesystem::path data_root;
+    std::filesystem::path log_root;
+};
 
 class AppStorage {
 public:
-    explicit AppStorage(std::filesystem::path root_path);
+    explicit AppStorage(RuntimePaths runtime_paths);
 
     void EnsureInitialized() const;
 
     std::vector<ProviderConfig> LoadProviders() const;
     void SaveProviders(const std::vector<ProviderConfig>& providers) const;
+    std::vector<BindingModelRuntimeState> LoadBindingProviderRuntimeStates() const;
+    void SaveBindingProviderRuntimeStates(const std::vector<BindingModelRuntimeState>& states) const;
+    std::vector<ModelConfig> LoadProviderManifestModels(const std::string& provider_type) const;
+    std::optional<ProviderAuthRecord> LoadProviderAuthRecord(const std::string& credential_id) const;
+    std::optional<ProviderAuthRecord> LoadProviderAuthRecordForProvider(const std::string& provider_id) const;
+    void SaveProviderAuthRecord(const ProviderAuthRecord& record) const;
+    void DeleteProviderAuthRecord(const std::string& credential_id) const;
+    std::filesystem::path ProviderAuthBridgeRoot() const;
 
     std::vector<McpServerConfig> LoadMcpServers() const;
     void SaveMcpServers(const std::vector<McpServerConfig>& servers) const;
@@ -64,14 +80,25 @@ public:
     void DeleteProject(const std::string& project_id) const;
     void DeleteChat(const std::string& project_id, const std::string& chat_id) const;
 
-    const std::filesystem::path& root_path() const { return root_path_; }
+    const RuntimePaths& runtime_paths() const { return runtime_paths_; }
+    const std::filesystem::path& startup_root() const { return runtime_paths_.startup_root; }
+    const std::filesystem::path& config_root() const { return runtime_paths_.config_root; }
+    const std::filesystem::path& data_root() const { return runtime_paths_.data_root; }
+    const std::filesystem::path& log_root() const { return runtime_paths_.log_root; }
+    const std::filesystem::path& root_path() const { return runtime_paths_.startup_root; }
 
 private:
     std::filesystem::path ProvidersPath() const;
+    std::filesystem::path BindingProviderRuntimePath() const;
+    std::filesystem::path ProviderManifestsRoot() const;
+    std::filesystem::path ProviderManifestPath(const std::string& provider_type) const;
+    std::filesystem::path ProviderAuthPath() const;
     std::filesystem::path McpServersPath() const;
     std::filesystem::path DataRoot() const;
-    std::filesystem::path ProjectsRoot() const;
-    std::filesystem::path ProjectPath(const std::string& project_id) const;
+    std::filesystem::path ConfigProjectsRoot() const;
+    std::filesystem::path DataProjectsRoot() const;
+    std::filesystem::path ProjectConfigPath(const std::string& project_id) const;
+    std::filesystem::path ProjectDataPath(const std::string& project_id) const;
     std::filesystem::path ProjectMetaPath(const std::string& project_id) const;
     std::filesystem::path ProjectMcpConsentPath(const std::string& project_id) const;
     std::filesystem::path ProjectMcpBindingsPath(const std::string& project_id) const;
@@ -87,5 +114,5 @@ private:
     std::filesystem::path ChatRagWorkingSetPath(const std::string& project_id, const std::string& chat_id) const;
     std::filesystem::path ModelToolsPath() const;
 
-    std::filesystem::path root_path_;
+    RuntimePaths runtime_paths_;
 };

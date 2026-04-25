@@ -1,5 +1,8 @@
 #include "openai_client.h"
 
+#include "ollama_api_client.h"
+#include "provider_profiles.h"
+
 #include <windows.h>
 #include <winhttp.h>
 
@@ -16,6 +19,12 @@
 #include <vector>
 
 using json = nlohmann::json;
+
+namespace {
+bool IsOllamaLocalProvider(const ProviderConfig& provider) {
+    return NormalizeProviderType(provider.provider_type) == "ollama_local";
+}
+} // namespace
 
 // Static provider cache for compression model calls
 static std::vector<ProviderConfig> s_provider_cache;
@@ -597,6 +606,23 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
 TestConnectionResult OpenAIClient::TestConnection(const ProviderConfig& provider, const ModelConfig& model) {
     TestConnectionResult result;
     try {
+        if (NormalizeProviderType(provider.provider_type) == "ollama_local") {
+            ChatRequestOptions request;
+            request.provider = provider;
+            request.model = model;
+            request.temperature = 0.0;
+            request.max_tokens = 8;
+            request.messages.push_back(MessageRecord{"user", "Reply with the single word pong.", CurrentTimestampUtc()});
+            if (!IsOllamaModelAvailable(provider, model, &result.message)) {
+                result.success = false;
+                return result;
+            }
+            const ChatExecutionResult response = RunOllamaLocalHttpChat(request, [](const std::string&) {}, {}, {});
+            result.success = response.success;
+            result.message = response.success ? response.full_text : response.error;
+            return result;
+        }
+
         ChatRequestOptions request;
         request.provider = provider;
         request.model = model;
@@ -617,8 +643,14 @@ TestConnectionResult OpenAIClient::TestConnection(const ProviderConfig& provider
     return result;
 }
 
-ChatExecutionResult OpenAIClient::StreamChat(const ChatRequestOptions& request, const std::function<void(const std::string&)>& on_delta) {
+ChatExecutionResult OpenAIClient::StreamChat(const ChatRequestOptions& request,
+                                          const std::function<void(const std::string&)>& on_delta,
+                                          const std::function<void(const ProviderQueueStatus&)>& /*on_queue_status*/,
+                                          const std::function<void(const std::string&, const std::string&)>& /*on_activity_status*/) {
     try {
+        if (IsOllamaLocalProvider(request.provider)) {
+            return RunOllamaLocalHttpChat(request, on_delta, {}, {});
+        }
         return RunRequest(request, true, on_delta);
     } catch (const std::exception& ex) {
         ChatExecutionResult result;
@@ -631,7 +663,14 @@ ChatExecutionResult OpenAIClient::StreamChat(const ChatRequestOptions& request, 
     }
 }
 
-ChatCompletionResult OpenAIClient::CreateToolAwareCompletion(const ChatRequestOptions& request, const std::vector<ChatToolDefinition>& tools) {
+ChatCompletionResult OpenAIClient::CreateToolAwareCompletion(const ChatRequestOptions& request,
+                                                           const std::vector<ChatToolDefinition>& tools,
+                                                           const std::function<void(const ProviderQueueStatus&)>& /*on_queue_status*/,
+                                                           const std::function<void(const std::string&, const std::string&)>& /*on_activity_status*/) {
+    if (IsOllamaLocalProvider(request.provider)) {
+        return RunOllamaLocalHttpToolPrompt(request, tools, {}, {}, {});
+    }
+
     ChatCompletionResult result;
 
     try {
@@ -748,7 +787,13 @@ ChatCompletionResult OpenAIClient::CreateToolAwareCompletion(const ChatRequestOp
     }
 }
 
-ChatCompletionResult OpenAIClient::CreateSimpleCompletion(const ChatRequestOptions& request) {
+ChatCompletionResult OpenAIClient::CreateSimpleCompletion(const ChatRequestOptions& request,
+                                                        const std::function<void(const ProviderQueueStatus&)>& /*on_queue_status*/,
+                                                        const std::function<void(const std::string&, const std::string&)>& /*on_activity_status*/) {
+    if (IsOllamaLocalProvider(request.provider)) {
+        return RunOllamaLocalHttpCompletion(request, {}, {});
+    }
+
     ChatCompletionResult result;
 
     try {
@@ -875,7 +920,15 @@ std::optional<ProviderConfig> OpenAIClient::LookupProvider(const std::string& pr
     return std::nullopt;
 }
 
-ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOptions& request, const std::vector<ChatToolDefinition>& tools, const std::function<void(const std::string&)>& on_delta) {
+ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOptions& request,
+                                                           const std::vector<ChatToolDefinition>& tools,
+                                                           const std::function<void(const std::string&)>& on_delta,
+                                                           const std::function<void(const ProviderQueueStatus&)>& /*on_queue_status*/,
+                                                           const std::function<void(const std::string&, const std::string&)>& /*on_activity_status*/) {
+    if (IsOllamaLocalProvider(request.provider)) {
+        return RunOllamaLocalHttpToolPrompt(request, tools, on_delta, {}, {});
+    }
+
     ChatCompletionResult result;
 
     try {
@@ -1093,4 +1146,8 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
         result.error = "Unexpected error while streaming the tool-aware chat request.";
         return result;
     }
+}
+
+void OpenAIClient::SetStorage(AppStorage* /*storage*/) {
+    // No-op for now
 }

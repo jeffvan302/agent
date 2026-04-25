@@ -23,4 +23,4 @@
 bool ShowWebConfigDialog(HWND                        owner,
                          WebServer*                  server,   // may be nullptr
                          WebServerConfig*            config,
-                         const std::filesystem::path app_root);
+                         const RuntimePaths&         runtime_paths);

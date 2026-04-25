@@ -13,25 +13,7 @@
       "name": "Cruncher",
       "preferred_model_id": "codex-MiniMax-M2.7",
       "preferred_provider_id": "provider_1775726633372_1",
-      "rag_bindings": [
-        {
-          "can_delete": false,
-          "can_export": true,
-          "can_read": true,
-          "can_write": false,
-          "default_ingest_target": false,
-          "default_max_confidence": 1.0,
-          "default_min_confidence": 0.0,
-          "enabled": true,
-          "export_path_template": "",
-          "expose_as_tool": true,
-          "inject_on_start": true,
-          "max_chunks": 8,
-          "rag_id": "rag_1776053664702_9",
-          "retrieval_mode": "both",
-          "retrieval_priority": 10
-        }
-      ],
+      "rag_bindings": [],
       "selected_compression_config_id": "cc_f98er24s"
     }
   ]

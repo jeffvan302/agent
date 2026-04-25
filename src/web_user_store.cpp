@@ -283,6 +283,7 @@ void WebUserStore::Save() const {
     for (const auto& b : bindings_) j["project_bindings"].push_back(BindingToJson(b));
 
     // Atomic write: write to temp file then rename
+    std::filesystem::create_directories(std::filesystem::path(file_path_).parent_path());
     const auto tmp = std::filesystem::path(file_path_).replace_extension(".tmp");
     {
         std::ofstream f(tmp);

@@ -406,6 +406,58 @@ std::string HashHex(const std::string& value) {
     return stream.str();
 }
 
+std::string LowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+bool LooksLikeFilesystemServer(const McpServerConfig& config) {
+    const std::string name = LowerAscii(config.name);
+    const std::string command = LowerAscii(config.command);
+    if (name.find("file-system") != std::string::npos ||
+        name.find("filesystem") != std::string::npos ||
+        command.find("server-filesystem") != std::string::npos) {
+        return true;
+    }
+
+    for (const auto& argument : config.arguments) {
+        const std::string lowered = LowerAscii(argument);
+        if (lowered.find("server-filesystem") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string AugmentFilesystemToolDescription(const McpServerConfig& config, const McpToolDefinition& tool) {
+    if (!LooksLikeFilesystemServer(config)) {
+        return tool.description;
+    }
+
+    std::string description = tool.description;
+    const std::string tool_name = LowerAscii(tool.name);
+
+    if (tool_name == "write_file") {
+        if (!description.empty()) {
+            description += " ";
+        }
+        description +=
+            "Prefer this tool for small files or for creating an initial scaffold. "
+            "For large files, avoid sending the entire final file as one huge content blob unless it is comfortably small. "
+            "Instead, create a compact scaffold with stable section markers or placeholders, then use edit_file to fill or revise those sections in smaller passes.";
+    } else if (tool_name == "edit_file") {
+        if (!description.empty()) {
+            description += " ";
+        }
+        description +=
+            "Prefer this tool for large-file updates, revisions, or filling sections of an existing scaffold. "
+            "When a file is large, use write_file only for a minimal initial scaffold if needed, then use edit_file for targeted replacements so each tool call stays smaller and more reliable.";
+    }
+
+    return description;
+}
+
 std::string BuildToolAlias(const std::string& server_id, const std::string& tool_name) {
     const std::string prefix = "mcp_" + SanitizeIdentifier(server_id).substr(0, 18) + "_" + SanitizeIdentifier(tool_name).substr(0, 18);
     return prefix + "_" + HashHex(server_id + "::" + tool_name);
@@ -1785,7 +1837,7 @@ std::vector<McpExposedTool> McpManager::GetExposedToolsForProject(
             exposed.server_name = config.name;
             exposed.tool_name = tool.name;
             exposed.title = tool.title;
-            exposed.description = tool.description;
+            exposed.description = AugmentFilesystemToolDescription(config, tool);
             exposed.input_schema_json = tool.input_schema_json;
             exposed_tools.push_back(std::move(exposed));
         }

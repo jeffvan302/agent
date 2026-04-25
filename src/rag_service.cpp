@@ -13,7 +13,9 @@
 #include <compressapi.h>
 #include <shellapi.h>
 #include <windows.h>
+#include <bcrypt.h>
 #include <winhttp.h>
+#include <wincrypt.h>
 
 #include <algorithm>
 #include <chrono>
@@ -25,6 +27,7 @@
 #include <cwchar>
 #include <cwctype>
 #include <deque>
+#include <functional>
 #include <fstream>
 #include <future>
 #include <iomanip>
@@ -86,6 +89,14 @@ std::string DefaultImageVisionPrompt() {
     return "Describe this image for RAG ingestion. Include visible text, objects, layout, chart or graph interpretation, axes, legends, units, notable trends, and any uncertainty. Return concise Markdown with factual observations only.";
 }
 
+std::string EffectiveRemoteAgentModel(const RagImageIngestSettings& settings) {
+    const std::string remote_model = Trim(settings.remote_agent_model);
+    if (!remote_model.empty()) {
+        return remote_model;
+    }
+    return Trim(settings.vision_model);
+}
+
 std::string NormalizeImageIngestMode(std::string mode) {
     mode = Trim(mode);
     std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -95,6 +106,9 @@ std::string NormalizeImageIngestMode(std::string mode) {
     if (mode == "vision" || mode == "vlm" || mode == "vision_language" || mode == "vision_language_gpu") {
         return "vision_language_gpu";
     }
+    if (mode == "remote" || mode == "remote_agent" || mode == "agent_remote" || mode == "agent_https") {
+        return "remote_agent";
+    }
     return "tesseract_cpu";
 }
 
@@ -103,6 +117,9 @@ std::string NormalizeImageVisionProvider(std::string provider) {
     std::transform(provider.begin(), provider.end(), provider.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     if (provider == "ollama") {
         return "ollama";
+    }
+    if (provider == "remote" || provider == "remote_agent" || provider == "agent_remote" || provider == "agent_https") {
+        return "remote_agent";
     }
     return provider.empty() ? "none" : provider;
 }
@@ -115,6 +132,53 @@ int ClampOllamaStartPort(int value) {
     return std::clamp(value <= 0 ? 11434 : value, 1, 65535);
 }
 
+int ClampRemoteAgentHttpsPort(int value) {
+    return std::clamp(value <= 0 ? 8765 : value, 1, 65535);
+}
+
+json RemoteAgentConfigJsonValue(const RagImageIngestSettings& settings) {
+    const std::string text = Trim(settings.remote_agent_config_json);
+    if (text.empty()) {
+        return nullptr;
+    }
+    try {
+        return json::parse(text);
+    } catch (...) {
+        return text;
+    }
+}
+
+void ApplyRemoteAgentConfigToImageSettings(const json& config, RagImageIngestSettings& settings) {
+    if (!config.is_object()) {
+        return;
+    }
+    settings.remote_agent_worker_name = config.value("worker_name", settings.remote_agent_worker_name);
+    if (config.contains("agent_server") && config["agent_server"].is_object()) {
+        const auto& server = config["agent_server"];
+        settings.remote_agent_https_port =
+            ClampRemoteAgentHttpsPort(server.value("https_port", settings.remote_agent_https_port));
+        settings.remote_agent_shared_secret = server.value("shared_secret", settings.remote_agent_shared_secret);
+        settings.remote_agent_certificate_fingerprint =
+            server.value("certificate_fingerprint", settings.remote_agent_certificate_fingerprint);
+    }
+    if (config.contains("model") && config["model"].is_object()) {
+        settings.remote_agent_model = config["model"].value("name", settings.remote_agent_model);
+    } else {
+        settings.remote_agent_model = config.value("vision_model", settings.remote_agent_model);
+    }
+    if (config.contains("ollama") && config["ollama"].is_object()) {
+        settings.ollama_instance_count =
+            ClampOllamaInstanceCount(config["ollama"].value("instance_count", settings.ollama_instance_count));
+        settings.ollama_start_port =
+            ClampOllamaStartPort(config["ollama"].value("start_port", settings.ollama_start_port));
+    } else {
+        settings.ollama_instance_count =
+            ClampOllamaInstanceCount(config.value("ollama_instance_count", settings.ollama_instance_count));
+        settings.ollama_start_port =
+            ClampOllamaStartPort(config.value("ollama_start_port", settings.ollama_start_port));
+    }
+}
+
 json RagImageIngestSettingsToJson(const RagImageIngestSettings& settings) {
     return json{
         {"enabled", settings.enabled},
@@ -125,10 +189,17 @@ json RagImageIngestSettingsToJson(const RagImageIngestSettings& settings) {
         {"vision_provider", NormalizeImageVisionProvider(settings.vision_provider)},
         {"vision_base_url", settings.vision_base_url.empty() ? "http://localhost" : settings.vision_base_url},
         {"vision_model", settings.vision_model.empty() ? "qwen2.5vl:7b" : settings.vision_model},
+        {"remote_agent_model", settings.remote_agent_model},
         {"vision_prompt", settings.vision_prompt.empty() ? DefaultImageVisionPrompt() : settings.vision_prompt},
         {"ollama_instance_count", ClampOllamaInstanceCount(settings.ollama_instance_count)},
         {"ollama_start_port", ClampOllamaStartPort(settings.ollama_start_port)},
         {"ollama_start_locally", settings.ollama_start_locally},
+        {"remote_agent_base_url", settings.remote_agent_base_url.empty() ? "https://127.0.0.1" : settings.remote_agent_base_url},
+        {"remote_agent_https_port", ClampRemoteAgentHttpsPort(settings.remote_agent_https_port)},
+        {"remote_agent_shared_secret", settings.remote_agent_shared_secret},
+        {"remote_agent_certificate_fingerprint", settings.remote_agent_certificate_fingerprint},
+        {"remote_agent_worker_name", settings.remote_agent_worker_name},
+        {"remote_agent_config", RemoteAgentConfigJsonValue(settings)},
         {"include_ocr_text", settings.include_ocr_text},
         {"include_visual_description", settings.include_visual_description},
     };
@@ -159,6 +230,7 @@ RagImageIngestSettings RagImageIngestSettingsFromJson(const json& item) {
     if (Trim(settings.vision_model).empty()) {
         settings.vision_model = "qwen2.5vl:7b";
     }
+    settings.remote_agent_model = item.value("remote_agent_model", "");
     settings.vision_prompt = item.value("vision_prompt", DefaultImageVisionPrompt());
     if (Trim(settings.vision_prompt).empty()) {
         settings.vision_prompt = DefaultImageVisionPrompt();
@@ -166,6 +238,34 @@ RagImageIngestSettings RagImageIngestSettingsFromJson(const json& item) {
     settings.ollama_instance_count = ClampOllamaInstanceCount(item.value("ollama_instance_count", 1));
     settings.ollama_start_port = ClampOllamaStartPort(item.value("ollama_start_port", 11434));
     settings.ollama_start_locally = item.value("ollama_start_locally", false);
+    settings.remote_agent_base_url = item.value("remote_agent_base_url", "https://127.0.0.1");
+    if (Trim(settings.remote_agent_base_url).empty()) {
+        settings.remote_agent_base_url = "https://127.0.0.1";
+    }
+    settings.remote_agent_https_port = ClampRemoteAgentHttpsPort(item.value("remote_agent_https_port", 8765));
+    settings.remote_agent_shared_secret = item.value("remote_agent_shared_secret", "");
+    settings.remote_agent_certificate_fingerprint = item.value("remote_agent_certificate_fingerprint", "");
+    settings.remote_agent_worker_name = item.value("remote_agent_worker_name", "");
+    if (item.contains("remote_agent_config") && !item["remote_agent_config"].is_null()) {
+        settings.remote_agent_config_json = item["remote_agent_config"].is_string()
+            ? item["remote_agent_config"].get<std::string>()
+            : item["remote_agent_config"].dump(2);
+        if (item["remote_agent_config"].is_object()) {
+            ApplyRemoteAgentConfigToImageSettings(item["remote_agent_config"], settings);
+        }
+    } else {
+        settings.remote_agent_config_json = item.value("remote_agent_config_json", "");
+        if (!Trim(settings.remote_agent_config_json).empty()) {
+            try {
+                ApplyRemoteAgentConfigToImageSettings(json::parse(settings.remote_agent_config_json), settings);
+            } catch (...) {
+            }
+        }
+    }
+    if (Trim(settings.remote_agent_model).empty() &&
+        (settings.mode == "remote_agent" || !Trim(settings.remote_agent_config_json).empty())) {
+        settings.remote_agent_model = Trim(settings.vision_model);
+    }
     settings.include_ocr_text = item.value("include_ocr_text", true);
     settings.include_visual_description = item.value("include_visual_description", true);
     return settings;
@@ -468,7 +568,130 @@ std::string JoinUrlPath(std::string base_url, const std::string& path) {
     return base_url + path;
 }
 
-std::string HttpPostJson(const std::string& url, const std::string& body) {
+std::string NormalizeFingerprint(std::string value) {
+    std::string lower = value;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    const size_t colon = lower.find(':');
+    if (colon != std::string::npos && lower.substr(0, colon).find("sha256") != std::string::npos) {
+        value = value.substr(colon + 1);
+    }
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (char ch : value) {
+        if (std::isxdigit(static_cast<unsigned char>(ch))) {
+            normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        }
+    }
+    return normalized;
+}
+
+std::string HexDigest(const unsigned char* bytes, DWORD length) {
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
+    for (DWORD i = 0; i < length; ++i) {
+        out << std::setw(2) << static_cast<int>(bytes[i]);
+    }
+    return out.str();
+}
+
+void ConfigurePinnedCertificateRequestSecurity(HINTERNET request, const std::string& certificate_fingerprint) {
+    if (Trim(certificate_fingerprint).empty()) {
+        return;
+    }
+    DWORD security_flags =
+        SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+        SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+        SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+        SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+    WinHttpSetOption(request, WINHTTP_OPTION_SECURITY_FLAGS, &security_flags, sizeof(security_flags));
+}
+
+bool VerifyPinnedCertificateFingerprint(HINTERNET request, const std::string& certificate_fingerprint, std::string* error) {
+    const std::string expected = NormalizeFingerprint(certificate_fingerprint);
+    if (expected.empty()) {
+        return true;
+    }
+
+    PCCERT_CONTEXT cert_context = nullptr;
+    DWORD cert_size = sizeof(cert_context);
+    if (!WinHttpQueryOption(request, WINHTTP_OPTION_SERVER_CERT_CONTEXT, &cert_context, &cert_size) || !cert_context) {
+        if (error) {
+            *error = "Could not inspect the remote Agent HTTPS certificate.";
+        }
+        return false;
+    }
+
+    unsigned char hash[32] = {};
+    DWORD hash_size = sizeof(hash);
+    const BOOL hashed = CryptHashCertificate2(
+        BCRYPT_SHA256_ALGORITHM,
+        0,
+        nullptr,
+        cert_context->pbCertEncoded,
+        cert_context->cbCertEncoded,
+        hash,
+        &hash_size);
+    CertFreeCertificateContext(cert_context);
+    if (!hashed) {
+        if (error) {
+            *error = "Could not compute the remote Agent HTTPS certificate fingerprint.";
+        }
+        return false;
+    }
+
+    if (HexDigest(hash, hash_size) != expected) {
+        if (error) {
+            *error = "Remote Agent HTTPS certificate fingerprint did not match the image ingest settings.";
+        }
+        return false;
+    }
+    return true;
+}
+
+std::wstring RemoteAgentAuthHeader(const RagImageIngestSettings& settings) {
+    if (Trim(settings.remote_agent_shared_secret).empty()) {
+        return {};
+    }
+    return L"Authorization: Bearer " + Utf8ToWide(settings.remote_agent_shared_secret) + L"\r\n";
+}
+
+bool UrlHasExplicitPort(const std::string& url) {
+    const size_t scheme = url.find("://");
+    const size_t host_start = scheme == std::string::npos ? 0 : scheme + 3;
+    const size_t host_end = url.find('/', host_start);
+    const std::string host_part = url.substr(host_start, host_end == std::string::npos ? std::string::npos : host_end - host_start);
+    if (!host_part.empty() && host_part.front() == '[') {
+        const size_t closing = host_part.find(']');
+        return closing != std::string::npos && closing + 1 < host_part.size() && host_part[closing + 1] == ':';
+    }
+    return host_part.find(':') != std::string::npos;
+}
+
+std::string BuildRemoteAgentBaseUrl(const RagImageIngestSettings& settings) {
+    std::string base_url = Trim(settings.remote_agent_base_url);
+    if (base_url.empty()) {
+        base_url = "https://127.0.0.1";
+    }
+    if (base_url.find("://") == std::string::npos) {
+        base_url = "https://" + base_url;
+    }
+    while (!base_url.empty() && base_url.back() == '/') {
+        base_url.pop_back();
+    }
+    if (!UrlHasExplicitPort(base_url)) {
+        base_url += ":" + std::to_string(ClampRemoteAgentHttpsPort(settings.remote_agent_https_port));
+    }
+    return base_url;
+}
+
+std::string HttpRequestText(
+    const std::string& method,
+    const std::string& url,
+    const std::string& body,
+    const std::wstring& extra_headers,
+    const std::string& certificate_fingerprint,
+    DWORD receive_timeout_ms) {
     ParsedUrl parsed = CrackUrl(url);
     UniqueInternetHandle session(WinHttpOpen(L"AgentRagService/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
     if (!session) {
@@ -481,18 +704,35 @@ std::string HttpPostJson(const std::string& url, const std::string& body) {
     }
 
     const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
-    UniqueInternetHandle request(WinHttpOpenRequest(static_cast<HINTERNET>(connection.get()), L"POST", parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
+    const std::wstring method_wide = Utf8ToWide(method);
+    UniqueInternetHandle request(WinHttpOpenRequest(static_cast<HINTERNET>(connection.get()), method_wide.c_str(), parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
     if (!request) {
         throw std::runtime_error("Could not create embedding provider request.");
     }
 
-    WinHttpSetTimeouts(static_cast<HINTERNET>(request.get()), 10000, 10000, 30000, 180000);
-    const std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
-    if (!WinHttpSendRequest(static_cast<HINTERNET>(request.get()), headers.c_str(), static_cast<DWORD>(headers.size()), const_cast<char*>(body.data()), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0)) {
+    if (parsed.secure) {
+        ConfigurePinnedCertificateRequestSecurity(static_cast<HINTERNET>(request.get()), certificate_fingerprint);
+    }
+
+    WinHttpSetTimeouts(static_cast<HINTERNET>(request.get()), 10000, 10000, 30000, receive_timeout_ms);
+    std::wstring headers = L"Accept: application/json\r\n";
+    if (!body.empty()) {
+        headers += L"Content-Type: application/json\r\n";
+    }
+    headers += extra_headers;
+    LPVOID request_body = body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(body.data());
+    if (!WinHttpSendRequest(static_cast<HINTERNET>(request.get()), headers.c_str(), static_cast<DWORD>(headers.size()), request_body, static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0)) {
         throw std::runtime_error("Could not send embedding provider request.");
     }
     if (!WinHttpReceiveResponse(static_cast<HINTERNET>(request.get()), nullptr)) {
         throw std::runtime_error("Could not receive embedding provider response.");
+    }
+
+    if (parsed.secure && !Trim(certificate_fingerprint).empty()) {
+        std::string certificate_error;
+        if (!VerifyPinnedCertificateFingerprint(static_cast<HINTERNET>(request.get()), certificate_fingerprint, &certificate_error)) {
+            throw std::runtime_error(certificate_error);
+        }
     }
 
     DWORD status_code = 0;
@@ -526,6 +766,162 @@ std::string HttpPostJson(const std::string& url, const std::string& body) {
         throw std::runtime_error(message.str());
     }
     return response;
+}
+
+std::string HttpPostJson(const std::string& url, const std::string& body, DWORD receive_timeout_ms = 180000) {
+    return HttpRequestText("POST", url, body, {}, {}, receive_timeout_ms);
+}
+
+std::string HttpPostJsonWithAgentAuth(const std::string& url, const std::string& body, const RagImageIngestSettings& settings) {
+    return HttpRequestText(
+        "POST",
+        url,
+        body,
+        RemoteAgentAuthHeader(settings),
+        settings.remote_agent_certificate_fingerprint,
+        600000);
+}
+
+std::string HttpPostOllamaGenerateStreamWithAgentAuth(
+    const std::string& url,
+    const std::string& body,
+    const RagImageIngestSettings& settings,
+    const std::function<void(const std::string&)>& on_delta = {}) {
+    ParsedUrl parsed = CrackUrl(url);
+    UniqueInternetHandle session(WinHttpOpen(L"AgentRagService/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+    if (!session) {
+        throw std::runtime_error("Could not open Remote Agent streaming session.");
+    }
+
+    UniqueInternetHandle connection(WinHttpConnect(static_cast<HINTERNET>(session.get()), parsed.host.c_str(), parsed.port, 0));
+    if (!connection) {
+        throw std::runtime_error("Could not connect to Remote Agent.");
+    }
+
+    const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
+    UniqueInternetHandle request(WinHttpOpenRequest(static_cast<HINTERNET>(connection.get()), L"POST", parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
+    if (!request) {
+        throw std::runtime_error("Could not create Remote Agent streaming request.");
+    }
+
+    if (parsed.secure) {
+        ConfigurePinnedCertificateRequestSecurity(static_cast<HINTERNET>(request.get()), settings.remote_agent_certificate_fingerprint);
+    }
+
+    WinHttpSetTimeouts(static_cast<HINTERNET>(request.get()), 10000, 10000, 30000, 600000);
+    std::wstring headers =
+        L"Accept: application/x-ndjson, application/json\r\n"
+        L"Content-Type: application/json\r\n" +
+        RemoteAgentAuthHeader(settings);
+    if (!WinHttpSendRequest(static_cast<HINTERNET>(request.get()), headers.c_str(), static_cast<DWORD>(headers.size()), const_cast<char*>(body.data()), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0)) {
+        throw std::runtime_error("Could not send Remote Agent streaming request.");
+    }
+    if (!WinHttpReceiveResponse(static_cast<HINTERNET>(request.get()), nullptr)) {
+        throw std::runtime_error("Could not receive Remote Agent streaming response.");
+    }
+
+    if (parsed.secure && !Trim(settings.remote_agent_certificate_fingerprint).empty()) {
+        std::string certificate_error;
+        if (!VerifyPinnedCertificateFingerprint(static_cast<HINTERNET>(request.get()), settings.remote_agent_certificate_fingerprint, &certificate_error)) {
+            throw std::runtime_error(certificate_error);
+        }
+    }
+
+    DWORD status_code = 0;
+    DWORD status_size = sizeof(status_code);
+    WinHttpQueryHeaders(static_cast<HINTERNET>(request.get()), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status_code, &status_size, WINHTTP_NO_HEADER_INDEX);
+
+    std::string line_buffer;
+    std::string raw_response;
+    std::string generated_text;
+    auto consume_lines = [&](bool flush) {
+        for (;;) {
+            const size_t newline = line_buffer.find('\n');
+            if (newline == std::string::npos) {
+                if (!flush || Trim(line_buffer).empty()) {
+                    break;
+                }
+            }
+
+            std::string line;
+            if (newline == std::string::npos) {
+                line = Trim(line_buffer);
+                line_buffer.clear();
+            } else {
+                line = Trim(line_buffer.substr(0, newline));
+                line_buffer.erase(0, newline + 1);
+            }
+            if (line.empty()) {
+                continue;
+            }
+            try {
+                const auto item = json::parse(line);
+                if (item.contains("error")) {
+                    const auto& err = item["error"];
+                    throw std::runtime_error(err.is_string() ? err.get<std::string>() : err.dump());
+                }
+                const std::string piece = item.value("response", "");
+                if (!piece.empty()) {
+                    generated_text += piece;
+                    if (on_delta) {
+                        on_delta(piece);
+                    }
+                }
+            } catch (const json::exception&) {
+                // Some proxies/providers may still return one final JSON object.
+            }
+        }
+    };
+
+    for (;;) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(static_cast<HINTERNET>(request.get()), &available)) {
+            throw std::runtime_error("Could not read Remote Agent streaming response.");
+        }
+        if (available == 0) {
+            break;
+        }
+        std::string buffer(available, '\0');
+        DWORD read = 0;
+        if (!WinHttpReadData(static_cast<HINTERNET>(request.get()), buffer.data(), available, &read)) {
+            throw std::runtime_error("Could not read Remote Agent streaming response body.");
+        }
+        buffer.resize(read);
+        raw_response += buffer;
+        line_buffer += buffer;
+        consume_lines(false);
+    }
+    consume_lines(true);
+
+    if (status_code < 200 || status_code >= 300) {
+        std::ostringstream message;
+        message << "Remote Agent HTTP " << status_code;
+        if (!raw_response.empty()) {
+            message << ": " << raw_response.substr(0, 500);
+        }
+        throw std::runtime_error(message.str());
+    }
+
+    if (!generated_text.empty()) {
+        return generated_text;
+    }
+
+    try {
+        const auto payload = json::parse(raw_response);
+        return payload.value("response", "");
+    } catch (...) {
+    }
+    return raw_response;
+}
+
+std::string HttpGetJsonWithAgentAuth(const std::string& url, const RagImageIngestSettings& settings) {
+    return HttpRequestText(
+        "GET",
+        url,
+        {},
+        RemoteAgentAuthHeader(settings),
+        settings.remote_agent_certificate_fingerprint,
+        30000);
 }
 
 std::vector<float> ExtractEmbeddingArray(const json& value) {
@@ -2169,6 +2565,36 @@ bool AnyOllamaVisionEndpointAvailable(const RagImageIngestSettings& settings) {
     return false;
 }
 
+std::optional<json> FetchRemoteAgentHealth(const RagImageIngestSettings& settings, std::string* error) {
+    try {
+        if (Trim(settings.remote_agent_base_url).empty()) {
+            if (error) {
+                *error = "Remote Agent URL is empty.";
+            }
+            return std::nullopt;
+        }
+        if (Trim(settings.remote_agent_shared_secret).empty()) {
+            if (error) {
+                *error = "Remote Agent shared secret is missing. Load the remote worker JSON.";
+            }
+            return std::nullopt;
+        }
+        const std::string response = HttpGetJsonWithAgentAuth(
+            JoinUrlPath(BuildRemoteAgentBaseUrl(settings), "/health"),
+            settings);
+        return json::parse(response);
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    } catch (...) {
+        if (error) {
+            *error = "Unexpected Remote Agent status error.";
+        }
+    }
+    return std::nullopt;
+}
+
 std::string Base64Encode(const std::string& bytes) {
     static constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string output;
@@ -2196,6 +2622,9 @@ std::string ImageModeLabel(const std::string& mode) {
     }
     if (normalized == "vision_language_gpu") {
         return "Full vision understanding (OCR + vision-language model)";
+    }
+    if (normalized == "remote_agent") {
+        return "Remote Agent vision understanding";
     }
     return "CPU OCR (Tesseract)";
 }
@@ -2392,7 +2821,7 @@ std::optional<std::string> DescribeImageWithOllamaVisionDirect(const std::filesy
         body["images"] = json::array({Base64Encode(ReadWholeFile(path))});
         const auto endpoints = BuildOllamaVisionBaseUrls(settings);
         const std::string base_url = endpoints.empty() ? "http://localhost:11434" : endpoints.front();
-        const json response = json::parse(HttpPostJson(JoinUrlPath(base_url, "/api/generate"), body.dump()));
+        const json response = json::parse(HttpPostJson(JoinUrlPath(base_url, "/api/generate"), body.dump(), 600000));
         std::string description = response.value("response", "");
         description = NormalizeMarkdownWhitespace(description);
         if (Trim(description).empty()) {
@@ -2409,6 +2838,51 @@ std::optional<std::string> DescribeImageWithOllamaVisionDirect(const std::filesy
     } catch (...) {
         if (error) {
             *error = "Unexpected Ollama vision-language error.";
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> DescribeImageWithRemoteAgent(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    if (Trim(settings.remote_agent_shared_secret).empty()) {
+        if (error) {
+            *error = "Remote Agent shared secret is missing. Load the remote worker JSON in Image Ingest Settings.";
+        }
+        return std::nullopt;
+    }
+    const std::string remote_model = EffectiveRemoteAgentModel(settings);
+    if (remote_model.empty()) {
+        if (error) {
+            *error = "No remote vision model is configured. Load the remote worker JSON in Image Ingest Settings.";
+        }
+        return std::nullopt;
+    }
+
+    try {
+        json body;
+        body["model"] = remote_model;
+        body["prompt"] = Trim(settings.vision_prompt).empty() ? DefaultImageVisionPrompt() : settings.vision_prompt;
+        body["stream"] = true;
+        body["images"] = json::array({Base64Encode(ReadWholeFile(path))});
+        std::string description = HttpPostOllamaGenerateStreamWithAgentAuth(
+            JoinUrlPath(BuildRemoteAgentBaseUrl(settings), "/api/generate"),
+            body.dump(),
+            settings);
+        description = NormalizeMarkdownWhitespace(description);
+        if (Trim(description).empty()) {
+            if (error) {
+                *error = "Remote Agent returned an empty image description.";
+            }
+            return std::nullopt;
+        }
+        return description;
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    } catch (...) {
+        if (error) {
+            *error = "Unexpected Remote Agent vision-language error.";
         }
     }
     return std::nullopt;
@@ -2565,6 +3039,10 @@ ImageVisionWorkerQueue& GetImageVisionWorkerQueue() {
 }
 
 std::optional<std::string> DescribeImageWithOllamaVision(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    if (NormalizeImageVisionProvider(settings.vision_provider) == "remote_agent" ||
+        NormalizeImageIngestMode(settings.mode) == "remote_agent") {
+        return DescribeImageWithRemoteAgent(path, settings, error);
+    }
     if (NormalizeImageVisionProvider(settings.vision_provider) != "ollama") {
         return DescribeImageWithOllamaVisionDirect(path, settings, error);
     }
@@ -2586,11 +3064,13 @@ std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagI
     }
 
     const std::string mode = NormalizeImageIngestMode(settings.mode);
+    const bool remote_agent_mode = mode == "remote_agent" ||
+        NormalizeImageVisionProvider(settings.vision_provider) == "remote_agent";
     std::vector<std::string> warnings;
     std::string ocr_text;
     std::string ocr_engine;
 
-    if (mode == "paddle_ocr_gpu" || mode == "vision_language_gpu") {
+    if (!remote_agent_mode && (mode == "paddle_ocr_gpu" || mode == "vision_language_gpu")) {
         std::string paddle_error;
         if (const auto paddle_text = ExtractImageWithPaddleOcr(path, settings, &paddle_error)) {
             ocr_text = *paddle_text;
@@ -2600,7 +3080,7 @@ std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagI
         }
     }
 
-    if (ocr_text.empty() && settings.include_ocr_text) {
+    if (!remote_agent_mode && ocr_text.empty() && settings.include_ocr_text) {
         std::string tesseract_error;
         if (const auto tesseract_text = ExtractImageWithTesseract(path, settings, &tesseract_error)) {
             ocr_text = *tesseract_text;
@@ -2611,7 +3091,8 @@ std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagI
     }
 
     std::string visual_description;
-    if (mode == "vision_language_gpu" && settings.include_visual_description) {
+    if ((mode == "vision_language_gpu" || remote_agent_mode) &&
+        (settings.include_visual_description || remote_agent_mode)) {
         std::string vision_error;
         if (const auto description = DescribeImageWithOllamaVision(path, settings, &vision_error)) {
             visual_description = *description;
@@ -2620,17 +3101,21 @@ std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagI
         }
     }
 
-    if (ocr_text.empty() && visual_description.empty()) {
-        std::string message = "Image ingestion produced no OCR text or visual description.";
+    const bool metadata_only_fallback = ocr_text.empty() && visual_description.empty();
+    if (metadata_only_fallback) {
+        std::string warning = "Image ingestion did not produce OCR text or a visual description for this file.";
         if (!warnings.empty()) {
-            message += " Last warning: " + warnings.back();
+            warning += " Last warning: " + warnings.back();
         }
-        throw std::runtime_error(message);
+        warnings.push_back(std::move(warning));
     }
 
     if (extractor_id) {
-        if (mode == "vision_language_gpu" && !visual_description.empty()) {
-            *extractor_id = ocr_engine.empty() ? "ollama_vision" : (ocr_engine + "_plus_ollama_vision");
+        if (metadata_only_fallback) {
+            *extractor_id = "image_ingest_metadata_only";
+        } else if ((mode == "vision_language_gpu" || remote_agent_mode) && !visual_description.empty()) {
+            const std::string vision_id = remote_agent_mode ? "remote_agent_vision" : "ollama_vision";
+            *extractor_id = ocr_engine.empty() ? vision_id : (ocr_engine + "_plus_" + vision_id);
         } else if (!ocr_engine.empty()) {
             *extractor_id = ocr_engine;
         } else {
@@ -2639,13 +3124,16 @@ std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagI
     }
 
     std::ostringstream markdown;
+    const std::string effective_vision_model = remote_agent_mode
+        ? EffectiveRemoteAgentModel(settings)
+        : Trim(settings.vision_model);
     markdown << "# " << WideToUtf8(path.filename().wstring()) << "\n\n";
     markdown << "## Image Ingest Metadata\n\n";
     markdown << "- Pipeline mode: " << ImageModeLabel(mode) << "\n";
     markdown << "- OCR engine: " << (ocr_engine.empty() ? "none" : ocr_engine) << "\n";
-    markdown << "- Vision provider: " << (mode == "vision_language_gpu" ? NormalizeImageVisionProvider(settings.vision_provider) : "none") << "\n";
-    markdown << "- Vision model: " << (mode == "vision_language_gpu" ? Trim(settings.vision_model) : "none") << "\n";
-    markdown << "- Original image: preserved in the RAG document store.\n\n";
+    markdown << "- Vision provider: " << ((mode == "vision_language_gpu" || remote_agent_mode) ? NormalizeImageVisionProvider(settings.vision_provider) : "none") << "\n";
+    markdown << "- Vision model: " << ((mode == "vision_language_gpu" || remote_agent_mode) ? effective_vision_model : "none") << "\n";
+    markdown << "- Original image: preserved at the stored source location referenced by this record.\n\n";
 
     if (!warnings.empty()) {
         markdown << "## Image Ingest Warnings\n\n";
@@ -2663,6 +3151,9 @@ std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagI
     if (!ocr_text.empty()) {
         markdown << "## OCR Text\n\n";
         markdown << ocr_text << "\n";
+    } else if (metadata_only_fallback) {
+        markdown << "## Extraction Status\n\n";
+        markdown << "No OCR text or visual description was extracted for this image during ingestion.\n";
     }
 
     return NormalizeMarkdownWhitespace(markdown.str());
@@ -2815,6 +3306,22 @@ MarkdownExtractionWorkerQueue& GetMarkdownExtractionWorkerQueue() {
 MarkdownExtractionQueueResult ExtractProcessedFileToMarkdownQueued(
     const std::filesystem::path& path,
     const RagImageIngestSettings& settings) {
+    const bool remote_agent_image =
+        IsImageExtension(path) &&
+        (NormalizeImageIngestMode(settings.mode) == "remote_agent" ||
+            NormalizeImageVisionProvider(settings.vision_provider) == "remote_agent");
+    if (remote_agent_image) {
+        MarkdownExtractionQueueResult result;
+        try {
+            result.markdown = ExtractImageToMarkdown(path, settings, &result.extractor_id);
+            result.success = true;
+        } catch (const std::exception& ex) {
+            result.error = ex.what();
+        } catch (...) {
+            result.error = "Unexpected Remote Agent image extraction error.";
+        }
+        return result;
+    }
     return GetMarkdownExtractionWorkerQueue().Enqueue(path, settings);
 }
 
@@ -3699,6 +4206,10 @@ RagImportPreviewItem BuildImportPreviewItem(const RagLibraryConfig& library, con
             const bool vision_endpoint_available =
                 NormalizeImageVisionProvider(image_settings.vision_provider) == "ollama" &&
                 AnyOllamaVisionEndpointAvailable(image_settings);
+            const bool remote_agent_configured =
+                mode == "remote_agent" &&
+                !Trim(image_settings.remote_agent_base_url).empty() &&
+                !Trim(image_settings.remote_agent_shared_secret).empty();
             const bool local_vision_start_available =
                 ImageSettingsNeedOllamaVisionRuntime(image_settings) &&
                 image_settings.ollama_start_locally &&
@@ -3717,6 +4228,15 @@ RagImportPreviewItem BuildImportPreviewItem(const RagLibraryConfig& library, con
                 }
                 item.supported = true;
                 item.reason = "Ready to ingest as image Markdown with PaddleOCR when available, falling back to Tesseract OCR.";
+            } else if (mode == "remote_agent") {
+                if (!remote_agent_configured && !tesseract_available) {
+                    item.reason = "Remote Agent mode needs a loaded remote worker JSON file or Tesseract OCR fallback.";
+                    return item;
+                }
+                item.supported = true;
+                item.reason = remote_agent_configured
+                    ? "Ready to ingest as image Markdown with the configured Remote Agent vision worker."
+                    : "Ready to ingest as image Markdown with Tesseract OCR fallback; Remote Agent JSON is not loaded.";
             } else {
                 if (!vision_endpoint_available && !local_vision_start_available && !python_available && !tesseract_available) {
                     item.reason = "Full vision mode needs a running Ollama vision endpoint, python.exe for PaddleOCR, or tesseract.exe fallback.";
@@ -4093,15 +4613,15 @@ void RagService::EnsureImageVisionRuntimesNoLock(const RagImageIngestSettings& s
 }
 
 std::filesystem::path RagService::EmbeddingRuntimeLogPath() const {
-    return storage_->root_path() / "data" / "rag_embedding_runtime.log";
+    return storage_->log_root() / "rag" / "rag_embedding_runtime.log";
 }
 
 std::filesystem::path RagService::ImageIngestSettingsPath() const {
-    return storage_->root_path() / "data" / "rag_image_ingest_settings.json";
+    return storage_->config_root() / "rag" / "rag_image_ingest_settings.json";
 }
 
 std::filesystem::path RagService::ImageIngestLogPath() const {
-    return storage_->root_path() / "data" / "rag_image_ingest_runtime.log";
+    return storage_->log_root() / "rag" / "rag_image_ingest_runtime.log";
 }
 
 void RagService::AppendEmbeddingRuntimeLogNoLock(const std::string& message) const {
@@ -4169,6 +4689,7 @@ RagImageIngestSettings RagService::LoadImageIngestSettings() const {
 
 void RagService::SaveImageIngestSettings(const RagImageIngestSettings& settings) const {
     std::lock_guard<std::mutex> lock(mutex_);
+    std::filesystem::create_directories(ImageIngestSettingsPath().parent_path());
     SaveJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(settings));
     AppendImageIngestLogNoLock(
         "Saved image ingest settings. Mode: " + NormalizeImageIngestMode(settings.mode) +
@@ -4245,26 +4766,54 @@ RagImageIngestRuntimeStatus RagService::GetImageIngestRuntimeStatus(const RagIma
     }
     status.ollama_installed = FindExecutableOnPath(L"ollama.exe").has_value();
     const std::string provider = NormalizeImageVisionProvider(settings.vision_provider);
+    const bool remote_mode = status.mode == "remote_agent" || provider == "remote_agent";
     const auto endpoints = BuildOllamaVisionBaseUrls(settings);
     status.vision_ollama_instance_count = ClampOllamaInstanceCount(settings.ollama_instance_count);
     status.vision_ollama_start_locally = settings.ollama_start_locally;
-    if (provider == "ollama" && settings.ollama_start_locally) {
+    status.remote_agent_configured = !Trim(settings.remote_agent_config_json).empty() ||
+        !Trim(settings.remote_agent_shared_secret).empty();
+    status.remote_agent_worker_name = settings.remote_agent_worker_name;
+    status.remote_agent_model = EffectiveRemoteAgentModel(settings);
+    status.remote_agent_https_port = ClampRemoteAgentHttpsPort(settings.remote_agent_https_port);
+    if (!remote_mode && provider == "ollama" && settings.ollama_start_locally) {
         EnsureImageVisionRuntimesNoLock(settings);
     }
     status.vision_ollama_managed_count = ManagedImageOllamaProcessCountNoLock();
-    status.vision_endpoint_summary = JoinStrings(endpoints, ", ");
-    if (provider == "ollama") {
+    status.vision_endpoint_summary = remote_mode ? BuildRemoteAgentBaseUrl(settings) : JoinStrings(endpoints, ", ");
+    if (!remote_mode && provider == "ollama") {
         for (const auto& endpoint : endpoints) {
             if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
                 ++status.vision_ollama_running_count;
             }
         }
+    } else if (remote_mode) {
+        std::string remote_error;
+        if (const auto health = FetchRemoteAgentHealth(settings, &remote_error)) {
+            status.vision_endpoint_running = true;
+            status.remote_agent_worker_name = health->value("worker_name", settings.remote_agent_worker_name);
+            status.remote_agent_model = health->value("model", EffectiveRemoteAgentModel(settings));
+            status.remote_agent_https_port = health->value("agent_https_port", status.remote_agent_https_port);
+            status.vision_ollama_instance_count = health->value("ollama_instance_count", status.vision_ollama_instance_count);
+            status.vision_ollama_running_count = status.vision_ollama_instance_count;
+            if (health->contains("queue") && (*health)["queue"].is_object()) {
+                const auto& queue = (*health)["queue"];
+                status.vision_queue_pending = queue.value("queued", 0);
+                status.vision_queue_active = queue.value("processing", 0);
+                status.vision_queue_workers = queue.value("workers", status.vision_ollama_instance_count);
+            }
+        } else {
+            status.message = remote_error.empty()
+                ? "Remote Agent is not responding."
+                : ("Remote Agent is not responding: " + remote_error);
+        }
     }
-    status.vision_endpoint_running = status.vision_ollama_running_count > 0;
-    const ImageVisionQueueStats queue_stats = GetImageVisionWorkerQueue().ConfigureAndSnapshot(settings);
-    status.vision_queue_pending = queue_stats.pending;
-    status.vision_queue_active = queue_stats.active;
-    status.vision_queue_workers = queue_stats.desired_workers;
+    if (!remote_mode) {
+        status.vision_endpoint_running = status.vision_ollama_running_count > 0;
+        const ImageVisionQueueStats queue_stats = GetImageVisionWorkerQueue().ConfigureAndSnapshot(settings);
+        status.vision_queue_pending = queue_stats.pending;
+        status.vision_queue_active = queue_stats.active;
+        status.vision_queue_workers = queue_stats.desired_workers;
+    }
     const MarkdownExtractionQueueStats document_queue_stats =
         GetMarkdownExtractionWorkerQueue().ConfigureAndSnapshot(settings);
     status.document_queue_pending = document_queue_stats.pending;
@@ -4284,6 +4833,18 @@ RagImageIngestRuntimeStatus RagService::GetImageIngestRuntimeStatus(const RagIma
             status.message = "PaddleOCR is missing, but Tesseract OCR fallback is available.";
         } else {
             status.message = "GPU OCR mode needs PaddleOCR or Tesseract fallback installed.";
+        }
+    } else if (status.mode == "remote_agent") {
+        if (status.vision_endpoint_running) {
+            status.message = "Remote Agent vision mode is connected to " +
+                (status.remote_agent_worker_name.empty() ? std::string("the configured worker") : status.remote_agent_worker_name) +
+                " with model " + (status.remote_agent_model.empty() ? std::string("(unknown)") : status.remote_agent_model) +
+                "; remote queue has " + std::to_string(status.vision_queue_active) + " active and " +
+                std::to_string(status.vision_queue_pending) + " queued.";
+        } else if (status.message.empty()) {
+            status.message = status.remote_agent_configured
+                ? "Remote Agent vision mode is configured, but the worker is not responding."
+                : "Remote Agent vision mode needs a loaded remote worker JSON file.";
         }
     } else {
         if (status.vision_endpoint_running && !Trim(settings.vision_model).empty()) {
@@ -4769,6 +5330,7 @@ void RagService::EnsureInitialized() const {
         SaveJsonFile(RegistryPath(), json{{"libraries", json::array()}});
     }
     if (!std::filesystem::exists(ImageIngestSettingsPath())) {
+        std::filesystem::create_directories(ImageIngestSettingsPath().parent_path());
         SaveJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(RagImageIngestSettings{}));
     }
     try {
@@ -4791,7 +5353,7 @@ void RagService::EnsureInitialized() const {
 }
 
 std::filesystem::path RagService::RagRoot() const {
-    return storage_->root_path() / "data" / "rag_libraries";
+    return storage_->data_root() / "rag_libraries";
 }
 
 std::filesystem::path RagService::LibraryPath(const std::string& rag_id) const {
@@ -4816,7 +5378,7 @@ std::filesystem::path RagService::RegistryPath() const {
 }
 
 std::filesystem::path RagService::ProjectRagBindingsPath(const std::string& project_id) const {
-    return storage_->root_path() / "data" / "projects" / Utf8ToWide(project_id) / "project_rag.json";
+    return storage_->config_root() / "projects" / Utf8ToWide(project_id) / "project_rag.json";
 }
 
 std::vector<std::pair<std::string, std::filesystem::path>> RagService::LoadRegistryNoLock() const {

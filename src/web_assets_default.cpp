@@ -23,7 +23,9 @@ const char kIndexHtml[] = R"ASSET(<!DOCTYPE html>
   <header id="header">
     <span id="header-title">Agent Chat</span>
     <div id="header-user">
-      <span id="header-username"></span>
+      <button id="header-account-btn" type="button">
+        <span id="header-username"></span>
+      </button>
       <a id="logout-link" href="/logout">Sign out</a>
     </div>
   </header>
@@ -62,6 +64,49 @@ const char kIndexHtml[] = R"ASSET(<!DOCTYPE html>
   </div>
 </div>
 
+<div id="account-modal" class="app-modal" hidden>
+  <div class="app-modal-backdrop" data-close-account-modal="true"></div>
+  <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+    <div class="app-modal-header">
+      <h2 id="account-modal-title">Account</h2>
+      <button type="button" class="app-modal-close" id="account-close-btn" aria-label="Close">&times;</button>
+    </div>
+    <form id="account-form" class="account-form">
+      <div class="form-group">
+        <label for="account-username">Username</label>
+        <input type="text" id="account-username" readonly>
+      </div>
+      <div class="form-group">
+        <label for="account-display-name">Display Name</label>
+        <input type="text" id="account-display-name" autocomplete="name">
+      </div>
+      <div class="form-group">
+        <label for="account-email">Email</label>
+        <input type="email" id="account-email" autocomplete="email">
+      </div>
+      <div class="account-form-divider">Change password</div>
+      <div class="form-group">
+        <label for="account-current-password">Current Password</label>
+        <input type="password" id="account-current-password" autocomplete="current-password">
+      </div>
+      <div class="form-group">
+        <label for="account-new-password">New Password</label>
+        <input type="password" id="account-new-password" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label for="account-confirm-password">Confirm New Password</label>
+        <input type="password" id="account-confirm-password" autocomplete="new-password">
+      </div>
+      <p class="account-form-help">Leave the password boxes blank if you only want to update your display name or email.</p>
+      <div id="account-error"></div>
+      <div class="app-modal-actions">
+        <button type="button" class="secondary-btn" id="account-cancel-btn">Cancel</button>
+        <button type="submit" class="login-btn" id="account-save-btn">Save Changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script src="/js/vendor/highlight.min.js"></script>
 <script src="/js/vendor/marked.min.js"></script>
 <script src="/js/vendor/purify.min.js"></script>
@@ -69,6 +114,7 @@ const char kIndexHtml[] = R"ASSET(<!DOCTYPE html>
 <script src="/js/vendor/vega.min.js"></script>
 <script src="/js/vendor/vega-lite.min.js"></script>
 <script src="/js/vendor/vega-embed.min.js"></script>
+<script src="/js/vendor/cytoscape.min.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>
@@ -99,6 +145,10 @@ const char kLoginHtml[] = R"ASSET(<!DOCTYPE html>
           <input type="password" id="password" name="password"
                  autocomplete="current-password" required>
         </div>
+        <label class="checkbox-row" for="remember-me">
+          <input type="checkbox" id="remember-me" name="remember_me" value="true">
+          <span>Remember me</span>
+        </label>
         <button type="submit" class="login-btn" id="login-btn">Sign In</button>
         <div id="login-error"></div>
       </form>
@@ -106,46 +156,6 @@ const char kLoginHtml[] = R"ASSET(<!DOCTYPE html>
   </div>
 
   <script src="/js/login.js"></script>
-  <script>
-    document.getElementById('login-form').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      const btn   = document.getElementById('login-btn');
-      const errEl = document.getElementById('login-error');
-      const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value;
-
-      btn.disabled   = true;
-      btn.textContent = 'Signing in…';
-      errEl.style.display = 'none';
-
-      try {
-        const resp = await fetch('/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-        const data = await resp.json();
-        if (resp.ok) {
-          if (data.force_password_reset) {
-            sessionStorage.setItem('force_password_reset', 'true');
-            window.location.href = '/change-password';
-          } else {
-            window.location.href = '/';
-          }
-        } else {
-          errEl.textContent   = data.error || 'Login failed.';
-          errEl.style.display = 'block';
-          btn.disabled        = false;
-          btn.textContent     = 'Sign In';
-        }
-      } catch (err) {
-        errEl.textContent   = 'Network error — is the server running?';
-        errEl.style.display = 'block';
-        btn.disabled        = false;
-        btn.textContent     = 'Sign In';
-      }
-    });
-  </script>
 </body>
 </html>
 )ASSET";
@@ -266,6 +276,7 @@ document.getElementById('login-form').addEventListener('submit', async function(
   const errEl = document.getElementById('login-error');
   const username = document.getElementById('username').value.trim();
   const password = document.getElementById('password').value;
+  const rememberMe = !!document.getElementById('remember-me')?.checked;
 
   btn.disabled = true;
   btn.textContent = 'Signing in...';
@@ -275,7 +286,7 @@ document.getElementById('login-form').addEventListener('submit', async function(
     const resp = await fetch('/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, remember_me: rememberMe }),
     });
     const data = await resp.json();
 
@@ -413,7 +424,109 @@ html, body {
   color: var(--color-text-sidebar);
   font-size: var(--font-size-small);
 }
+#header-account-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--color-text-sidebar);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+#header-account-btn:hover {
+  color: var(--color-text-sidebar-active);
+}
 #header-user a { color: var(--color-text-sidebar); text-decoration: underline; cursor: pointer; }
+
+.app-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.app-modal[hidden] {
+  display: none;
+}
+.app-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+.app-modal-panel {
+  position: relative;
+  width: min(100%, 520px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: var(--color-bg-main);
+  border: 1px solid var(--color-border-main);
+  border-radius: var(--radius-card);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.22);
+  padding: 20px;
+}
+.app-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.app-modal-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+.app-modal-close {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+.account-form .form-group {
+  margin-bottom: 14px;
+}
+.account-form-divider {
+  margin: 18px 0 12px;
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+}
+.account-form-help {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+  margin-bottom: 14px;
+}
+.app-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+.app-modal-actions .login-btn {
+  width: auto;
+  margin: 0;
+  padding: 10px 16px;
+}
+.secondary-btn {
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-button);
+  padding: 10px 16px;
+  cursor: pointer;
+}
+#account-error {
+  display: none;
+  color: var(--color-text-error);
+  font-size: var(--font-size-small);
+  margin-top: 8px;
+}
 
 /* ── Body row (sidebar + main) ────────────────────────────────────────── */
 #body-row {
@@ -546,6 +659,10 @@ html, body {
 .message-row.model .message-bubble { background: var(--color-bg-message-model);
   border: 1px solid var(--color-border-main);
   box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.message-row.model .message-bubble.diagram-only {
+  width: 100%;
+  max-width: 100%;
+}
 
 /* Markdown content inside model bubble */
 .message-bubble h1,.message-bubble h2,.message-bubble h3,
@@ -643,13 +760,319 @@ html, body {
 }
 .diagram-block svg,
 .diagram-block canvas {
+  display: block;
   max-width: 100%;
+}
+.svg-diagram > svg {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
 }
 .diagram-error {
   color: var(--color-text-error);
 }
 .diagram-error pre {
   margin-top: 8px;
+}
+.cytoscape-host {
+  width: 100%;
+  min-height: 420px;
+}
+.message-row.context-usage {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+.message-row.context-usage .message-role-label {
+  margin: 0;
+  height: 0;
+  overflow: hidden;
+}
+.context-usage-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-main);
+  border-radius: 999px;
+  background: var(--color-bg-message-model);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.context-usage-prefix {
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+.message-row.context-usage.is-pending {
+  display: none;
+}
+
+.message-row.compression-status {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+.message-row.compression-status .message-role-label {
+  margin: 0;
+  height: 0;
+  overflow: hidden;
+}
+.compression-status-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-main);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-tool-call);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.compression-status-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border-radius: 50%;
+}
+.compression-status-icon.status-live {
+  border: 2px solid var(--color-accent-primary);
+  border-top-color: transparent;
+  animation: compression-spin 0.8s linear infinite;
+}
+.compression-status-icon.status-done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-accent-success, #16a34a);
+  color: var(--color-accent-success, #16a34a);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.compression-status-bubble.status-live .compression-status-text {
+  color: var(--color-text-secondary);
+}
+.compression-status-bubble.status-done .compression-status-text {
+  color: var(--color-text-primary);
+}
+
+.message-row.provider-queue-status {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+.message-row.provider-queue-status .message-role-label {
+  margin: 0;
+  height: 0;
+  overflow: hidden;
+}
+.provider-queue-status-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-main);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-tool-call);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.provider-queue-status-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border-radius: 50%;
+}
+.provider-queue-status-icon.status-live {
+  border: 2px solid var(--color-accent-primary);
+  border-top-color: transparent;
+  animation: compression-spin 0.8s linear infinite;
+}
+.provider-queue-status-icon.status-done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-accent-success, #16a34a);
+  color: var(--color-accent-success, #16a34a);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.provider-queue-status-bubble.status-live .provider-queue-status-text {
+  color: var(--color-text-secondary);
+}
+.provider-queue-status-bubble.status-done .provider-queue-status-text {
+  color: var(--color-text-primary);
+}
+
+.message-row.provider-activity-status {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+.message-row.provider-activity-status .message-role-label {
+  margin: 0;
+  height: 0;
+  overflow: hidden;
+}
+.provider-activity-status-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-main);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-tool-call);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.provider-activity-status-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border-radius: 50%;
+}
+.provider-activity-status-icon.status-live {
+  border: 2px solid var(--color-accent-primary);
+  border-top-color: transparent;
+  animation: compression-spin 0.8s linear infinite;
+}
+.provider-activity-status-icon.status-done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-accent-success, #16a34a);
+  color: var(--color-accent-success, #16a34a);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.provider-activity-status-bubble.status-live .provider-activity-status-text {
+  color: var(--color-text-secondary);
+}
+.provider-activity-status-bubble.status-done .provider-activity-status-text {
+  color: var(--color-text-primary);
+}
+
+.message-row.tool-usage-status {
+  align-self: flex-start;
+  align-items: flex-start;
+  max-width: 920px;
+}
+.tool-usage-block {
+  width: 100%;
+  border: 1px solid var(--color-border-main);
+  border-left: 3px solid var(--color-accent-primary);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-tool-call);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  overflow: hidden;
+}
+.tool-usage-block.status-done {
+  border-left-color: var(--color-accent-success);
+}
+.tool-usage-block.status-error {
+  border-left-color: var(--color-accent-danger);
+}
+.tool-usage-block summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.tool-usage-block summary::-webkit-details-marker {
+  display: none;
+}
+.tool-usage-block summary::before {
+  content: ">";
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+.tool-usage-block[open] summary::before {
+  content: "v";
+}
+.tool-usage-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border-radius: 50%;
+}
+.tool-usage-icon.status-live {
+  border: 2px solid var(--color-accent-primary);
+  border-top-color: transparent;
+  animation: compression-spin 0.8s linear infinite;
+}
+.tool-usage-icon.status-done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-accent-success);
+  color: var(--color-accent-success);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tool-usage-icon.status-error {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-accent-danger);
+  color: var(--color-accent-danger);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tool-usage-block.status-live .tool-usage-summary-text {
+  color: var(--color-text-secondary);
+}
+.tool-usage-block.status-error .tool-usage-summary-text {
+  color: var(--color-accent-danger);
+}
+.tool-usage-content {
+  padding: 0 12px 12px;
+}
+.tool-usage-section + .tool-usage-section {
+  margin-top: 12px;
+}
+.tool-usage-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.tool-usage-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--color-bg-main);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-main);
+  border-radius: 6px;
+  padding: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.assistant-trace-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.assistant-bubble-segment {
+  width: 100%;
+}
+.assistant-bubble-text:empty {
+  display: none;
 }
 
 /* Streaming indicator */
@@ -661,6 +1084,9 @@ html, body {
   animation: blink 0.7s step-end infinite;
 }
 @keyframes blink { 50% { opacity: 0; } }
+@keyframes compression-spin {
+  to { transform: rotate(360deg); }
+}
 
 /* Error message */
 .message-row.error .message-bubble {
@@ -950,6 +1376,19 @@ html, body {
   transition: border-color 0.15s;
 }
 .form-group input:focus { border-color: var(--color-border-focus); }
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 12px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-small);
+  user-select: none;
+}
+.checkbox-row input {
+  width: auto;
+  margin: 0;
+}
 .login-btn {
   width: 100%;
   padding: 10px;
@@ -1017,6 +1456,8 @@ let state = {
   messages:          [],
   sending:           false,
   username:          '',
+  displayName:       '',
+  email:             '',
   pendingFiles:      [],     // File objects queued for upload before send
 };
 
@@ -1030,9 +1471,22 @@ const emptyState   = $('empty-state');
 const messageInput = $('message-input');
 const sendBtn      = $('send-btn');
 const headerUser   = $('header-username');
+const headerAccountBtn = $('header-account-btn');
 const attachBtn    = $('attach-btn');
 const fileInput    = $('file-input');
 const attachList   = $('attach-list');
+const accountModal = $('account-modal');
+const accountForm = $('account-form');
+const accountCloseBtn = $('account-close-btn');
+const accountCancelBtn = $('account-cancel-btn');
+const accountUsernameInput = $('account-username');
+const accountDisplayNameInput = $('account-display-name');
+const accountEmailInput = $('account-email');
+const accountCurrentPasswordInput = $('account-current-password');
+const accountNewPasswordInput = $('account-new-password');
+const accountConfirmPasswordInput = $('account-confirm-password');
+const accountSaveBtn = $('account-save-btn');
+const accountError = $('account-error');
 
 // ── API helpers ───────────────────────────────────────────────────────────
 async function api(method, path, body) {
@@ -1048,6 +1502,82 @@ async function api(method, path, body) {
     return null;
   }
   return resp;
+}
+
+function setAccountError(message) {
+  if (!accountError) return;
+  if (!message) {
+    accountError.style.display = 'none';
+    accountError.textContent = '';
+    return;
+  }
+  accountError.textContent = message;
+  accountError.style.display = 'block';
+}
+
+function populateAccountForm() {
+  if (!accountForm) return;
+  accountUsernameInput.value = state.username || '';
+  accountDisplayNameInput.value = state.displayName || '';
+  accountEmailInput.value = state.email || '';
+  accountCurrentPasswordInput.value = '';
+  accountNewPasswordInput.value = '';
+  accountConfirmPasswordInput.value = '';
+  setAccountError('');
+}
+
+function openAccountModal() {
+  if (!accountModal) return;
+  populateAccountForm();
+  accountModal.hidden = false;
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => {
+    if (accountDisplayNameInput) accountDisplayNameInput.focus();
+  }, 0);
+}
+
+function closeAccountModal() {
+  if (!accountModal) return;
+  accountModal.hidden = true;
+  document.body.style.overflow = '';
+  setAccountError('');
+}
+
+async function saveAccountSettings(e) {
+  e.preventDefault();
+  if (!accountSaveBtn) return;
+
+  setAccountError('');
+  accountSaveBtn.disabled = true;
+  accountSaveBtn.textContent = 'Saving...';
+
+  const body = {
+    display_name: accountDisplayNameInput.value.trim(),
+    email: accountEmailInput.value.trim(),
+    current_password: accountCurrentPasswordInput.value,
+    new_password: accountNewPasswordInput.value,
+    confirm_password: accountConfirmPasswordInput.value,
+  };
+
+  try {
+    const resp = await api('PATCH', '/api/me', body);
+    if (!resp) return;
+    const data = await resp.json();
+    if (!resp.ok) {
+      setAccountError(data.error || 'Could not update the account.');
+      return;
+    }
+
+    state.displayName = data.display_name || '';
+    state.email = data.email || '';
+    headerUser.textContent = state.displayName || state.username || '';
+    closeAccountModal();
+  } catch (err) {
+    setAccountError('Network error while updating the account.');
+  } finally {
+    accountSaveBtn.disabled = false;
+    accountSaveBtn.textContent = 'Save Changes';
+  }
 }
 
 // ── Markdown rendering ────────────────────────────────────────────────────
@@ -1105,17 +1635,40 @@ function replacePlaceholder(html, placeholder, replacement) {
   return html.replace(new RegExp(escaped, 'g'), replacement);
 }
 
-function postProcessMessageBubble(bubble, options = {}) {
+)ASSET"
+    R"ASSET(function postProcessMessageBubble(bubble, options = {}) {
   const renderDiagrams = options.renderDiagrams !== false;
   if (renderDiagrams) {
     renderMermaidBlocks(bubble);
     renderVegaBlocks(bubble);
+    renderCytoscapeBlocks(bubble);
+    renderSvgBlocks(bubble);
   }
+  const hasDiagram = !!bubble.querySelector('.diagram-block');
+  bubble.classList.toggle('has-diagram', hasDiagram);
+  bubble.classList.toggle('diagram-only', hasDiagram && bubbleHasOnlyDiagrams(bubble));
   bubble.querySelectorAll('pre code:not(.hljs)').forEach(el => {
     if (!isDiagramLanguage(getCodeLanguage(el))) {
       hljs.highlightElement(el);
     }
   });
+}
+
+function bubbleHasOnlyDiagrams(bubble) {
+  const meaningfulNodes = Array.from(bubble.childNodes).filter(node => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return !!node.textContent.trim();
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return false;
+    }
+    const el = node;
+    return el.tagName !== 'BR';
+  });
+  return meaningfulNodes.length > 0 &&
+    meaningfulNodes.every(node =>
+      node.nodeType === Node.ELEMENT_NODE &&
+      node.classList.contains('diagram-block'));
 }
 
 function getCodeLanguage(codeEl) {
@@ -1128,7 +1681,9 @@ function getCodeLanguage(codeEl) {
 
 function isDiagramLanguage(lang) {
   return lang === 'mermaid' || lang === 'vega-lite' ||
-    lang === 'vegalite' || lang === 'vega';
+    lang === 'vegalite' || lang === 'vega' ||
+    lang === 'cytoscape' || lang === 'cytoscapejs' ||
+    lang === 'svg';
 }
 
 function renderMermaidBlocks(container) {
@@ -1178,6 +1733,10 @@ function renderVegaBlocks(container) {
     let spec;
     try {
       spec = JSON.parse(source);
+      if (spec && typeof spec === 'object' && spec.spec !== undefined &&
+          (spec.type === 'vega-lite' || spec.type === 'vega' || spec.type === 'vegalite')) {
+        spec = spec.spec;
+      }
     } catch (err) {
       showDiagramError(host, 'Vega-Lite', err, source);
       return;
@@ -1186,6 +1745,168 @@ function renderVegaBlocks(container) {
     vegaEmbed(host, spec, { actions: false, renderer: 'svg' })
       .catch(err => showDiagramError(host, 'Vega-Lite', err, source));
   });
+}
+
+function defaultCytoscapeStyle() {
+  return [
+    {
+      selector: 'node',
+      style: {
+        'background-color': '#2563eb',
+        'label': 'data(label)',
+        'color': '#f8fafc',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'font-size': '12px',
+        'text-wrap': 'wrap',
+        'text-max-width': '120px',
+        'border-width': 1,
+        'border-color': '#1d4ed8',
+        'width': 'label',
+        'height': 'label',
+        'padding': '14px',
+        'shape': 'round-rectangle',
+      },
+    },
+    {
+      selector: 'edge',
+      style: {
+        'curve-style': 'bezier',
+        'target-arrow-shape': 'triangle',
+        'line-color': '#94a3b8',
+        'target-arrow-color': '#94a3b8',
+        'width': 2,
+        'arrow-scale': 1,
+        'label': 'data(label)',
+        'font-size': '11px',
+        'text-background-color': '#ffffff',
+        'text-background-opacity': 0.85,
+        'text-background-padding': '2px',
+      },
+    },
+  ];
+}
+
+function renderCytoscapeBlocks(container) {
+  if (!window.cytoscape) return;
+  container.querySelectorAll('pre code').forEach(codeEl => {
+    const lang = getCodeLanguage(codeEl);
+    if (lang !== 'cytoscape' && lang !== 'cytoscapejs') return;
+    const pre = codeEl.closest('pre');
+    if (!pre || pre.dataset.diagramRendered) return;
+    pre.dataset.diagramRendered = '1';
+    const source = codeEl.textContent.trim();
+    if (!source) return;
+
+    const host = document.createElement('div');
+    host.className = 'diagram-block cytoscape-diagram';
+    host.textContent = 'Rendering graph...';
+    pre.replaceWith(host);
+
+    let spec;
+    try {
+      spec = JSON.parse(source);
+      if (spec && typeof spec === 'object' && spec.spec !== undefined &&
+          (spec.type === 'cytoscape' || spec.type === 'cytoscapejs')) {
+        spec = spec.spec;
+      }
+    } catch (err) {
+      showDiagramError(host, 'Cytoscape.js', err, source);
+      return;
+    }
+
+    if (!spec || typeof spec !== 'object') {
+      showDiagramError(host, 'Cytoscape.js', new Error('Spec must be a JSON object.'), source);
+      return;
+    }
+
+    const graphHost = document.createElement('div');
+    graphHost.className = 'cytoscape-host';
+    host.textContent = '';
+    host.appendChild(graphHost);
+
+    const elements = Array.isArray(spec.elements) ? spec.elements.map(el => {
+      const next = Object.assign({}, el);
+      if (next && next.data && next.data.id && !next.data.label &&
+          next.data.source === undefined && next.data.target === undefined) {
+        next.data = Object.assign({}, next.data, { label: next.data.id });
+      }
+      return next;
+    }) : [];
+    try {
+      const cy = cytoscape({
+        container: graphHost,
+        elements,
+        style: Array.isArray(spec.style) && spec.style.length ? spec.style : defaultCytoscapeStyle(),
+        layout: spec.layout || { name: 'cose', animate: false, fit: true, padding: 24 },
+        minZoom: 0.2,
+        maxZoom: 3,
+        wheelSensitivity: 0.2,
+        userZoomingEnabled: true,
+        userPanningEnabled: true,
+      });
+      requestAnimationFrame(() => {
+        try { cy.resize(); cy.fit(undefined, 24); } catch (_) {}
+      });
+    } catch (err) {
+      showDiagramError(host, 'Cytoscape.js', err, source);
+    }
+  });
+}
+
+function renderSvgBlocks(container) {
+  container.querySelectorAll('pre code').forEach(codeEl => {
+    if (getCodeLanguage(codeEl) !== 'svg') return;
+    const pre = codeEl.closest('pre');
+    if (!pre || pre.dataset.diagramRendered) return;
+    pre.dataset.diagramRendered = '1';
+    const source = codeEl.textContent.trim();
+    if (!source) return;
+
+    const host = document.createElement('div');
+    host.className = 'diagram-block svg-diagram';
+    host.textContent = 'Rendering SVG...';
+    pre.replaceWith(host);
+
+    if (!/^<svg[\s>]/i.test(source)) {
+      showDiagramError(host, 'SVG', new Error('SVG blocks must start with <svg>.') , source);
+      return;
+    }
+
+    try {
+      host.innerHTML = DOMPurify.sanitize(source, {
+        USE_PROFILES: { svg: true, svgFilters: true },
+      });
+      normalizeSvgDiagram(host);
+    } catch (err) {
+      showDiagramError(host, 'SVG', err, source);
+    }
+  });
+}
+
+function normalizeSvgDiagram(host) {
+  const svg = host.querySelector('svg');
+  if (!svg) return;
+  const widthText = svg.getAttribute('width') || '';
+  const heightText = svg.getAttribute('height') || '';
+  const width = Number.parseFloat(widthText);
+  const height = Number.parseFloat(heightText);
+  if (!svg.getAttribute('viewBox') &&
+      Number.isFinite(width) && width > 0 &&
+      Number.isFinite(height) && height > 0) {
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  }
+  if (svg.getAttribute('viewBox')) {
+    svg.removeAttribute('width');
+    svg.removeAttribute('height');
+    svg.style.width = '100%';
+    svg.style.maxWidth = '100%';
+    svg.style.height = 'auto';
+  } else {
+    svg.style.maxWidth = '100%';
+    svg.style.height = 'auto';
+  }
+  svg.style.display = 'block';
 }
 
 function showDiagramError(host, kind, err, source) {
@@ -1197,13 +1918,23 @@ function showDiagramError(host, kind, err, source) {
 }
 
 // ── Message rendering ─────────────────────────────────────────────────────
-function renderMessages(messages) {
+)ASSET"
+    R"ASSET(function renderMessages(messages) {
   messagesEl.innerHTML = '';
   if (messages.length === 0) {
     messagesEl.appendChild(emptyState);
     return;
   }
-  for (const msg of messages) messagesEl.appendChild(buildMessageRow(msg.role, msg.content));
+  for (const msg of messages) {
+    if (msg &&
+        msg.role === 'assistant' &&
+        Array.isArray(msg.ui_trace) &&
+        msg.ui_trace.length) {
+      messagesEl.appendChild(buildAssistantTraceRow(msg.ui_trace, msg.content || ''));
+    } else {
+      messagesEl.appendChild(buildMessageRow(msg.role, msg.content));
+    }
+  }
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
@@ -1427,8 +2158,496 @@ function appendLiveFileUploadRow(file) {
   return live;
 }
 
+function formatContextUsageText(used, total) {
+  const usedText = Number(used || 0).toLocaleString();
+  if (Number(total || 0) > 0) {
+    return 'CTX: ' + usedText + ' / ' + Number(total).toLocaleString();
+  }
+  return 'CTX: ' + usedText;
+}
+
+function buildContextUsageRow(content, pending = false) {
+  content = content || '';
+  const row = document.createElement('div');
+  row.className = 'message-row context-usage';
+  if (pending) row.classList.add('is-pending');
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = ' ';
+  lbl.setAttribute('aria-hidden', 'true');
+
+  const bubble = document.createElement('div');
+  bubble.className = 'context-usage-bubble';
+
+  const prefix = document.createElement('span');
+  prefix.className = 'context-usage-prefix';
+  prefix.textContent = 'CTX:';
+  bubble.appendChild(prefix);
+
+  const value = document.createElement('span');
+  value.className = 'context-usage-value';
+  value.textContent = content.indexOf('CTX:') === 0 ? content.slice(4).trim() : content;
+  bubble.appendChild(value);
+
+  row.appendChild(lbl);
+  row.appendChild(bubble);
+  return row;
+}
+
+function normalizeCompressionRecord(content) {
+  let record = content;
+  if (typeof record === 'string') {
+    try {
+      const parsed = JSON.parse(record);
+      if (parsed && typeof parsed === 'object') record = parsed;
+    } catch (_) {}
+  }
+  if (typeof record === 'string') {
+    record = { text: record, status: 'done' };
+  }
+  record = record || {};
+  return {
+    text: record.text || 'Context window compressed.',
+    status: record.status === 'live' ? 'live' : 'done',
+  };
+}
+
+function createCompressionRow(content) {
+  let record = normalizeCompressionRecord(content);
+
+  const row = document.createElement('div');
+  row.className = 'message-row compression-status';
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = ' ';
+  lbl.setAttribute('aria-hidden', 'true');
+
+  const bubble = document.createElement('div');
+  bubble.className = 'compression-status-bubble';
+
+  const icon = document.createElement('span');
+  icon.className = 'compression-status-icon';
+  bubble.appendChild(icon);
+
+  const text = document.createElement('span');
+  text.className = 'compression-status-text';
+  bubble.appendChild(text);
+
+  row.appendChild(lbl);
+  row.appendChild(bubble);
+
+  function render(nextRecord) {
+    record = normalizeCompressionRecord(nextRecord);
+    bubble.className = 'compression-status-bubble status-' + record.status;
+    icon.className = 'compression-status-icon status-' + record.status;
+    icon.textContent = record.status === 'done' ? '\u2713' : '';
+    text.textContent = record.text;
+  }
+
+  render(record);
+
+  return {
+    row,
+    update(nextRecord) {
+      render(Object.assign({}, record, nextRecord || {}));
+    },
+    finalize(finalText) {
+      render({
+        text: finalText || record.text || 'Context window compressed.',
+        status: 'done',
+      });
+    },
+    snapshot() {
+      return normalizeCompressionRecord(record);
+    },
+  };
+}
+
+function buildCompressionRow(content) {
+  return createCompressionRow(content).row;
+}
+
+function normalizeQueueRecord(content) {
+  let record = content;
+  if (typeof record === 'string') {
+    try {
+      const parsed = JSON.parse(record);
+      if (parsed && typeof parsed === 'object') record = parsed;
+    } catch (_) {}
+  }
+  record = record || {};
+  return {
+    state: record.state || 'queued',
+    provider: record.provider || '',
+    position: Number(record.position || 0),
+    depth: Number(record.depth || 0),
+    active: Number(record.active || 0),
+    maxActive: Number(record.maxActive || 0),
+  };
+}
+
+function formatQueueStatusText(record) {
+  const providerSuffix = record.provider ? ' for ' + record.provider : '';
+  if (record.state === 'queued') {
+    if (record.position > 0 && record.depth > 0) {
+      return 'Waiting' + providerSuffix + ': ' + record.position + ' / ' + record.depth + ' in queue';
+    }
+    if (record.depth > 0) {
+      return 'Waiting' + providerSuffix + '. Queue depth: ' + record.depth;
+    }
+    return 'Waiting' + providerSuffix + '...';
+  }
+  return 'Provider slot acquired' + providerSuffix + '.';
+}
+
+function createQueueStatusRow(content) {
+  let record = normalizeQueueRecord(content);
+
+  const row = document.createElement('div');
+  row.className = 'message-row provider-queue-status';
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = ' ';
+  lbl.setAttribute('aria-hidden', 'true');
+
+  const bubble = document.createElement('div');
+  bubble.className = 'provider-queue-status-bubble';
+
+  const icon = document.createElement('span');
+  icon.className = 'provider-queue-status-icon';
+  bubble.appendChild(icon);
+
+  const text = document.createElement('span');
+  text.className = 'provider-queue-status-text';
+  bubble.appendChild(text);
+
+  row.appendChild(lbl);
+  row.appendChild(bubble);
+
+  function render(nextRecord) {
+    record = normalizeQueueRecord(nextRecord);
+    const visualState = record.state === 'queued' ? 'live' : 'done';
+    bubble.className = 'provider-queue-status-bubble status-' + visualState;
+    icon.className = 'provider-queue-status-icon status-' + visualState;
+    icon.textContent = visualState === 'done' ? '\u2713' : '';
+    text.textContent = formatQueueStatusText(record);
+  }
+
+  render(record);
+
+  return {
+    row,
+    update(nextRecord) {
+      render(Object.assign({}, record, nextRecord || {}));
+    },
+  };
+}
+
+function normalizeActivityRecord(content) {
+  let record = content;
+  if (typeof record === 'string') {
+    try {
+      const parsed = JSON.parse(record);
+      if (parsed && typeof parsed === 'object') record = parsed;
+    } catch (_) {}
+  }
+  record = record || {};
+  return {
+    code: record.code || 'sending_request',
+    text: record.text || 'Working with the provider...',
+    status: record.status === 'done' ? 'done' : 'live',
+  };
+}
+
+function createActivityStatusRow(content) {
+  let record = normalizeActivityRecord(content);
+
+  const row = document.createElement('div');
+  row.className = 'message-row provider-activity-status';
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = ' ';
+  lbl.setAttribute('aria-hidden', 'true');
+
+  const bubble = document.createElement('div');
+  bubble.className = 'provider-activity-status-bubble';
+
+  const icon = document.createElement('span');
+  icon.className = 'provider-activity-status-icon';
+  bubble.appendChild(icon);
+
+  const text = document.createElement('span');
+  text.className = 'provider-activity-status-text';
+  bubble.appendChild(text);
+
+  row.appendChild(lbl);
+  row.appendChild(bubble);
+
+  function render(nextRecord) {
+    record = normalizeActivityRecord(nextRecord);
+    bubble.className = 'provider-activity-status-bubble status-' + record.status;
+    icon.className = 'provider-activity-status-icon status-' + record.status;
+    icon.textContent = record.status === 'done' ? '\u2713' : '';
+    text.textContent = record.text;
+  }
+
+  render(record);
+
+  return {
+    row,
+    update(nextRecord) {
+      render(Object.assign({}, record, nextRecord || {}));
+    },
+  };
+}
+
+function normalizeAssistantTrace(trace, fallbackContent = '') {
+  const normalized = [];
+  if (Array.isArray(trace)) {
+    trace.forEach(segment => {
+      if (!segment || typeof segment !== 'object') return;
+      if (segment.type === 'tool_usage' ||
+          segment.tool_name !== undefined ||
+          segment.tool_call_id !== undefined) {
+        const toolSource = segment.record && typeof segment.record === 'object'
+          ? segment.record
+          : segment;
+        normalized.push({
+          type: 'tool_usage',
+          record: normalizeToolUsageRecord(toolSource),
+        });
+        return;
+      }
+      if (segment.type === 'text' || segment.content !== undefined) {
+        const text = typeof segment.content === 'string'
+          ? segment.content
+          : String(segment.content || '');
+        if (text) {
+          normalized.push({
+            type: 'text',
+            content: text,
+            live: !!segment.live,
+          });
+        }
+      }
+    });
+  }
+  if (!normalized.length && fallbackContent) {
+    normalized.push({ type: 'text', content: fallbackContent, live: false });
+  }
+  return normalized;
+}
+
+)ASSET"
+    R"ASSET(function prettyToolUsageText(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch (_) {
+      return value;
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+function normalizeToolUsageRecord(content) {
+  let record = content;
+  if (typeof record === 'string') {
+    try {
+      const parsed = JSON.parse(record);
+      if (parsed && typeof parsed === 'object') record = parsed;
+    } catch (_) {
+      record = { result: record };
+    }
+  }
+  record = record || {};
+  return {
+    toolCallId: record.tool_call_id || record.toolCallId || '',
+    toolName: record.tool_name || record.toolName || 'Tool',
+    arguments: prettyToolUsageText(record.arguments || record.tool_arguments || ''),
+    result: prettyToolUsageText(record.result || record.tool_result || ''),
+    status: record.status === 'error' ? 'error'
+      : record.status === 'live' ? 'live'
+      : 'done',
+  };
+}
+
+function formatToolUsageSummary(record) {
+  if (record.status === 'live') {
+    return 'Using ' + record.toolName + '...';
+  }
+  if (record.status === 'error') {
+    return 'Tool error: ' + record.toolName;
+  }
+  return 'Used ' + record.toolName;
+}
+
+function createToolUsageBlock(content) {
+  let record = normalizeToolUsageRecord(content);
+
+  const details = document.createElement('details');
+  details.className = 'tool-usage-block';
+
+  const summary = document.createElement('summary');
+  const icon = document.createElement('span');
+  icon.className = 'tool-usage-icon';
+  const text = document.createElement('span');
+  text.className = 'tool-usage-summary-text';
+  summary.appendChild(icon);
+  summary.appendChild(text);
+
+  const body = document.createElement('div');
+  body.className = 'tool-usage-content';
+
+  const argsWrap = document.createElement('div');
+  argsWrap.className = 'tool-usage-section';
+  const argsLabel = document.createElement('div');
+  argsLabel.className = 'tool-usage-section-label';
+  argsLabel.textContent = 'Arguments';
+  const argsPre = document.createElement('pre');
+  argsPre.className = 'tool-usage-pre';
+  argsWrap.appendChild(argsLabel);
+  argsWrap.appendChild(argsPre);
+
+  const resultWrap = document.createElement('div');
+  resultWrap.className = 'tool-usage-section';
+  const resultLabel = document.createElement('div');
+  resultLabel.className = 'tool-usage-section-label';
+  resultLabel.textContent = 'Result';
+  const resultPre = document.createElement('pre');
+  resultPre.className = 'tool-usage-pre';
+  resultWrap.appendChild(resultLabel);
+  resultWrap.appendChild(resultPre);
+
+  body.appendChild(argsWrap);
+  body.appendChild(resultWrap);
+  details.appendChild(summary);
+  details.appendChild(body);
+
+  function render(nextRecord) {
+    record = normalizeToolUsageRecord(nextRecord);
+    details.className = 'tool-usage-block status-' + record.status;
+    icon.className = 'tool-usage-icon status-' + record.status;
+    icon.textContent = record.status === 'done' ? '\u2713'
+      : record.status === 'error' ? '!' : '';
+    text.textContent = formatToolUsageSummary(record);
+    argsPre.textContent = record.arguments || 'No arguments provided.';
+    resultPre.textContent = record.result || (record.status === 'live'
+      ? 'Waiting for tool result...'
+      : 'No tool result captured.');
+    argsWrap.hidden = !record.arguments;
+    resultWrap.hidden = !record.result && record.status === 'live';
+    details.open = record.status === 'live';
+  }
+
+  render(record);
+
+  return {
+    element: details,
+    update(nextRecord) {
+      render(Object.assign({}, record, nextRecord || {}));
+    },
+    snapshot() {
+      return normalizeToolUsageRecord(record);
+    },
+  };
+}
+
+function renderAssistantTraceBubble(bubble, trace, options = {}) {
+  const normalized = normalizeAssistantTrace(trace, options.fallbackContent || '');
+  bubble.innerHTML = '';
+  bubble.classList.toggle('assistant-trace-bubble', normalized.length > 0);
+
+  let lastLiveText = null;
+  normalized.forEach(segment => {
+    const wrap = document.createElement('div');
+    wrap.className = 'assistant-bubble-segment assistant-bubble-' + segment.type;
+    if (segment.type === 'tool_usage') {
+      const block = createToolUsageBlock(segment.record);
+      wrap.appendChild(block.element);
+    } else {
+      wrap.innerHTML = renderMarkdown(segment.content || '', {
+        streaming: !!(options.streaming && segment.live),
+      });
+      postProcessMessageBubble(wrap, {
+        renderDiagrams: !(options.streaming && segment.live),
+      });
+      if (options.streaming && segment.live) {
+        lastLiveText = wrap;
+      }
+    }
+    bubble.appendChild(wrap);
+  });
+
+  if (options.streaming) {
+    const cursor = document.createElement('span');
+    cursor.className = 'streaming-cursor';
+    if (lastLiveText) {
+      lastLiveText.appendChild(cursor);
+    } else {
+      bubble.appendChild(cursor);
+    }
+  }
+
+  return normalized;
+}
+
+function buildAssistantTraceRow(trace, fallbackContent = '') {
+  const row = document.createElement('div');
+  row.className = 'message-row model';
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = 'Assistant';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble';
+  renderAssistantTraceBubble(bubble, trace, { fallbackContent });
+
+  row.appendChild(lbl);
+  row.appendChild(bubble);
+  return row;
+}
+
+function createToolUsageRow(content) {
+  const row = document.createElement('div');
+  row.className = 'message-row tool-usage-status';
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = 'Tool';
+
+  const block = createToolUsageBlock(content);
+  row.appendChild(lbl);
+  row.appendChild(block.element);
+
+  return {
+    row,
+    update(nextRecord) {
+      block.update(nextRecord);
+    },
+    snapshot() {
+      return block.snapshot();
+    },
+  };
+}
+
 function buildMessageRow(role, content) {
   if (role === 'file') return buildFileUploadRow(content);
+  if (role === 'context') return buildContextUsageRow(content);
+  if (role === 'compression') return buildCompressionRow(content);
+  if (role === 'tool_usage') return createToolUsageRow(content).row;
 
   const row = document.createElement('div');
   row.className = 'message-row ' + (role === 'user' ? 'user' : role === 'error' ? 'error' : 'model');
@@ -1456,8 +2675,7 @@ function buildMessageRow(role, content) {
 }
 
 )ASSET"
-    R"ASSET(// Create a streaming placeholder row.  Returns {row, bubble, updateText, finalize}.
-function createStreamingRow() {
+    R"ASSET(function createAssistantTurnRow(initialTrace = []) {
   const row = document.createElement('div');
   row.className = 'message-row model';
   row.id = 'streaming-row';
@@ -1469,37 +2687,89 @@ function createStreamingRow() {
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble streaming';
   bubble.id = 'streaming-bubble';
-  bubble.innerHTML = '<span class="streaming-cursor"></span>';
 
   row.appendChild(lbl);
   row.appendChild(bubble);
   messagesEl.appendChild(row);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 
-  let accumulated = '';
+  let trace = normalizeAssistantTrace(initialTrace);
 
-  function updateText(delta) {
-    accumulated += delta;
-    bubble.innerHTML = renderMarkdown(accumulated, { streaming: true });
-    postProcessMessageBubble(bubble, { renderDiagrams: false });
-    bubble.appendChild(Object.assign(document.createElement('span'), {
-      className: 'streaming-cursor',
-    }));
+  function render(streaming) {
+    renderAssistantTraceBubble(bubble, trace, { streaming });
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  function finalize(finalText) {
+  function appendTextDelta(delta) {
+    if (!delta) return;
+    const last = trace[trace.length - 1];
+    if (last && last.type === 'text' && last.live) {
+      last.content += delta;
+    } else {
+      trace.push({ type: 'text', content: delta, live: true });
+    }
+    render(true);
+  }
+
+  function upsertTool(record) {
+    const next = normalizeToolUsageRecord(record);
+    let index = -1;
+    if (next.toolCallId) {
+      index = trace.findIndex(segment =>
+        segment.type === 'tool_usage' &&
+        segment.record.toolCallId === next.toolCallId);
+    }
+    if (index < 0) {
+      const last = trace[trace.length - 1];
+      if (last && last.type === 'text') {
+        last.live = false;
+      }
+      trace.push({ type: 'tool_usage', record: next });
+    } else {
+      trace[index].record = Object.assign({}, trace[index].record, next);
+    }
+    render(true);
+  }
+
+  function finalize() {
     row.removeAttribute('id');
     bubble.removeAttribute('id');
     bubble.classList.remove('streaming');
-    const text = finalText !== undefined ? finalText : accumulated;
-    bubble.innerHTML = renderMarkdown(text);
-    postProcessMessageBubble(bubble);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    return text;
+    trace = trace.map(segment => {
+      if (segment.type === 'text') {
+        return Object.assign({}, segment, { live: false });
+      }
+      const record = Object.assign({}, segment.record);
+      if (record.status === 'live') {
+        record.status = 'done';
+      }
+      return { type: 'tool_usage', record };
+    });
+    render(false);
+    return {
+      text: trace
+        .filter(segment => segment.type === 'text')
+        .map(segment => segment.content || '')
+        .join(''),
+      ui_trace: trace.map(segment =>
+        segment.type === 'text'
+          ? { type: 'text', content: segment.content || '' }
+          : Object.assign({ type: 'tool_usage' }, segment.record)),
+    };
   }
 
-  return { row, bubble, updateText, finalize, getAccumulated: () => accumulated };
+  function hasContent() {
+    return trace.some(segment =>
+      segment.type === 'tool_usage' ||
+      (segment.type === 'text' && (segment.content || '').trim()));
+  }
+
+  function remove() {
+    row.remove();
+  }
+
+  render(true);
+  return { row, bubble, appendTextDelta, upsertTool, finalize, hasContent, remove };
 }
 
 // ── SSE stream reader ─────────────────────────────────────────────────────
@@ -1510,6 +2780,8 @@ async function readSSEStream(response, onEvent, signal) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
+  let sawDoneEvent = false;
+  let sawErrorEvent = false;
 
   try {
     while (true) {
@@ -1529,7 +2801,10 @@ async function readSSEStream(response, onEvent, signal) {
         const jsonStr = trimmed.slice(5).trim();
         if (!jsonStr) continue;
         try {
-          onEvent(JSON.parse(jsonStr));
+          const event = JSON.parse(jsonStr);
+          if (event && event.done) sawDoneEvent = true;
+          if (event && event.error) sawErrorEvent = true;
+          onEvent(event);
         } catch (_) { /* malformed event — skip */ }
       }
     }
@@ -1537,12 +2812,22 @@ async function readSSEStream(response, onEvent, signal) {
     if (buffer.trim().startsWith('data:')) {
       const jsonStr = buffer.trim().slice(5).trim();
       if (jsonStr) {
-        try { onEvent(JSON.parse(jsonStr)); } catch (_) {}
+        try {
+          const event = JSON.parse(jsonStr);
+          if (event && event.done) sawDoneEvent = true;
+          if (event && event.error) sawErrorEvent = true;
+          onEvent(event);
+        } catch (_) {}
       }
     }
   } finally {
     reader.releaseLock();
   }
+  return {
+    completed: sawDoneEvent,
+    errored: sawErrorEvent,
+    aborted: !!(signal && signal.aborted),
+  };
 }
 
 // ── Project / chat list ───────────────────────────────────────────────────
@@ -1789,9 +3074,10 @@ function renderAttachList() {
 }
 
 async function uploadPendingFiles(chatId) {
-  const uploaded = [];
   const files = [...state.pendingFiles];
-  for (const f of files) {
+  const uploaded = [];
+  const errors = [];
+  const uploadOne = async (f) => {
     const live = appendLiveFileUploadRow(f);
     f.status = 'uploading';
     renderAttachList();
@@ -1839,18 +3125,32 @@ async function uploadPendingFiles(chatId) {
       const finalRecord = Object.assign({}, data, { status: finalStatus });
       f.status = finalStatus;
       live.update(finalRecord);
-      uploaded.push(data.filename || f.name);
       state.messages.push({ role: 'file', content: JSON.stringify(finalRecord), created_at: data.created_at || '' });
 
       const idx = state.pendingFiles.indexOf(f);
       if (idx >= 0) state.pendingFiles.splice(idx, 1);
       renderAttachList();
+      return data.filename || f.name;
     } catch (e) {
       if (ingestTimer) clearTimeout(ingestTimer);
       throw e;
     }
+  };
+
+  for (const f of files) {
+    try {
+      uploaded.push(await uploadOne(f));
+    } catch (e) {
+      errors.push(e && e.message ? e.message : String(e));
+      const idx = state.pendingFiles.indexOf(f);
+      if (idx >= 0) state.pendingFiles.splice(idx, 1);
+      renderAttachList();
+    }
   }
   renderAttachList();
+  if (errors.length) {
+    throw new Error(errors.join('; '));
+  }
   return uploaded;
 }
 
@@ -1897,10 +3197,19 @@ async function sendMessage() {
   state.messages.push({ role: 'user', content: displayContent, created_at: '' });
   renderMessages(state.messages);
 
-  // Create streaming row
-  const { updateText, finalize, getAccumulated } = createStreamingRow();
+  const pendingContextRow = buildContextUsageRow('', true);
+  messagesEl.appendChild(pendingContextRow);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  const assistantTurn = createAssistantTurnRow();
 
   const abortCtrl = new AbortController();
+  let contextUsageText = '';
+  let contextRecorded = false;
+  let compressionStatus = null;
+  let compressionRecorded = false;
+  let queueStatus = null;
+  let activityStatus = null;
 
   try {
     const resp = await fetch(`/api/chats/${state.selectedChatId}/messages/stream`, {
@@ -1916,18 +3225,96 @@ async function sendMessage() {
     if (!resp.ok) {
       let errMsg = 'Request failed';
       try { errMsg = (await resp.json()).error || errMsg; } catch (_) {}
-      finalize('');
+      assistantTurn.remove();
       const errRow = buildMessageRow('error', '⚠ ' + errMsg);
-      const sr = $('streaming-row');
-      if (sr) sr.replaceWith(errRow); else messagesEl.appendChild(errRow);
+      messagesEl.appendChild(errRow);
       return;
     }
 
     // Consume SSE stream
     let errorMsg = null;
-    await readSSEStream(resp, ev => {
+    const streamState = await readSSEStream(resp, ev => {
       if (ev.delta !== undefined) {
-        updateText(ev.delta);
+        assistantTurn.appendTextDelta(ev.delta);
+      } else if (ev.queue_state !== undefined) {
+        const record = {
+          state: ev.queue_state,
+          provider: ev.queue_provider || '',
+          position: ev.queue_position,
+          depth: ev.queue_depth,
+          active: ev.queue_active,
+          maxActive: ev.queue_max_active,
+        };
+        if (record.state === 'queued') {
+          if (!queueStatus) {
+            queueStatus = createQueueStatusRow(record);
+            messagesEl.insertBefore(queueStatus.row, pendingContextRow);
+          } else {
+            queueStatus.update(record);
+          }
+        } else if (queueStatus && queueStatus.row.parentNode) {
+          queueStatus.row.remove();
+          queueStatus = null;
+        }
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      } else if (ev.activity_status !== undefined) {
+        const record = {
+          code: ev.activity_status,
+          text: ev.activity_message || 'Working with the provider...',
+          status: 'live',
+        };
+        if (!activityStatus) {
+          activityStatus = createActivityStatusRow(record);
+          messagesEl.insertBefore(activityStatus.row, pendingContextRow);
+        } else {
+          activityStatus.update(record);
+        }
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      } else if (ev.tool_event !== undefined || ev.tool_name !== undefined) {
+        const record = {
+          tool_call_id: ev.tool_call_id || '',
+          tool_name: ev.tool_name || 'Tool',
+          arguments: ev.tool_arguments || '',
+          result: ev.tool_result || '',
+          status: ev.tool_status || (ev.tool_event === 'start' ? 'live' : 'done'),
+        };
+        assistantTurn.upsertTool(record);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      } else if (ev.compression_status !== undefined) {
+        const isDone = ev.compression_status === 'compression_done';
+        const message = ev.compression_message || (isDone
+          ? 'Context window compressed.'
+          : 'Compressing context window...');
+        if (!compressionStatus) {
+          compressionStatus = createCompressionRow({
+            text: message,
+            status: isDone ? 'done' : 'live',
+          });
+          messagesEl.insertBefore(compressionStatus.row, pendingContextRow);
+        } else if (isDone) {
+          compressionStatus.finalize(message);
+        } else {
+          compressionStatus.update({ text: message, status: 'live' });
+        }
+        if (isDone && !compressionRecorded) {
+          state.messages.push({
+            role: 'compression',
+            content: JSON.stringify({ text: message, status: 'done' }),
+            created_at: '',
+          });
+          compressionRecorded = true;
+        }
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      } else if (ev.ctx_used !== undefined) {
+        contextUsageText = formatContextUsageText(ev.ctx_used, ev.ctx_total);
+        pendingContextRow.classList.remove('is-pending');
+        const valueEl = pendingContextRow.querySelector('.context-usage-value');
+        if (valueEl) valueEl.textContent = contextUsageText.replace(/^CTX:\s*/, '');
+        if (!contextRecorded) {
+          state.messages.push({ role: 'context', content: contextUsageText, created_at: '' });
+          contextRecorded = true;
+        }
+        messagesEl.scrollTop = messagesEl.scrollHeight;
       } else if (ev.done) {
         // done event — finalize handled below
       } else if (ev.error) {
@@ -1936,24 +3323,71 @@ async function sendMessage() {
 )ASSET"
     R"ASSET(    }, abortCtrl.signal);
 
+    if (!errorMsg && !streamState.completed && !streamState.aborted) {
+      errorMsg = 'The response stream ended before the server sent a completion event.';
+    }
+
     if (errorMsg) {
-      finalize('');
-      const sr = $('streaming-row');
+      const partialAssistant = assistantTurn.finalize();
+      if (assistantTurn.hasContent()) {
+        state.messages.push({
+          role: 'assistant',
+          content: partialAssistant.text,
+          ui_trace: partialAssistant.ui_trace,
+          created_at: '',
+        });
+      } else {
+        assistantTurn.remove();
+      }
       const errRow = buildMessageRow('error', '⚠ ' + errorMsg);
-      if (sr) sr.replaceWith(errRow); else messagesEl.appendChild(errRow);
+      messagesEl.appendChild(errRow);
     } else {
-      const finalText = finalize();
-      state.messages.push({ role: 'assistant', content: finalText, created_at: '' });
+      const finalAssistant = assistantTurn.finalize();
+      state.messages.push({
+        role: 'assistant',
+        content: finalAssistant.text,
+        ui_trace: finalAssistant.ui_trace,
+        created_at: '',
+      });
     }
 
   } catch (e) {
     if (e.name !== 'AbortError') {
-      finalize('');
-      const sr = $('streaming-row');
-      if (sr) sr.remove();
+      const partialAssistant = assistantTurn.finalize();
+      if (assistantTurn.hasContent()) {
+        state.messages.push({
+          role: 'assistant',
+          content: partialAssistant.text,
+          ui_trace: partialAssistant.ui_trace,
+          created_at: '',
+        });
+      } else {
+        assistantTurn.remove();
+      }
+      if (queueStatus && queueStatus.row.parentNode) {
+        queueStatus.row.remove();
+      }
+      if (activityStatus && activityStatus.row.parentNode) {
+        activityStatus.row.remove();
+      }
+      if (compressionStatus && !compressionRecorded && compressionStatus.row.parentNode) {
+        compressionStatus.row.remove();
+      }
       messagesEl.appendChild(buildMessageRow('error', '⚠ Network error: ' + e.message));
     }
   } finally {
+    if (!contextUsageText && pendingContextRow.parentNode) {
+      pendingContextRow.remove();
+    }
+    if (queueStatus && queueStatus.row.parentNode) {
+      queueStatus.row.remove();
+    }
+    if (activityStatus && activityStatus.row.parentNode) {
+      activityStatus.row.remove();
+    }
+    if (compressionStatus && !compressionRecorded && compressionStatus.row.parentNode) {
+      compressionStatus.row.remove();
+    }
     state.sending = false;
     setInputEnabled(true);
     messageInput.focus();
@@ -1966,6 +3400,30 @@ messageInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
+  }
+});
+if (headerAccountBtn) {
+  headerAccountBtn.addEventListener('click', openAccountModal);
+}
+if (accountCloseBtn) {
+  accountCloseBtn.addEventListener('click', closeAccountModal);
+}
+if (accountCancelBtn) {
+  accountCancelBtn.addEventListener('click', closeAccountModal);
+}
+if (accountForm) {
+  accountForm.addEventListener('submit', saveAccountSettings);
+}
+if (accountModal) {
+  accountModal.addEventListener('click', e => {
+    if (e.target && e.target.dataset && e.target.dataset.closeAccountModal === 'true') {
+      closeAccountModal();
+    }
+  });
+}
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && accountModal && !accountModal.hidden) {
+    closeAccountModal();
   }
 });
 
@@ -2010,7 +3468,9 @@ async function init() {
       return;
     }
     state.username = me.username || '';
-    headerUser.textContent = me.display_name || me.username || '';
+    state.displayName = me.display_name || '';
+    state.email = me.email || '';
+    headerUser.textContent = state.displayName || me.username || '';
   }
 
   state.projects = await projResp.json();

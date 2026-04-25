@@ -6,6 +6,8 @@ Hierarchical Structured Compression (HSC) is a multi-layered strategy for managi
 
 The result is a compressed context that retains verbatim precision where it matters, narrative coherence for intent and arc, structured data for quick lookup, and full fidelity for the most recent exchanges.
 
+See also: `l0_artifact_memory_requirements.md` for the implemented Layer 0 artifact-memory extension that adds per-chat code and diagram recall on top of the existing HSC layers.
+
 ---
 
 ## Architecture

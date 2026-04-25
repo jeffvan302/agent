@@ -7,6 +7,7 @@ document.getElementById('login-form').addEventListener('submit', async function(
   const errEl = document.getElementById('login-error');
   const username = document.getElementById('username').value.trim();
   const password = document.getElementById('password').value;
+  const rememberMe = !!document.getElementById('remember-me')?.checked;
 
   btn.disabled = true;
   btn.textContent = 'Signing in...';
@@ -16,7 +17,7 @@ document.getElementById('login-form').addEventListener('submit', async function(
     const resp = await fetch('/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, remember_me: rememberMe }),
     });
     const data = await resp.json();
 

@@ -80,8 +80,8 @@ if /I "%BUILD_TYPE%"=="release" (
 )
 
 set INCLUDES=/I"%SCRIPT_DIR%src" /I"%SCRIPT_DIR%third_party" /I"%SCRIPT_DIR%third_party\sqlite" /I"%SCRIPT_DIR%third_party\httplib"
-set SOURCES=src\main.cpp src\util.cpp src\storage.cpp src\openai_client.cpp src\prompt_dialog.cpp src\project_setup_dialog.cpp src\project_settings_dialog.cpp src\provider_manager.cpp src\mcp_manager.cpp src\mcp_server_manager.cpp src\rag_service.cpp src\rag_service_manager.cpp src\context_compression.cpp src\context_compression_manager.cpp src\model_tools_manager.cpp src\web_user_store.cpp src\web_server.cpp src\web_assets_default.cpp src\web_config_dialog.cpp src\admin_config_dialog.cpp src\openssl_applink.c third_party\sqlite\sqlite3.c
-set LIBS=user32.lib gdi32.lib comctl32.lib comdlg32.lib shell32.lib shlwapi.lib ole32.lib winhttp.lib cabinet.lib bcrypt.lib advapi32.lib
+set SOURCES=src\main.cpp src\util.cpp src\storage.cpp src\openai_client.cpp src\ollama_cli_bridge.cpp src\ollama_local_server.cpp src\ollama_api_client.cpp src\prompt_dialog.cpp src\project_setup_dialog.cpp src\project_settings_dialog.cpp src\provider_manager.cpp src\provider_catalog.cpp src\provider_auth_bridge.cpp src\mcp_manager.cpp src\mcp_server_manager.cpp src\rag_service.cpp src\rag_service_manager.cpp src\remote_ollama_worker.cpp src\remote_provider_worker.cpp src\remote_worker_setup_dialog.cpp src\context_compression.cpp src\context_compression_manager.cpp src\model_tools_manager.cpp src\web_user_store.cpp src\web_server.cpp src\web_assets_default.cpp src\web_config_dialog.cpp src\admin_config_dialog.cpp src\openssl_applink.c third_party\sqlite\sqlite3.c
+set LIBS=user32.lib gdi32.lib comctl32.lib comdlg32.lib shell32.lib shlwapi.lib ole32.lib winhttp.lib cabinet.lib bcrypt.lib crypt32.lib advapi32.lib
 
 rem -- OpenSSL auto-detection ---------------------------------------------------
 rem If third_party\openssl\ exists and contains the expected headers, enable HTTPS.

@@ -8,7 +8,7 @@
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Data structures for web user / group / project-binding storage.
-// Persisted to <app_root>/users.json via WebUserStore.
+// Persisted to <config_root>/users.json via WebUserStore.
 // ──────────────────────────────────────────────────────────────────────────────
 
 struct WebUser {

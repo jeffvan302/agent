@@ -2,13 +2,18 @@
 
 #include "openai_client.h"
 #include "util.h"
+#include "variable_resolver.h"
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <regex>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 using json = nlohmann::json;
@@ -52,7 +57,838 @@ std::string CompressionStrategyToString(ContextCompressionStrategy strategy) {
         return "none";
     }
 }
+
+std::string Layer3SchemaJson() {
+    return R"({
+  "primary_goal": "string",
+  "constraints": ["string"],
+  "preferences": ["string"],
+  "decisions": [{"what": "string", "why": "string", "turn": int}],
+  "failed_approaches": [{"approach": "string", "reason_abandoned": "string", "turn": int}],
+  "open_questions": ["string"],
+  "entities": {"key": "value"},
+  "current_phase": "string",
+  "user_flagged_notes": ["string"]
+})";
+}
+
+std::string ReplaceAllCopy(std::string text, const std::string& from, const std::string& to) {
+    if (from.empty()) {
+        return text;
+    }
+
+    size_t pos = 0;
+    while ((pos = text.find(from, pos)) != std::string::npos) {
+        text.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+    return text;
+}
+
+std::string ResolveLayer2PromptTemplate(const Layer2Config& config) {
+    return TrimStr(config.prompt_template).empty()
+        ? ContextCompressionService::DefaultLayer2PromptTemplate()
+        : config.prompt_template;
+}
+
+std::string ResolveLayer3PromptTemplate(const Layer3Config& config) {
+    return TrimStr(config.prompt_template).empty()
+        ? ContextCompressionService::DefaultLayer3PromptTemplate()
+        : config.prompt_template;
+}
+
+std::string ApplyPromptTemplate(std::string prompt_template, int max_tokens,
+                                const std::optional<std::string>& schema = std::nullopt) {
+    prompt_template = TrimStr(prompt_template);
+    if (prompt_template.empty()) {
+        return prompt_template;
+    }
+
+    prompt_template = ReplaceAllCopy(std::move(prompt_template), "{{max_tokens}}", std::to_string(max_tokens));
+
+    if (schema.has_value()) {
+        if (prompt_template.find("{{schema}}") != std::string::npos) {
+            prompt_template = ReplaceAllCopy(std::move(prompt_template), "{{schema}}", *schema);
+        } else {
+            prompt_template += "\n\nSchema:\n";
+            prompt_template += *schema;
+        }
+    }
+
+    return prompt_template;
+}
+
+std::string ResolveLayer0CapturePromptTemplate(const Layer0Config& config) {
+    return TrimStr(config.capture_prompt_template).empty()
+        ? ContextCompressionService::DefaultLayer0CapturePromptTemplate()
+        : config.capture_prompt_template;
+}
+
+std::string ResolveLayer0SelectionPromptTemplate(const Layer0Config& config) {
+    return TrimStr(config.selection_prompt_template).empty()
+        ? ContextCompressionService::DefaultLayer0SelectionPromptTemplate()
+        : config.selection_prompt_template;
+}
+
+std::string NormalizeArtifactKey(std::string value) {
+    value = TrimStr(std::move(value));
+    std::string normalized;
+    normalized.reserve(value.size());
+    bool last_was_underscore = false;
+    for (const unsigned char ch : value) {
+        if (std::isalnum(ch)) {
+            normalized.push_back(static_cast<char>(std::tolower(ch)));
+            last_was_underscore = false;
+        } else if (!last_was_underscore) {
+            normalized.push_back('_');
+            last_was_underscore = true;
+        }
+    }
+    while (!normalized.empty() && normalized.front() == '_') normalized.erase(normalized.begin());
+    while (!normalized.empty() && normalized.back() == '_') normalized.pop_back();
+    return normalized;
+}
+
+std::string SlugFromText(const std::string& value, const std::string& fallback) {
+    std::string slug = NormalizeArtifactKey(value);
+    if (!slug.empty()) return slug;
+    return NormalizeArtifactKey(fallback);
+}
+
+std::string NormalizeMultilineText(const std::string& value) {
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (size_t i = 0; i < value.size(); ++i) {
+        char ch = value[i];
+        if (ch == '\r') {
+            if (i + 1 < value.size() && value[i + 1] == '\n') continue;
+            normalized.push_back('\n');
+        } else {
+            normalized.push_back(ch);
+        }
+    }
+    return normalized;
+}
+
+std::string Fnv1aHashHex(const std::string& value) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (unsigned char ch : value) {
+        hash ^= static_cast<uint64_t>(ch);
+        hash *= 1099511628211ULL;
+    }
+    std::ostringstream stream;
+    stream << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return stream.str();
+}
+
+std::string MakeArtifactId() {
+    return GenerateId("artifact");
+}
+
+std::string JsonStringOrEmpty(const json& value, const char* key) {
+    if (!value.is_object() || !value.contains(key)) return {};
+    if (!value[key].is_string()) return {};
+    return TrimStr(value[key].get<std::string>());
+}
+
+std::vector<std::string> JsonStringArray(const json& value, const char* key) {
+    std::vector<std::string> out;
+    if (!value.is_object() || !value.contains(key) || !value[key].is_array()) return out;
+    for (const auto& item : value[key]) {
+        if (item.is_string()) {
+            const std::string text = TrimStr(item.get<std::string>());
+            if (!text.empty()) out.push_back(text);
+        }
+    }
+    return out;
+}
+
+std::optional<json> ParseLooseJson(const std::string& text) {
+    const std::string trimmed = TrimStr(text);
+    if (trimmed.empty()) return std::nullopt;
+
+    try {
+        return json::parse(trimmed);
+    } catch (...) {
+    }
+
+    const size_t object_start = trimmed.find('{');
+    const size_t object_end = trimmed.rfind('}');
+    if (object_start != std::string::npos && object_end != std::string::npos && object_end > object_start) {
+        try {
+            return json::parse(trimmed.substr(object_start, object_end - object_start + 1));
+        } catch (...) {
+        }
+    }
+
+    const size_t array_start = trimmed.find('[');
+    const size_t array_end = trimmed.rfind(']');
+    if (array_start != std::string::npos && array_end != std::string::npos && array_end > array_start) {
+        try {
+            return json::parse(trimmed.substr(array_start, array_end - array_start + 1));
+        } catch (...) {
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::string NormalizeArtifactType(std::string type, std::string language) {
+    type = NormalizeArtifactKey(std::move(type));
+    language = NormalizeArtifactKey(std::move(language));
+    if (type.empty()) type = language;
+    if (type == "js") type = "javascript";
+    if (type == "ts") type = "typescript";
+    if (type == "yml") type = "yaml";
+    if (type == "cplusplus" || type == "cxx" || type == "cc") type = "cpp";
+    if (type == "vegalite" || type == "vega_lite") type = "vega-lite";
+    if (type == "cytoscapejs" || type == "cytoscape_js") type = "cytoscape";
+    if (type.empty()) type = "code";
+    return type;
+}
+
+std::string NormalizeArtifactLanguage(std::string language, const std::string& type) {
+    language = NormalizeArtifactKey(std::move(language));
+    if (!language.empty()) return language;
+    if (type == "vega-lite") return "json";
+    if (type == "cytoscape") return "json";
+    if (type == "code") return "text";
+    return type;
+}
+
+std::filesystem::path ResolveLayer0StorageRoot(
+    const Layer0Config& config,
+    const std::vector<ProjectMcpVariableValue>& resolved_variables) {
+    const std::string resolved =
+        Trim(variable_resolver::ExpandTemplate(config.storage_folder_template, resolved_variables));
+    if (resolved.empty()) return {};
+    std::filesystem::path root(Utf8ToWide(resolved));
+    if (!root.is_absolute()) return {};
+    return root;
+}
+
+json EmptyArtifactIndex(const std::string& project_id, const std::string& chat_id) {
+    return json{
+        {"schema_version", 1},
+        {"project_id", project_id},
+        {"chat_id", chat_id},
+        {"updated_at", CurrentTimestampUtc()},
+        {"artifacts", json::array()},
+    };
+}
+
+bool LoadArtifactIndex(const std::filesystem::path& path, json* index_out) {
+    if (!index_out) return false;
+    if (!std::filesystem::exists(path)) return false;
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) return false;
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    try {
+        *index_out = json::parse(buffer.str());
+        if (!index_out->is_object()) return false;
+        if (!index_out->contains("artifacts") || !(*index_out)["artifacts"].is_array()) {
+            (*index_out)["artifacts"] = json::array();
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool SaveTextFile(const std::filesystem::path& path, const std::string& text) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) return false;
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+    return output.good();
+}
+
+json* FindArtifactById(json& index, const std::string& artifact_id) {
+    if (!index.is_object() || !index.contains("artifacts") || !index["artifacts"].is_array()) return nullptr;
+    for (auto& artifact : index["artifacts"]) {
+        if (artifact.is_object() && artifact.value("artifact_id", "") == artifact_id) {
+            return &artifact;
+        }
+    }
+    return nullptr;
+}
+
+json* FindLatestArtifactForKey(json& index, const std::string& artifact_key) {
+    if (!index.is_object() || !index.contains("artifacts") || !index["artifacts"].is_array()) return nullptr;
+    json* latest = nullptr;
+    int latest_version = -1;
+    for (auto& artifact : index["artifacts"]) {
+        if (!artifact.is_object()) continue;
+        if (artifact.value("artifact_key", "") != artifact_key) continue;
+        const int version = artifact.value("version", 0);
+        const bool is_latest = artifact.value("latest", false);
+        if (is_latest && version >= latest_version) {
+            latest = &artifact;
+            latest_version = version;
+        } else if (!latest && version > latest_version) {
+            latest = &artifact;
+            latest_version = version;
+        }
+    }
+    return latest;
+}
+
+std::vector<json*> CollectArtifactsForKey(json& index, const std::string& artifact_key) {
+    std::vector<json*> out;
+    if (!index.is_object() || !index.contains("artifacts") || !index["artifacts"].is_array()) return out;
+    for (auto& artifact : index["artifacts"]) {
+        if (artifact.is_object() && artifact.value("artifact_key", "") == artifact_key) {
+            out.push_back(&artifact);
+        }
+    }
+    return out;
+}
+
+std::string BuildArtifactMarkdown(const json& artifact) {
+    std::ostringstream stream;
+    auto yaml_line = [&](const std::string& key, const std::string& value) {
+        stream << key << ": " << value << "\n";
+    };
+    auto yaml_line_quoted = [&](const std::string& key, const std::string& value) {
+        std::string escaped = value;
+        escaped = ReplaceAllCopy(std::move(escaped), "\\", "\\\\");
+        escaped = ReplaceAllCopy(std::move(escaped), "\"", "\\\"");
+        stream << key << ": \"" << escaped << "\"\n";
+    };
+
+    stream << "---\n";
+    yaml_line_quoted("artifact_id", artifact.value("artifact_id", ""));
+    yaml_line_quoted("artifact_key", artifact.value("artifact_key", ""));
+    yaml_line("version", std::to_string(artifact.value("version", 1)));
+    yaml_line_quoted("type", artifact.value("type", ""));
+    yaml_line_quoted("language", artifact.value("language", ""));
+    yaml_line_quoted("status", artifact.value("status", "active"));
+    yaml_line_quoted("supersedes", artifact.value("supersedes", ""));
+    yaml_line_quoted("project_id", artifact.value("project_id", ""));
+    yaml_line_quoted("chat_id", artifact.value("chat_id", ""));
+    yaml_line("source_turn_start", std::to_string(artifact.value("source_turn_start", 0)));
+    yaml_line("source_turn_end", std::to_string(artifact.value("source_turn_end", 0)));
+    yaml_line_quoted("summary", artifact.value("summary", ""));
+    yaml_line_quoted("user_intent", artifact.value("user_intent", ""));
+    yaml_line_quoted("problem_it_solves", artifact.value("problem_it_solves", ""));
+    stream << "tags:\n";
+    if (artifact.contains("tags") && artifact["tags"].is_array() && !artifact["tags"].empty()) {
+        for (const auto& tag : artifact["tags"]) {
+            if (tag.is_string()) {
+                stream << "  - \"" << ReplaceAllCopy(tag.get<std::string>(), "\"", "\\\"") << "\"\n";
+            }
+        }
+    } else {
+        stream << "  - \"artifact\"\n";
+    }
+    yaml_line_quoted("content_hash", artifact.value("content_hash", ""));
+    yaml_line_quoted("created_at", artifact.value("created_at", ""));
+    yaml_line_quoted("updated_at", artifact.value("updated_at", ""));
+    stream << "---\n\n";
+
+    stream << "# Summary\n\n" << artifact.value("summary", "") << "\n\n";
+    stream << "## User Intent\n\n" << artifact.value("user_intent", "") << "\n\n";
+    stream << "## Problem Solved\n\n" << artifact.value("problem_it_solves", "") << "\n\n";
+    stream << "## Artifact\n\n";
+    stream << "```" << artifact.value("language", "") << "\n";
+    stream << artifact.value("content", "") << "\n";
+    stream << "```\n";
+
+    return stream.str();
+}
+
+std::string BuildArtifactIndexMarkdown(const json& index) {
+    std::vector<json> latest;
+    if (index.is_object() && index.contains("artifacts") && index["artifacts"].is_array()) {
+        for (const auto& artifact : index["artifacts"]) {
+            if (artifact.is_object() && artifact.value("latest", false)) {
+                latest.push_back(artifact);
+            }
+        }
+    }
+    std::sort(latest.begin(), latest.end(), [](const json& left, const json& right) {
+        return left.value("artifact_key", "") < right.value("artifact_key", "");
+    });
+
+    std::ostringstream stream;
+    stream << "# Artifact Memory Index\n\n";
+    if (latest.empty()) {
+        stream << "(No artifacts stored yet)\n";
+        return stream.str();
+    }
+
+    stream << "| Key | Version | Type | Summary | Status | File |\n";
+    stream << "| --- | --- | --- | --- | --- | --- |\n";
+    for (const auto& artifact : latest) {
+        stream << "| " << artifact.value("artifact_key", "") << " | "
+               << artifact.value("version", 1) << " | "
+               << artifact.value("type", "") << " | "
+               << artifact.value("summary", "") << " | "
+               << artifact.value("status", "active") << " | "
+               << artifact.value("file_path", "") << " |\n";
+    }
+    return stream.str();
+}
+
+std::string BuildCompactArtifactIndexSummary(const json& index, int max_rows) {
+    std::vector<json> latest;
+    if (index.is_object() && index.contains("artifacts") && index["artifacts"].is_array()) {
+        for (const auto& artifact : index["artifacts"]) {
+            if (artifact.is_object() && artifact.value("latest", false)) {
+                latest.push_back(artifact);
+            }
+        }
+    }
+
+    std::sort(latest.begin(), latest.end(), [](const json& left, const json& right) {
+        const std::string left_time = left.value("updated_at", left.value("created_at", ""));
+        const std::string right_time = right.value("updated_at", right.value("created_at", ""));
+        return left_time > right_time;
+    });
+
+    if (max_rows > 0 && static_cast<int>(latest.size()) > max_rows) {
+        latest.resize(static_cast<size_t>(max_rows));
+    }
+
+    if (latest.empty()) return "(No artifact memory entries yet)";
+
+    std::ostringstream stream;
+    for (const auto& artifact : latest) {
+        stream << "- " << artifact.value("artifact_id", "")
+               << " | " << artifact.value("artifact_key", "")
+               << " v" << artifact.value("version", 1)
+               << " | " << artifact.value("type", "")
+               << " | " << artifact.value("summary", "") << "\n";
+    }
+    return stream.str();
+}
+
+std::vector<json> LatestArtifacts(const json& index) {
+    std::vector<json> latest;
+    if (index.is_object() && index.contains("artifacts") && index["artifacts"].is_array()) {
+        for (const auto& artifact : index["artifacts"]) {
+            if (artifact.is_object() && artifact.value("latest", false)) {
+                latest.push_back(artifact);
+            }
+        }
+    }
+    std::sort(latest.begin(), latest.end(), [](const json& left, const json& right) {
+        const std::string left_time = left.value("updated_at", left.value("created_at", ""));
+        const std::string right_time = right.value("updated_at", right.value("created_at", ""));
+        if (left_time != right_time) return left_time > right_time;
+        return left.value("artifact_key", "") < right.value("artifact_key", "");
+    });
+    return latest;
+}
+
+std::string BuildLayer0IndexBlock(const std::vector<json>& selected_artifacts) {
+    if (selected_artifacts.empty()) {
+        return "(No artifact memory entries)";
+    }
+    std::ostringstream stream;
+    for (const auto& artifact : selected_artifacts) {
+        stream << "- " << artifact.value("artifact_key", "")
+               << " v" << artifact.value("version", 1)
+               << " | " << artifact.value("type", "")
+               << " | ";
+        if (artifact.contains("relevance_note") && artifact["relevance_note"].is_string() &&
+            !TrimStr(artifact["relevance_note"].get<std::string>()).empty()) {
+            stream << artifact["relevance_note"].get<std::string>();
+        } else {
+            stream << artifact.value("summary", "");
+        }
+        stream << "\n";
+    }
+    return TrimStr(stream.str());
+}
+
+std::vector<json> FallbackSelectedArtifacts(const json& index, int max_rows) {
+    auto latest = LatestArtifacts(index);
+    if (max_rows > 0 && static_cast<int>(latest.size()) > max_rows) {
+        latest.resize(static_cast<size_t>(max_rows));
+    }
+    for (auto& artifact : latest) {
+        artifact["relevance_note"] = artifact.value("summary", "Latest stored artifact");
+    }
+    return latest;
+}
+
+std::vector<json> ExtractArtifactCandidates(
+    const std::vector<MessageRecord>& new_turns,
+    const json& current_index,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const Layer0Config& config,
+    std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller) {
+    std::vector<json> artifacts;
+    if (!config.enabled || config.capture_model_id.empty() || config.capture_model_provider_id.empty() || new_turns.empty()) {
+        return artifacts;
+    }
+
+    ChatRequestOptions opts;
+    opts.model.id = config.capture_model_id;
+    if (auto provider = OpenAIClient::LookupProvider(config.capture_model_provider_id)) {
+        opts.provider = *provider;
+    }
+    opts.max_tokens = 4096;
+    opts.temperature = 0.1;
+
+    std::ostringstream prompt;
+    prompt << ApplyPromptTemplate(ResolveLayer0CapturePromptTemplate(config), 0) << "\n\n";
+    prompt << "PROJECT ID: " << project_id << "\n";
+    prompt << "CHAT ID: " << chat_id << "\n\n";
+    prompt << "CURRENT ARTIFACT INDEX (compact):\n";
+    prompt << BuildCompactArtifactIndexSummary(current_index, 50) << "\n\n";
+    prompt << "NEW TURNS SINCE LAST L0 CAPTURE:\n";
+    for (size_t i = 0; i < new_turns.size(); ++i) {
+        prompt << "[Turn " << i << "][" << new_turns[i].role << "]:\n"
+               << new_turns[i].content << "\n\n";
+    }
+    prompt << "Return a JSON object using this schema:\n"
+           << "{\n"
+           << "  \"artifacts\": [\n"
+           << "    {\n"
+           << "      \"artifact_key\": \"stable_key\",\n"
+           << "      \"type\": \"html|svg|mermaid|vega-lite|cytoscape|cpp|python|json|markdown|code|...\",\n"
+           << "      \"language\": \"language tag for fenced block\",\n"
+           << "      \"summary\": \"short summary\",\n"
+           << "      \"user_intent\": \"what the user wanted\",\n"
+           << "      \"problem_it_solves\": \"why it matters\",\n"
+           << "      \"tags\": [\"tag\"],\n"
+           << "      \"content\": \"normalized artifact content\",\n"
+           << "      \"supersedes_artifact_id\": \"optional\",\n"
+           << "      \"supersedes_artifact_key\": \"optional\"\n"
+           << "    }\n"
+           << "  ]\n"
+           << "}\n";
+
+    MessageRecord user_message;
+    user_message.role = "user";
+    user_message.content = prompt.str();
+    opts.messages.push_back(std::move(user_message));
+
+    const auto result = model_caller(opts);
+    if (!result || !result->success || TrimStr(result->message.content).empty()) {
+        return artifacts;
+    }
+
+    const auto payload = ParseLooseJson(result->message.content);
+    if (!payload) return artifacts;
+
+    if (payload->is_array()) {
+        for (const auto& item : *payload) {
+            if (item.is_object()) artifacts.push_back(item);
+        }
+        return artifacts;
+    }
+
+    if (payload->is_object() && payload->contains("artifacts") && (*payload)["artifacts"].is_array()) {
+        for (const auto& item : (*payload)["artifacts"]) {
+            if (item.is_object()) artifacts.push_back(item);
+        }
+    }
+    return artifacts;
+}
+
+void PersistArtifactCandidates(
+    json& index,
+    const std::vector<json>& candidates,
+    const std::filesystem::path& storage_root,
+    const std::string& project_id,
+    const std::string& chat_id,
+    size_t source_turn_start,
+    size_t source_turn_end) {
+    const std::string now = CurrentTimestampUtc();
+    if (!index.contains("artifacts") || !index["artifacts"].is_array()) {
+        index["artifacts"] = json::array();
+    }
+
+    for (const auto& candidate : candidates) {
+        std::string content = NormalizeMultilineText(JsonStringOrEmpty(candidate, "content"));
+        if (TrimStr(content).empty()) {
+            continue;
+        }
+
+        std::string artifact_key = NormalizeArtifactKey(JsonStringOrEmpty(candidate, "artifact_key"));
+        std::string supersedes_id = JsonStringOrEmpty(candidate, "supersedes_artifact_id");
+        std::string supersedes_key = NormalizeArtifactKey(JsonStringOrEmpty(candidate, "supersedes_artifact_key"));
+
+        if (artifact_key.empty() && !supersedes_id.empty()) {
+            if (json* prior = FindArtifactById(index, supersedes_id)) {
+                artifact_key = NormalizeArtifactKey(prior->value("artifact_key", ""));
+            }
+        }
+        if (artifact_key.empty() && !supersedes_key.empty()) {
+            artifact_key = supersedes_key;
+        }
+        if (artifact_key.empty()) {
+            artifact_key = SlugFromText(
+                JsonStringOrEmpty(candidate, "summary"),
+                JsonStringOrEmpty(candidate, "type") + "_" + JsonStringOrEmpty(candidate, "language"));
+        }
+        if (artifact_key.empty()) {
+            artifact_key = "artifact";
+        }
+
+        std::string type = NormalizeArtifactType(
+            JsonStringOrEmpty(candidate, "type"),
+            JsonStringOrEmpty(candidate, "language"));
+        std::string language = NormalizeArtifactLanguage(JsonStringOrEmpty(candidate, "language"), type);
+        std::vector<std::string> tags = JsonStringArray(candidate, "tags");
+        if (tags.empty()) {
+            tags.push_back(type);
+        }
+        const std::string summary = JsonStringOrEmpty(candidate, "summary");
+        const std::string user_intent = JsonStringOrEmpty(candidate, "user_intent");
+        const std::string problem_it_solves = JsonStringOrEmpty(candidate, "problem_it_solves");
+        const std::string content_hash = Fnv1aHashHex(content);
+
+        json* latest = FindLatestArtifactForKey(index, artifact_key);
+        if (!latest && !supersedes_id.empty()) {
+            latest = FindArtifactById(index, supersedes_id);
+        }
+
+        if (latest && latest->value("content_hash", "") == content_hash) {
+            (*latest)["summary"] = summary;
+            (*latest)["user_intent"] = user_intent;
+            (*latest)["problem_it_solves"] = problem_it_solves;
+            (*latest)["type"] = type;
+            (*latest)["language"] = language;
+            (*latest)["tags"] = tags;
+            (*latest)["status"] = "active";
+            (*latest)["latest"] = true;
+            (*latest)["updated_at"] = now;
+            (*latest)["last_seen_at"] = now;
+            const std::string file_path_text = latest->value("file_path", "");
+            if (!file_path_text.empty()) {
+                json markdown_artifact = *latest;
+                markdown_artifact["content"] = content;
+                SaveTextFile(storage_root / std::filesystem::path(Utf8ToWide(file_path_text)),
+                    BuildArtifactMarkdown(markdown_artifact));
+            }
+            continue;
+        }
+
+        int next_version = 1;
+        std::string supersedes = supersedes_id;
+        for (json* artifact : CollectArtifactsForKey(index, artifact_key)) {
+            next_version = std::max(next_version, artifact->value("version", 0) + 1);
+            if (artifact->value("latest", false)) {
+                artifact->operator[]("latest") = false;
+                artifact->operator[]("status") = "superseded";
+                artifact->operator[]("updated_at") = now;
+                supersedes = artifact->value("artifact_id", supersedes);
+            }
+        }
+
+        json artifact = {
+            {"artifact_id", MakeArtifactId()},
+            {"artifact_key", artifact_key},
+            {"version", next_version},
+            {"latest", true},
+            {"status", "active"},
+            {"type", type},
+            {"language", language},
+            {"summary", summary},
+            {"user_intent", user_intent},
+            {"problem_it_solves", problem_it_solves},
+            {"tags", tags},
+            {"content_hash", content_hash},
+            {"supersedes", supersedes},
+            {"project_id", project_id},
+            {"chat_id", chat_id},
+            {"source_turn_start", static_cast<int>(source_turn_start)},
+            {"source_turn_end", static_cast<int>(source_turn_end)},
+            {"created_at", now},
+            {"updated_at", now},
+            {"last_seen_at", now},
+        };
+
+        std::ostringstream file_name;
+        file_name << "artifact_" << artifact_key << "_v"
+                  << std::setw(3) << std::setfill('0') << next_version << ".md";
+        const std::filesystem::path relative_path = std::filesystem::path("artifacts") / file_name.str();
+        artifact["file_path"] = WideToUtf8(relative_path.wstring());
+        json markdown_artifact = artifact;
+        markdown_artifact["content"] = content;
+        index["artifacts"].push_back(artifact);
+
+        SaveTextFile(storage_root / relative_path, BuildArtifactMarkdown(markdown_artifact));
+    }
+
+    index["updated_at"] = now;
+}
+
+std::vector<json> SelectArtifactsForInjection(
+    const json& index,
+    const std::string& state_json,
+    const std::vector<MessageRecord>& recent_turns,
+    const Layer0Config& config,
+    std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller) {
+    if (!config.enabled || config.selection_model_id.empty() || config.selection_model_provider_id.empty()) {
+        return FallbackSelectedArtifacts(index, std::max(1, config.max_injected_rows));
+    }
+
+    ChatRequestOptions opts;
+    opts.model.id = config.selection_model_id;
+    if (auto provider = OpenAIClient::LookupProvider(config.selection_model_provider_id)) {
+        opts.provider = *provider;
+    }
+    opts.max_tokens = 2048;
+    opts.temperature = 0.1;
+
+    std::ostringstream prompt;
+    prompt << ResolveLayer0SelectionPromptTemplate(config) << "\n\n";
+    prompt << "CURRENT ARTIFACT INDEX (latest entries):\n";
+    prompt << BuildCompactArtifactIndexSummary(index, 100) << "\n\n";
+    prompt << "LATEST STRUCTURED CONVERSATION STATE:\n";
+    prompt << (state_json.empty() ? "{}" : state_json) << "\n\n";
+    prompt << "RECENT TURNS:\n";
+    for (size_t i = 0; i < recent_turns.size(); ++i) {
+        prompt << "[Turn " << i << "][" << recent_turns[i].role << "]:\n"
+               << recent_turns[i].content << "\n\n";
+    }
+    prompt << "Return JSON only using this schema:\n"
+           << "{\n"
+           << "  \"selected\": [\n"
+           << "    {\n"
+           << "      \"artifact_id\": \"artifact_...\",\n"
+           << "      \"artifact_key\": \"stable_key\",\n"
+           << "      \"version\": 1,\n"
+           << "      \"type\": \"html\",\n"
+           << "      \"relevance_note\": \"why this matters next\"\n"
+           << "    }\n"
+           << "  ]\n"
+           << "}\n"
+           << "Keep the list to at most " << std::max(1, config.max_injected_rows) << " items.";
+
+    MessageRecord user_message;
+    user_message.role = "user";
+    user_message.content = prompt.str();
+    opts.messages.push_back(std::move(user_message));
+
+    const auto result = model_caller(opts);
+    if (!result || !result->success || TrimStr(result->message.content).empty()) {
+        return FallbackSelectedArtifacts(index, std::max(1, config.max_injected_rows));
+    }
+
+    const auto payload = ParseLooseJson(result->message.content);
+    if (!payload || !payload->is_object() || !payload->contains("selected") || !(*payload)["selected"].is_array()) {
+        return FallbackSelectedArtifacts(index, std::max(1, config.max_injected_rows));
+    }
+
+    std::vector<json> selected;
+    for (const auto& item : (*payload)["selected"]) {
+        if (!item.is_object()) continue;
+        std::string artifact_id = JsonStringOrEmpty(item, "artifact_id");
+        std::string artifact_key = NormalizeArtifactKey(JsonStringOrEmpty(item, "artifact_key"));
+
+        json chosen;
+        bool found = false;
+        if (!artifact_id.empty()) {
+            json index_copy = index;
+            if (json* artifact = FindArtifactById(index_copy, artifact_id)) {
+                chosen = *artifact;
+                found = true;
+            }
+        }
+        if (!found && !artifact_key.empty()) {
+            json index_copy = index;
+            if (json* artifact = FindLatestArtifactForKey(index_copy, artifact_key)) {
+                chosen = *artifact;
+                found = true;
+            }
+        }
+        if (!found) continue;
+        chosen["relevance_note"] = JsonStringOrEmpty(item, "relevance_note");
+        selected.push_back(std::move(chosen));
+        if (static_cast<int>(selected.size()) >= std::max(1, config.max_injected_rows)) {
+            break;
+        }
+    }
+
+    if (selected.empty()) {
+        return FallbackSelectedArtifacts(index, std::max(1, config.max_injected_rows));
+    }
+    return selected;
+}
 }  // namespace
+
+std::string ContextCompressionService::DefaultLayer0CapturePromptTemplate() {
+    return
+        "You are extracting durable artifacts from a conversation for long-term chat memory.\n\n"
+        "INPUT:\n"
+        "- New turns since the last compression cycle\n"
+        "- A compact current artifact index\n\n"
+        "TASK:\n"
+        "Identify any code, diagram, markup, configuration, or structured artifacts that should be preserved as durable references.\n\n"
+        "For each artifact:\n"
+        "1. Decide whether it is new or a revision of an existing artifact.\n"
+        "2. Propose a stable artifact_key.\n"
+        "3. Summarize what the artifact is.\n"
+        "4. Summarize the user intent behind it.\n"
+        "5. Summarize what problem it solves.\n"
+        "6. Identify artifact type and language.\n"
+        "7. Return the normalized artifact content.\n"
+        "8. If it supersedes a prior artifact, identify the prior artifact_id or artifact_key.\n\n"
+        "RULES:\n"
+        "- Prefer durable artifacts over incidental snippets.\n"
+        "- Prefer the latest corrected or revised version of an artifact.\n"
+        "- Do not invent code that is not present in the conversation.\n"
+        "- Do not write files.\n"
+        "- Return JSON only.";
+}
+
+std::string ContextCompressionService::DefaultLayer0SelectionPromptTemplate() {
+    return
+        "You are selecting which artifact memory entries should be surfaced in the next compressed context window.\n\n"
+        "INPUT:\n"
+        "- The current artifact index\n"
+        "- The latest structured conversation state\n"
+        "- Recent turns\n\n"
+        "TASK:\n"
+        "Choose the latest and most relevant artifacts that the next model call should know about.\n\n"
+        "For each selected artifact:\n"
+        "1. Include artifact_id\n"
+        "2. Include artifact_key\n"
+        "3. Include version\n"
+        "4. Include type\n"
+        "5. Include a short relevance note\n\n"
+        "RULES:\n"
+        "- Prefer latest versions unless an older version is explicitly relevant.\n"
+        "- Keep the result compact.\n"
+        "- Do not include full artifact content.\n"
+        "- Return JSON only.";
+}
+
+std::string ContextCompressionService::DefaultLayer2PromptTemplate() {
+    return
+        "Generate a concise narrative summary (under {{max_tokens}} tokens) capturing:\n"
+        "1. The user's original goal and any evolution of that goal\n"
+        "2. Key decisions made and their reasoning\n"
+        "3. Approaches attempted, including failures and why they failed\n"
+        "4. Current status and what the next step should be\n"
+        "5. Any constraints, preferences, or requirements the user has stated\n\n"
+        "Rules:\n"
+        "- Do NOT include specific code, URLs, or exact numbers (those are preserved elsewhere)\n"
+        "- Do NOT summarize-from-summary: treat the previous summary as context, but prioritize accuracy from the new turns if there are contradictions\n"
+        "- Write in third person past/present tense (\"The user asked for...\", \"The current approach is...\")\n"
+        "- Flag any ambiguity or unresolved questions explicitly";
+}
+
+std::string ContextCompressionService::DefaultLayer3PromptTemplate() {
+    return
+        "Update the state object based on the new turns. Rules:\n"
+        "- Only ADD or MODIFY fields that the new turns provide evidence for.\n"
+        "- Do NOT remove existing entries unless the user explicitly contradicts or revokes them.\n"
+        "- For decisions and failed_approaches, include the turn index for traceability.\n"
+        "- Keep all values concise - single sentences, not paragraphs.\n"
+        "- Return ONLY valid JSON matching the schema. No commentary.\n\n"
+        "Schema:\n"
+        "{{schema}}";
+}
 
 // ============================================================================
 // Layer 1: Verbatim Pinning
@@ -165,7 +1001,7 @@ std::string ContextCompressionService::Layer2_Summarize(
     prompt << "You are compressing a conversation for future context.\n\n";
 
     if (prior_summary.empty()) {
-        prompt << "PREVIOUS SUMMARY: (No previous summary — this is the first compression.)\n\n";
+        prompt << "PREVIOUS SUMMARY: (No previous summary - this is the first compression.)\n\n";
     } else {
         prompt << "PREVIOUS SUMMARY:\n" << prior_summary << "\n\n";
     }
@@ -185,20 +1021,7 @@ std::string ContextCompressionService::Layer2_Summarize(
     } else {
         prompt << prior_state_json << "\n";
     }
-
-    prompt << "\nGenerate a concise narrative summary that captures:\n";
-    prompt << "1. The user's original goal and any evolution of that goal\n";
-    prompt << "2. Key decisions made and their reasoning\n";
-    prompt << "3. Approaches attempted, including failures and why they failed\n";
-    prompt << "4. Current status and what the next step should be\n";
-    prompt << "5. Any constraints, preferences, or requirements the user has stated\n\n";
-    prompt << "Rules:\n";
-    prompt << "- Do NOT include specific code, URLs, or exact numbers (those are preserved elsewhere)\n";
-    prompt << "- Do NOT summarize-from-summary: treat the previous summary as context, but prioritize\n";
-    prompt << "  accuracy from the new turns if there are any contradictions\n";
-    prompt << "- Keep the summary under " << config.max_tokens << " tokens\n";
-    prompt << "- Write in third person past/present tense (\"The user asked for...\", \"The current approach is...\")\n";
-    prompt << "- Flag any ambiguity or unresolved questions explicitly\n";
+    prompt << "\n" << ApplyPromptTemplate(ResolveLayer2PromptTemplate(config), config.max_tokens) << "\n";
 
     ChatRequestOptions opts;
     opts.model.id = config.model_id;
@@ -249,25 +1072,9 @@ std::string ContextCompressionService::Layer3_ExtractState(
         }
     }
 
-    prompt << "\nUpdate the state object based on the new turns. Rules:\n";
-    prompt << "- Only ADD or MODIFY fields that the new turns provide evidence for.\n";
-    prompt << "- Do NOT remove existing entries unless the user explicitly contradicts or revokes them.\n";
-    prompt << "- For decisions and failed_approaches, include the turn index for traceability.\n";
-    prompt << "- Keep all values concise — single sentences, not paragraphs.\n";
-    prompt << "- Return ONLY valid JSON matching the schema. No commentary.\n\n";
-
-    prompt << "Schema:\n";
-    prompt << R"({
-  "primary_goal": "string",
-  "constraints": ["string"],
-  "preferences": ["string"],
-  "decisions": [{"what": "string", "why": "string", "turn": int}],
-  "failed_approaches": [{"approach": "string", "reason_abandoned": "string", "turn": int}],
-  "open_questions": ["string"],
-  "entities": {"key": "value"},
-  "current_phase": "string",
-  "user_flagged_notes": ["string"]
-})";
+    prompt << "\n"
+           << ApplyPromptTemplate(ResolveLayer3PromptTemplate(config), config.max_tokens, Layer3SchemaJson())
+           << "\n";
 
     ChatRequestOptions opts;
     opts.model.id = config.model_id;
@@ -360,16 +1167,26 @@ std::string ContextCompressionService::BuildHierarchicalContextBlock(
     for (const auto& p : pinned) {
         pinned_tokens += EstimateMessageTokens(p);
     }
+    size_t layer0_tokens = config.layers.layer0.enabled
+        ? CountTokensSimple(state.layer0_current_index_block)
+        : 0;
     size_t summary_tokens = CountTokensSimple(state.layer2_previous_summary);
     size_t state_tokens = CountTokensSimple(state.layer3_previous_state_json);
     size_t overhead = 200;
-    size_t used = pinned_tokens + summary_tokens + state_tokens + overhead;
+    size_t used = layer0_tokens + pinned_tokens + summary_tokens + state_tokens + overhead;
     size_t remaining = used >= 4000 ? 1000 : 4000 - used;
 
     std::vector<MessageRecord> recency = Layer4_RecencyWindow(messages, config.layers.layer4, remaining);
 
     std::ostringstream block;
     block << "=== COMPRESSED CONTEXT ===\n\n";
+
+    if (config.layers.layer0.enabled) {
+        block << "## Artifact Memory (Layer 0)\n";
+        block << (state.layer0_current_index_block.empty()
+            ? "(No artifact memory entries)"
+            : state.layer0_current_index_block) << "\n\n";
+    }
 
     block << "## Conversation State (Layer 3)\n";
     if (!state.layer3_previous_state_json.empty()) {
@@ -544,21 +1361,77 @@ std::string ContextCompressionService::CompressHierarchical(
     const std::vector<MessageRecord>& messages,
     const ContextCompressionConfig& config,
     ChatCompressionState& state,
-    std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller) const {
+    std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller,
+    bool force_rebuild,
+    const std::vector<ProjectMcpVariableValue>& resolved_variables,
+    const std::string& project_id,
+    const std::string& chat_id) const {
+    const size_t last_idx = force_rebuild
+        ? 0
+        : std::min(state.last_compression_message_index, messages.size());
+    const size_t layer0_last_idx = force_rebuild
+        ? 0
+        : std::min(state.layer0_last_processed_message_index, messages.size());
 
-    size_t last_idx = state.last_compression_message_index;
-    if (last_idx >= messages.size()) {
-        return "";
-    }
-
-    // Get new turns since last compression
     std::vector<MessageRecord> new_turns;
     for (size_t i = last_idx; i < messages.size(); ++i) {
         new_turns.push_back(messages[i]);
     }
-
-    if (new_turns.empty()) {
+    if (new_turns.empty() && !force_rebuild) {
         return "";
+    }
+
+    std::vector<MessageRecord> layer0_turns;
+    for (size_t i = layer0_last_idx; i < messages.size(); ++i) {
+        layer0_turns.push_back(messages[i]);
+    }
+
+    // Layer 0: artifact extraction and persistence happen before L2/L3.
+    json artifact_index = EmptyArtifactIndex(project_id, chat_id);
+    if (config.layers.layer0.enabled) {
+        const auto storage_root = ResolveLayer0StorageRoot(config.layers.layer0, resolved_variables);
+        if (!storage_root.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(storage_root / "artifacts", ec);
+            state.layer0_storage_path = WideToUtf8(storage_root.wstring());
+
+            const auto index_path = storage_root / "index.json";
+            if (!force_rebuild) {
+                LoadArtifactIndex(index_path, &artifact_index);
+            }
+            if (!artifact_index.is_object() || !artifact_index.contains("artifacts")) {
+                artifact_index = EmptyArtifactIndex(project_id, chat_id);
+            }
+
+            if (!layer0_turns.empty()) {
+                const auto candidates = ExtractArtifactCandidates(
+                    layer0_turns,
+                    artifact_index,
+                    project_id,
+                    chat_id,
+                    config.layers.layer0,
+                    model_caller);
+                PersistArtifactCandidates(
+                    artifact_index,
+                    candidates,
+                    storage_root,
+                    project_id,
+                    chat_id,
+                    layer0_last_idx,
+                    messages.empty() ? 0 : messages.size() - 1);
+            }
+
+            SaveTextFile(index_path, artifact_index.dump(2));
+            SaveTextFile(storage_root / "INDEX.md", BuildArtifactIndexMarkdown(artifact_index));
+            state.layer0_last_index_hash = Fnv1aHashHex(artifact_index.dump());
+            state.layer0_last_processed_message_index = messages.size();
+        } else {
+            state.layer0_storage_path.clear();
+            state.layer0_current_index_block.clear();
+            state.layer0_last_index_hash.clear();
+        }
+    } else {
+        state.layer0_current_index_block.clear();
     }
 
     // Layer 1: Verbatim Pinning (on full conversation for context)
@@ -571,7 +1444,6 @@ std::string ContextCompressionService::CompressHierarchical(
     auto layer2_config = config.layers.layer2;
     auto layer3_config = config.layers.layer3;
 
-    // Thread 1: L2 Summary
     std::thread l2_thread([&]() {
         if (!layer2_config.enabled || layer2_config.model_id.empty()) {
             std::lock_guard<std::mutex> lock(result_mutex);
@@ -588,54 +1460,19 @@ std::string ContextCompressionService::CompressHierarchical(
             summary_context.push_back(ctx);
         }
 
-        ChatRequestOptions opts;
-        opts.model.id = layer2_config.model_id;
-        if (auto provider = OpenAIClient::LookupProvider(layer2_config.model_provider_id)) {
-            opts.provider = *provider;
-        }
-        opts.messages.push_back(MessageRecord{});
-        opts.messages.back().role = "user";
+        auto summary = Layer2_Summarize(
+            summary_context,
+            new_turns,
+            state.layer2_previous_summary,
+            state.layer3_previous_state_json,
+            layer2_config,
+            model_caller);
 
-        std::ostringstream prompt;
-        prompt << "You are compressing a conversation for future context.\n\n";
-        if (state.layer2_previous_summary.empty()) {
-            prompt << "PREVIOUS SUMMARY: (No previous summary — this is the first compression.)\n\n";
-        } else {
-            prompt << "PREVIOUS SUMMARY:\n" << state.layer2_previous_summary << "\n\n";
-        }
-        prompt << "NEW TURNS SINCE LAST SUMMARY:\n";
-        for (const auto& t : new_turns) {
-            prompt << "[" << t.role << "]: " << t.content << "\n\n";
-        }
-        prompt << "CURRENT STRUCTURED STATE (for reference):\n";
-        prompt << (state.layer3_previous_state_json.empty() ? "{}" : state.layer3_previous_state_json) << "\n\n";
-        prompt << "Generate a concise narrative summary (under " << layer2_config.max_tokens << " tokens) capturing:\n";
-        prompt << "1. User's goal and any evolution\n";
-        prompt << "2. Key decisions and reasoning\n";
-        prompt << "3. Approaches tried and failures\n";
-        prompt << "4. Current status and next steps\n";
-        prompt << "5. Stated constraints and preferences\n\n";
-        prompt << "Rules:\n";
-        prompt << "- Do NOT include specific code, URLs, or exact numbers\n";
-        prompt << "- Write in third person past/present tense\n";
-        prompt << "- Flag ambiguities explicitly\n";
-
-        opts.messages.back().content = prompt.str();
-        opts.max_tokens = layer2_config.max_tokens;
-        opts.temperature = 0.3;
-
-        auto result = model_caller(opts);
         std::lock_guard<std::mutex> lock(result_mutex);
-        if (result && result->success) {
-            parallel_result.layer2_summary = TrimStr(result->message.content);
-            parallel_result.layer2_success = true;
-        } else {
-            parallel_result.layer2_summary = state.layer2_previous_summary;
-            parallel_result.layer2_success = false;
-        }
+        parallel_result.layer2_summary = summary;
+        parallel_result.layer2_success = true;
     });
 
-    // Thread 2: L3 State Extraction
     std::thread l3_thread([&]() {
         if (!layer3_config.enabled || layer3_config.model_id.empty()) {
             std::lock_guard<std::mutex> lock(result_mutex);
@@ -644,54 +1481,20 @@ std::string ContextCompressionService::CompressHierarchical(
             return;
         }
 
-        ChatRequestOptions opts;
-        opts.model.id = layer3_config.model_id;
-        if (auto provider = OpenAIClient::LookupProvider(layer3_config.model_provider_id)) {
-            opts.provider = *provider;
-        }
-        opts.messages.push_back(MessageRecord{});
-        opts.messages.back().role = "user";
+        auto state_json = Layer3_ExtractState(
+            new_turns,
+            state.layer3_previous_state_json,
+            layer3_config,
+            model_caller);
 
-        std::ostringstream prompt;
-        prompt << "You are updating a structured state object for a conversation.\n\n";
-        prompt << "CURRENT STATE:\n";
-        prompt << (state.layer3_previous_state_json.empty() ? "{}" : state.layer3_previous_state_json) << "\n\n";
-        prompt << "NEW TURNS:\n";
-        for (size_t i = 0; i < new_turns.size(); ++i) {
-            prompt << "[Turn " << i << "][" << new_turns[i].role << "]: " << new_turns[i].content << "\n";
-        }
-        prompt << "\nUpdate the state object based on the new turns. Rules:\n";
-        prompt << "- Only ADD or MODIFY fields that new turns provide evidence for\n";
-        prompt << "- Do NOT remove existing entries unless user explicitly revokes them\n";
-        prompt << "- For decisions and failed_approaches, include turn index\n";
-        prompt << "- Keep values concise — single sentences\n";
-        prompt << "- Return ONLY valid JSON. No commentary.\n\n";
-        prompt << R"(Schema: {"primary_goal": "", "constraints": [], "preferences": [], "decisions": [{"what": "", "why": "", "turn": 0}], "failed_approaches": [{"approach": "", "reason_abandoned": "", "turn": 0}], "open_questions": [], "entities": {}, "current_phase": "", "user_flagged_notes": []})";
-
-        opts.messages.back().content = prompt.str();
-        opts.max_tokens = layer3_config.max_tokens;
-        opts.temperature = 0.2;
-
-        auto result = model_caller(opts);
         std::lock_guard<std::mutex> lock(result_mutex);
-        if (result && result->success) {
-            std::string content = result->message.content;
-            size_t start = content.find('{');
-            size_t end = content.rfind('}');
-            if (start != std::string::npos && end != std::string::npos && end > start) {
-                parallel_result.layer3_state_json = content.substr(start, end - start + 1);
-            }
-            parallel_result.layer3_success = true;
-        } else {
-            parallel_result.layer3_state_json = state.layer3_previous_state_json;
-            parallel_result.layer3_success = false;
-        }
+        parallel_result.layer3_state_json = state_json;
+        parallel_result.layer3_success = true;
     });
 
     l2_thread.join();
     l3_thread.join();
 
-    // Update state with new L2/L3 results
     if (parallel_result.layer2_success) {
         state.layer2_previous_summary = parallel_result.layer2_summary;
     }
@@ -699,7 +1502,17 @@ std::string ContextCompressionService::CompressHierarchical(
         state.layer3_previous_state_json = parallel_result.layer3_state_json;
     }
 
-    // Update state
+    // Layer 0 selection runs after L3 so it can use the latest state.
+    if (config.layers.layer0.enabled) {
+        std::vector<json> selected_artifacts = SelectArtifactsForInjection(
+            artifact_index,
+            state.layer3_previous_state_json,
+            new_turns.empty() ? messages : new_turns,
+            config.layers.layer0,
+            model_caller);
+        state.layer0_current_index_block = BuildLayer0IndexBlock(selected_artifacts);
+    }
+
     state.layer1_pinned_messages = pinned;
     state.last_compression_message_index = messages.size();
     return BuildHierarchicalContextBlock(messages, config, state);
@@ -804,7 +1617,8 @@ std::string ContextCompressionService::CompressConversation(
     const std::string& config_id,
     std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller,
     bool force_rebuild,
-    const std::string& trigger_reason) {
+    const std::string& trigger_reason,
+    const std::vector<ProjectMcpVariableValue>& resolved_variables) {
 
     auto config_opt = GetGlobalConfig(config_id);
     if (!config_opt) {
@@ -822,7 +1636,15 @@ std::string ContextCompressionService::CompressConversation(
             block = BuildTruncateTopBlock(messages, *config_opt, state);
         }
     } else if (config_opt->strategy == ContextCompressionStrategy::HierarchicalStructured) {
-        block = CompressHierarchical(messages, *config_opt, state, model_caller);
+        block = CompressHierarchical(
+            messages,
+            *config_opt,
+            state,
+            model_caller,
+            force_rebuild,
+            resolved_variables,
+            project_id,
+            chat_id);
         if (block.empty() && force_rebuild) {
             state.layer1_pinned_messages = Layer1_Pin(messages, config_opt->layers.layer1);
             state.last_compression_message_index = messages.size();
@@ -846,6 +1668,9 @@ std::string ContextCompressionService::CompressConversation(
         snapshot.compressed_through_message_index = std::min(state.last_compression_message_index, messages.size());
         snapshot.previous_compressed_context = previous_state.current_compressed_context;
         snapshot.compressed_context = block;
+        snapshot.layer0_index_block = state.layer0_current_index_block;
+        snapshot.layer0_previous_index_hash = previous_state.layer0_last_index_hash;
+        snapshot.layer0_index_hash = state.layer0_last_index_hash;
         snapshot.layer2_summary = state.layer2_previous_summary;
         snapshot.layer3_state_json = state.layer3_previous_state_json;
         snapshot.pinned_messages = state.layer1_pinned_messages;
@@ -862,14 +1687,19 @@ std::string ContextCompressionService::CompressConversation(
 std::string ContextCompressionService::BuildCompressedContextBlock(
     const ContextCompressionConfig& config,
     const ChatCompressionState& state) const {
-    (void)config;
-
     if (!state.current_compressed_context.empty()) {
         return state.current_compressed_context;
     }
 
     std::ostringstream block;
     block << "=== COMPRESSED CONTEXT ===\n\n";
+
+    if (config.layers.layer0.enabled) {
+        block << "[Artifact Memory (Layer 0)]\n";
+        block << (state.layer0_current_index_block.empty()
+            ? "(No artifact memory entries)"
+            : state.layer0_current_index_block) << "\n\n";
+    }
 
     block << "[Pinned Messages (Layer 1)]\n";
     if (!state.layer1_pinned_messages.empty()) {

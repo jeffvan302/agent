@@ -47,7 +47,8 @@ public:
         const std::string& config_id,
         std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller,
         bool force_rebuild = false,
-        const std::string& trigger_reason = "automatic");
+        const std::string& trigger_reason = "automatic",
+        const std::vector<ProjectMcpVariableValue>& resolved_variables = {});
 
     // Build a compressed context block from current state (for preview/diagnostics)
     std::string BuildCompressedContextBlock(
@@ -56,6 +57,10 @@ public:
 
     // Token estimation for a single message
     static size_t EstimateMessageTokens(const MessageRecord& message);
+    static std::string DefaultLayer0CapturePromptTemplate();
+    static std::string DefaultLayer0SelectionPromptTemplate();
+    static std::string DefaultLayer2PromptTemplate();
+    static std::string DefaultLayer3PromptTemplate();
 
 private:
     struct ParallelCompressionResult {
@@ -74,7 +79,11 @@ private:
         const std::vector<MessageRecord>& messages,
         const ContextCompressionConfig& config,
         ChatCompressionState& state,
-        std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller) const;
+        std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller,
+        bool force_rebuild,
+        const std::vector<ProjectMcpVariableValue>& resolved_variables,
+        const std::string& project_id,
+        const std::string& chat_id) const;
 
     std::string BuildTruncateTopBlock(
         const std::vector<MessageRecord>& messages,

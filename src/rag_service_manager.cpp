@@ -3,6 +3,8 @@
 #include "prompt_dialog.h"
 #include "util.h"
 
+#include <nlohmann/json.hpp>
+
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shlobj.h>
@@ -11,6 +13,8 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -108,6 +112,7 @@ enum ImageIngestSettingsControlId : int {
     kImageCpuMode = 6302,
     kImagePaddleMode = 6303,
     kImageVisionMode = 6304,
+    kImageRemoteMode = 6334,
     kImageTesseractLanguageLabel = 6305,
     kImageTesseractLanguageEdit = 6306,
     kImagePaddlePythonLabel = 6307,
@@ -137,6 +142,12 @@ enum ImageIngestSettingsControlId : int {
     kImageDiagnosticsLog = 6331,
     kImageVisionModelHelp = 6332,
     kImageOllamaStartLocally = 6333,
+    kImageRemoteAgentUrlLabel = 6335,
+    kImageRemoteAgentUrlEdit = 6336,
+    kImageRemoteAgentPortLabel = 6337,
+    kImageRemoteAgentPortEdit = 6338,
+    kImageRemoteAgentLoadJson = 6339,
+    kImageRemoteAgentJsonStatus = 6340,
     kImageSaveButton = IDOK,
     kImageCancelButton = IDCANCEL,
 };
@@ -358,6 +369,85 @@ std::vector<std::filesystem::path> PickFiles(HWND owner) {
     return files;
 }
 
+std::optional<std::filesystem::path> PickRemoteImageAgentJson(HWND owner) {
+    wchar_t path[MAX_PATH] = {};
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrTitle = L"Load Remote Agent Worker JSON";
+    dialog.lpstrFile = path;
+    dialog.nMaxFile = static_cast<DWORD>(std::size(path));
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+    dialog.lpstrFilter = L"Remote Agent Worker JSON\0*.json\0All Files\0*.*\0";
+    if (!GetOpenFileNameW(&dialog)) {
+        return std::nullopt;
+    }
+    return std::filesystem::path(path);
+}
+
+struct RemoteImageAgentConfigInfo {
+    std::string raw_json;
+    std::string worker_name = "Remote Ollama Worker";
+    std::string model_name = "qwen2.5vl:7b";
+    std::string shared_secret;
+    std::string certificate_fingerprint;
+    int https_port = 8765;
+    int ollama_start_port = 11434;
+    int ollama_instance_count = 1;
+};
+
+int ClampImageRemotePort(int value, int fallback) {
+    return std::clamp(value <= 0 ? fallback : value, 1, 65535);
+}
+
+int ClampImageRemoteInstanceCount(int value) {
+    return std::clamp(value <= 0 ? 1 : value, 1, 32);
+}
+
+std::optional<RemoteImageAgentConfigInfo> ReadRemoteImageAgentConfig(
+    const std::filesystem::path& path,
+    std::string* error) {
+    try {
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open()) {
+            if (error) {
+                *error = "Could not open the selected remote worker JSON file.";
+            }
+            return std::nullopt;
+        }
+        const std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        const auto data = nlohmann::json::parse(text);
+
+        RemoteImageAgentConfigInfo info;
+        info.raw_json = data.dump(2);
+        info.worker_name = data.value("worker_name", info.worker_name);
+        if (data.contains("agent_server") && data["agent_server"].is_object()) {
+            const auto& server = data["agent_server"];
+            info.https_port = ClampImageRemotePort(server.value("https_port", info.https_port), 8765);
+            info.shared_secret = server.value("shared_secret", "");
+            info.certificate_fingerprint = server.value("certificate_fingerprint", "");
+        }
+        if (data.contains("model") && data["model"].is_object()) {
+            info.model_name = data["model"].value("name", info.model_name);
+        } else {
+            info.model_name = data.value("vision_model", info.model_name);
+        }
+        if (data.contains("ollama") && data["ollama"].is_object()) {
+            info.ollama_start_port = ClampImageRemotePort(data["ollama"].value("start_port", info.ollama_start_port), 11434);
+            info.ollama_instance_count = ClampImageRemoteInstanceCount(data["ollama"].value("instance_count", info.ollama_instance_count));
+        } else {
+            info.ollama_start_port = ClampImageRemotePort(data.value("ollama_start_port", info.ollama_start_port), 11434);
+            info.ollama_instance_count = ClampImageRemoteInstanceCount(data.value("ollama_instance_count", info.ollama_instance_count));
+        }
+        return info;
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<std::filesystem::path> PickFolder(HWND owner, const std::wstring& title) {
     BROWSEINFOW info{};
     info.hwndOwner = owner;
@@ -422,17 +512,32 @@ std::string NormalizeImageMode(std::string mode) {
     if (mode == "vision" || mode == "vlm" || mode == "vision_language" || mode == "vision_language_gpu") {
         return "vision_language_gpu";
     }
+    if (mode == "remote" || mode == "remote_agent" || mode == "agent_remote" || mode == "agent_https") {
+        return "remote_agent";
+    }
     return "tesseract_cpu";
 }
 
 int ImageVisionProviderComboIndex(const std::string& provider) {
     std::string normalized = Trim(provider);
     std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return normalized == "ollama" ? 1 : 0;
+    if (normalized == "ollama") {
+        return 1;
+    }
+    if (normalized == "remote" || normalized == "remote_agent" || normalized == "agent_remote" || normalized == "agent_https") {
+        return 2;
+    }
+    return 0;
 }
 
 std::string ImageVisionProviderFromComboIndex(int index) {
-    return index == 1 ? "ollama" : "none";
+    if (index == 1) {
+        return "ollama";
+    }
+    if (index == 2) {
+        return "remote_agent";
+    }
+    return "none";
 }
 
 std::wstring ImageStatusText(const RagImageIngestRuntimeStatus& status) {
@@ -538,8 +643,13 @@ private:
     void OnCreate();
     void LayoutControls() const;
     void OnCommand(int control_id);
+    bool IsRemoteModeSelected() const;
+    void CommitCurrentModelEditToSettings();
+    void RefreshVisionModelField(bool force_reload);
     RagImageIngestSettings BuildSettingsFromFields() const;
     void LoadSettingsIntoFields();
+    void LoadRemoteAgentJson();
+    void UpdateModeControlStates() const;
     void RefreshStatus();
     void InstallTool(const std::string& tool_id);
     void PullVisionModel();
@@ -551,11 +661,13 @@ private:
     HFONT font_ = nullptr;
     RagImageIngestSettings settings_;
     bool saved_ = false;
+    bool showing_remote_model_ = false;
 
     HWND enabled_checkbox_ = nullptr;
     HWND cpu_radio_ = nullptr;
     HWND paddle_radio_ = nullptr;
     HWND vision_radio_ = nullptr;
+    HWND remote_radio_ = nullptr;
     HWND tesseract_language_label_ = nullptr;
     HWND tesseract_language_edit_ = nullptr;
     HWND paddle_python_label_ = nullptr;
@@ -573,6 +685,12 @@ private:
     HWND ollama_start_port_label_ = nullptr;
     HWND ollama_start_port_edit_ = nullptr;
     HWND ollama_start_locally_checkbox_ = nullptr;
+    HWND remote_agent_url_label_ = nullptr;
+    HWND remote_agent_url_edit_ = nullptr;
+    HWND remote_agent_port_label_ = nullptr;
+    HWND remote_agent_port_edit_ = nullptr;
+    HWND remote_agent_load_json_button_ = nullptr;
+    HWND remote_agent_json_status_label_ = nullptr;
     HWND vision_prompt_label_ = nullptr;
     HWND vision_prompt_edit_ = nullptr;
     HWND include_ocr_checkbox_ = nullptr;
@@ -1236,7 +1354,7 @@ bool RagImageIngestSettingsDialog::Show(HWND owner, RagService* rag_service) {
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         780,
-        820,
+        880,
         owner,
         nullptr,
         instance,
@@ -1323,6 +1441,7 @@ void RagImageIngestSettingsDialog::OnCreate() {
     cpu_radio_ = CreateWindowExW(0, L"BUTTON", L"CPU default: Tesseract OCR only", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | WS_GROUP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageCpuMode), nullptr, nullptr);
     paddle_radio_ = CreateWindowExW(0, L"BUTTON", L"GPU OCR: PaddleOCR, with Tesseract fallback", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImagePaddleMode), nullptr, nullptr);
     vision_radio_ = CreateWindowExW(0, L"BUTTON", L"Full GPU vision: OCR plus Qwen2.5-VL / InternVL-style description", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionMode), nullptr, nullptr);
+    remote_radio_ = CreateWindowExW(0, L"BUTTON", L"Remote Agent vision: HTTPS remote worker JSON", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageRemoteMode), nullptr, nullptr);
     tesseract_language_label_ = CreateWindowExW(0, L"STATIC", L"Tesseract language", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageTesseractLanguageLabel), nullptr, nullptr);
     tesseract_language_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageTesseractLanguageEdit), nullptr, nullptr);
     paddle_python_label_ = CreateWindowExW(0, L"STATIC", L"PaddleOCR Python command", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImagePaddlePythonLabel), nullptr, nullptr);
@@ -1340,6 +1459,12 @@ void RagImageIngestSettingsDialog::OnCreate() {
     ollama_start_port_label_ = CreateWindowExW(0, L"STATIC", L"Ollama starting port", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageOllamaStartPortLabel), nullptr, nullptr);
     ollama_start_port_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageOllamaStartPortEdit), nullptr, nullptr);
     ollama_start_locally_checkbox_ = CreateWindowExW(0, L"BUTTON", L"Start Ollama locally when needed", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageOllamaStartLocally), nullptr, nullptr);
+    remote_agent_url_label_ = CreateWindowExW(0, L"STATIC", L"Remote Agent URL", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageRemoteAgentUrlLabel), nullptr, nullptr);
+    remote_agent_url_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageRemoteAgentUrlEdit), nullptr, nullptr);
+    remote_agent_port_label_ = CreateWindowExW(0, L"STATIC", L"Remote Agent HTTPS port", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageRemoteAgentPortLabel), nullptr, nullptr);
+    remote_agent_port_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageRemoteAgentPortEdit), nullptr, nullptr);
+    remote_agent_load_json_button_ = CreateWindowExW(0, L"BUTTON", L"Load Remote JSON", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageRemoteAgentLoadJson), nullptr, nullptr);
+    remote_agent_json_status_label_ = CreateWindowExW(0, L"STATIC", L"No remote worker JSON loaded.", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageRemoteAgentJsonStatus), nullptr, nullptr);
     vision_prompt_label_ = CreateWindowExW(0, L"STATIC", L"Vision description prompt", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionPromptLabel), nullptr, nullptr);
     vision_prompt_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageVisionPromptEdit), nullptr, nullptr);
     include_ocr_checkbox_ = CreateWindowExW(0, L"BUTTON", L"Include OCR text in extracted Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageIncludeOcr), nullptr, nullptr);
@@ -1354,12 +1479,13 @@ void RagImageIngestSettingsDialog::OnCreate() {
     save_button_ = CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageSaveButton), nullptr, nullptr);
     cancel_button_ = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImageCancelButton), nullptr, nullptr);
 
-    for (HWND control : {enabled_checkbox_, cpu_radio_, paddle_radio_, vision_radio_, tesseract_language_label_, tesseract_language_edit_, paddle_python_label_, paddle_python_edit_, paddle_language_label_, paddle_language_edit_, vision_provider_label_, vision_provider_combo_, vision_base_url_label_, vision_base_url_edit_, vision_model_label_, vision_model_edit_, ollama_instance_count_label_, ollama_instance_count_edit_, ollama_start_port_label_, ollama_start_port_edit_, ollama_start_locally_checkbox_, vision_prompt_label_, vision_prompt_edit_, include_ocr_checkbox_, include_visual_description_checkbox_, status_label_, check_status_button_, install_tesseract_button_, install_paddle_button_, install_ollama_button_, pull_vision_model_button_, diagnostics_log_edit_, save_button_, cancel_button_}) {
+    for (HWND control : {enabled_checkbox_, cpu_radio_, paddle_radio_, vision_radio_, remote_radio_, tesseract_language_label_, tesseract_language_edit_, paddle_python_label_, paddle_python_edit_, paddle_language_label_, paddle_language_edit_, vision_provider_label_, vision_provider_combo_, vision_base_url_label_, vision_base_url_edit_, vision_model_label_, vision_model_edit_, ollama_instance_count_label_, ollama_instance_count_edit_, ollama_start_port_label_, ollama_start_port_edit_, ollama_start_locally_checkbox_, remote_agent_url_label_, remote_agent_url_edit_, remote_agent_port_label_, remote_agent_port_edit_, remote_agent_load_json_button_, remote_agent_json_status_label_, vision_prompt_label_, vision_prompt_edit_, include_ocr_checkbox_, include_visual_description_checkbox_, status_label_, check_status_button_, install_tesseract_button_, install_paddle_button_, install_ollama_button_, pull_vision_model_button_, diagnostics_log_edit_, save_button_, cancel_button_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
 
     ComboBox_AddString(vision_provider_combo_, L"None");
     ComboBox_AddString(vision_provider_combo_, L"Ollama");
+    ComboBox_AddString(vision_provider_combo_, L"Remote Agent");
 
     LoadSettingsIntoFields();
     CenterWindowToOwner(hwnd_, owner_);
@@ -1389,6 +1515,8 @@ void RagImageIngestSettingsDialog::LayoutControls() const {
     MoveWindow(paddle_radio_, margin, y, width - margin * 2, Scale(hwnd_, 22), TRUE);
     y += Scale(hwnd_, 24);
     MoveWindow(vision_radio_, margin, y, width - margin * 2, Scale(hwnd_, 22), TRUE);
+    y += Scale(hwnd_, 24);
+    MoveWindow(remote_radio_, margin, y, width - margin * 2, Scale(hwnd_, 22), TRUE);
     y += Scale(hwnd_, 30);
 
     MoveWindow(tesseract_language_label_, margin, y, column_width, label_height, TRUE);
@@ -1416,6 +1544,15 @@ void RagImageIngestSettingsDialog::LayoutControls() const {
     MoveWindow(ollama_start_port_edit_, margin + column_width + gutter, y, column_width, edit_height, TRUE);
     MoveWindow(ollama_start_locally_checkbox_, margin + (column_width + gutter) * 2, y, column_width, edit_height, TRUE);
     y += edit_height + gutter;
+
+    MoveWindow(remote_agent_url_label_, margin, y, column_width, label_height, TRUE);
+    MoveWindow(remote_agent_port_label_, margin + column_width + gutter, y, column_width, label_height, TRUE);
+    MoveWindow(remote_agent_json_status_label_, margin + (column_width + gutter) * 2, y, column_width, label_height, TRUE);
+    y += label_height + Scale(hwnd_, 4);
+    MoveWindow(remote_agent_url_edit_, margin, y, column_width, edit_height, TRUE);
+    MoveWindow(remote_agent_port_edit_, margin + column_width + gutter, y, column_width, edit_height, TRUE);
+    MoveWindow(remote_agent_load_json_button_, margin + (column_width + gutter) * 2, y, column_width, button_height, TRUE);
+    y += button_height + gutter;
 
     MoveWindow(vision_prompt_label_, margin, y, width - margin * 2, label_height, TRUE);
     y += label_height + Scale(hwnd_, 4);
@@ -1445,13 +1582,22 @@ void RagImageIngestSettingsDialog::LayoutControls() const {
 
 void RagImageIngestSettingsDialog::OnCommand(int control_id) {
     switch (control_id) {
-    case kImageCheckStatus:
     case kImageCpuMode:
     case kImagePaddleMode:
     case kImageVisionMode:
+    case kImageRemoteMode:
+        RefreshVisionModelField(false);
+        UpdateModeControlStates();
+        RefreshStatus();
+        break;
+    case kImageCheckStatus:
     case kImageVisionProviderCombo:
     case kImageOllamaStartLocally:
+        UpdateModeControlStates();
         RefreshStatus();
+        break;
+    case kImageRemoteAgentLoadJson:
+        LoadRemoteAgentJson();
         break;
     case kImageInstallTesseract:
         InstallTool("tesseract");
@@ -1479,11 +1625,41 @@ void RagImageIngestSettingsDialog::OnCommand(int control_id) {
     }
 }
 
+bool RagImageIngestSettingsDialog::IsRemoteModeSelected() const {
+    return Button_GetCheck(remote_radio_) == BST_CHECKED;
+}
+
+void RagImageIngestSettingsDialog::CommitCurrentModelEditToSettings() {
+    const std::string current_model = WideToUtf8(TrimWide(GetWindowTextString(vision_model_edit_)));
+    if (showing_remote_model_) {
+        settings_.remote_agent_model = current_model;
+    } else {
+        settings_.vision_model = current_model;
+    }
+}
+
+void RagImageIngestSettingsDialog::RefreshVisionModelField(bool force_reload) {
+    const bool remote_mode = IsRemoteModeSelected();
+    if (!force_reload && showing_remote_model_ == remote_mode) {
+        return;
+    }
+    if (!force_reload) {
+        CommitCurrentModelEditToSettings();
+    }
+    const std::string model = remote_mode
+        ? Trim(settings_.remote_agent_model)
+        : (Trim(settings_.vision_model).empty() ? "qwen2.5vl:7b" : Trim(settings_.vision_model));
+    SetWindowTextW(vision_model_edit_, Utf8ToWide(model).c_str());
+    showing_remote_model_ = remote_mode;
+}
+
 RagImageIngestSettings RagImageIngestSettingsDialog::BuildSettingsFromFields() const {
     RagImageIngestSettings settings = settings_;
     settings.enabled = Button_GetCheck(enabled_checkbox_) == BST_CHECKED;
     if (Button_GetCheck(vision_radio_) == BST_CHECKED) {
         settings.mode = "vision_language_gpu";
+    } else if (Button_GetCheck(remote_radio_) == BST_CHECKED) {
+        settings.mode = "remote_agent";
     } else if (Button_GetCheck(paddle_radio_) == BST_CHECKED) {
         settings.mode = "paddle_ocr_gpu";
     } else {
@@ -1492,9 +1668,16 @@ RagImageIngestSettings RagImageIngestSettingsDialog::BuildSettingsFromFields() c
     settings.tesseract_language = WideToUtf8(TrimWide(GetWindowTextString(tesseract_language_edit_)));
     settings.paddle_python_command = WideToUtf8(TrimWide(GetWindowTextString(paddle_python_edit_)));
     settings.paddle_language = WideToUtf8(TrimWide(GetWindowTextString(paddle_language_edit_)));
-    settings.vision_provider = ImageVisionProviderFromComboIndex(static_cast<int>(ComboBox_GetCurSel(vision_provider_combo_)));
+    settings.vision_provider = settings.mode == "remote_agent"
+        ? "remote_agent"
+        : ImageVisionProviderFromComboIndex(static_cast<int>(ComboBox_GetCurSel(vision_provider_combo_)));
     settings.vision_base_url = WideToUtf8(TrimWide(GetWindowTextString(vision_base_url_edit_)));
-    settings.vision_model = WideToUtf8(TrimWide(GetWindowTextString(vision_model_edit_)));
+    const std::string current_model = WideToUtf8(TrimWide(GetWindowTextString(vision_model_edit_)));
+    if (settings.mode == "remote_agent") {
+        settings.remote_agent_model = current_model;
+    } else {
+        settings.vision_model = current_model;
+    }
     if (const auto value = ParseInt(TrimWide(GetWindowTextString(ollama_instance_count_edit_)))) {
         settings.ollama_instance_count = *value;
     }
@@ -1502,6 +1685,13 @@ RagImageIngestSettings RagImageIngestSettingsDialog::BuildSettingsFromFields() c
         settings.ollama_start_port = *value;
     }
     settings.ollama_start_locally = Button_GetCheck(ollama_start_locally_checkbox_) == BST_CHECKED;
+    settings.remote_agent_base_url = WideToUtf8(TrimWide(GetWindowTextString(remote_agent_url_edit_)));
+    if (const auto value = ParseInt(TrimWide(GetWindowTextString(remote_agent_port_edit_)))) {
+        settings.remote_agent_https_port = *value;
+    }
+    if (settings.mode == "remote_agent") {
+        settings.ollama_start_locally = false;
+    }
     settings.vision_prompt = WideToUtf8(TrimWide(GetWindowTextString(vision_prompt_edit_)));
     settings.include_ocr_text = Button_GetCheck(include_ocr_checkbox_) == BST_CHECKED;
     settings.include_visual_description = Button_GetCheck(include_visual_description_checkbox_) == BST_CHECKED;
@@ -1514,18 +1704,98 @@ void RagImageIngestSettingsDialog::LoadSettingsIntoFields() {
     Button_SetCheck(cpu_radio_, mode == "tesseract_cpu" ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(paddle_radio_, mode == "paddle_ocr_gpu" ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(vision_radio_, mode == "vision_language_gpu" ? BST_CHECKED : BST_UNCHECKED);
+    Button_SetCheck(remote_radio_, mode == "remote_agent" ? BST_CHECKED : BST_UNCHECKED);
     SetWindowTextW(tesseract_language_edit_, Utf8ToWide(settings_.tesseract_language.empty() ? "eng" : settings_.tesseract_language).c_str());
     SetWindowTextW(paddle_python_edit_, Utf8ToWide(settings_.paddle_python_command.empty() ? "python" : settings_.paddle_python_command).c_str());
     SetWindowTextW(paddle_language_edit_, Utf8ToWide(settings_.paddle_language.empty() ? "en" : settings_.paddle_language).c_str());
     ComboBox_SetCurSel(vision_provider_combo_, ImageVisionProviderComboIndex(settings_.vision_provider));
     SetWindowTextW(vision_base_url_edit_, Utf8ToWide(settings_.vision_base_url.empty() ? "http://localhost" : settings_.vision_base_url).c_str());
-    SetWindowTextW(vision_model_edit_, Utf8ToWide(settings_.vision_model.empty() ? "qwen2.5vl:7b" : settings_.vision_model).c_str());
     SetWindowTextW(ollama_instance_count_edit_, std::to_wstring(std::max(1, settings_.ollama_instance_count)).c_str());
     SetWindowTextW(ollama_start_port_edit_, std::to_wstring(settings_.ollama_start_port <= 0 ? 11434 : settings_.ollama_start_port).c_str());
     Button_SetCheck(ollama_start_locally_checkbox_, settings_.ollama_start_locally ? BST_CHECKED : BST_UNCHECKED);
+    SetWindowTextW(remote_agent_url_edit_, Utf8ToWide(settings_.remote_agent_base_url.empty() ? "https://127.0.0.1" : settings_.remote_agent_base_url).c_str());
+    SetWindowTextW(remote_agent_port_edit_, std::to_wstring(settings_.remote_agent_https_port <= 0 ? 8765 : settings_.remote_agent_https_port).c_str());
+    const std::wstring remote_status = settings_.remote_agent_config_json.empty()
+        ? L"No remote worker JSON loaded."
+        : (L"Loaded: " + Utf8ToWide(settings_.remote_agent_worker_name.empty() ? std::string("Remote worker") : settings_.remote_agent_worker_name));
+    SetWindowTextW(remote_agent_json_status_label_, remote_status.c_str());
     SetWindowTextW(vision_prompt_edit_, Utf8ToWide(settings_.vision_prompt).c_str());
     Button_SetCheck(include_ocr_checkbox_, settings_.include_ocr_text ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(include_visual_description_checkbox_, settings_.include_visual_description ? BST_CHECKED : BST_UNCHECKED);
+    RefreshVisionModelField(true);
+    UpdateModeControlStates();
+}
+
+void RagImageIngestSettingsDialog::LoadRemoteAgentJson() {
+    const auto path = PickRemoteImageAgentJson(hwnd_);
+    if (!path) {
+        return;
+    }
+
+    std::string error;
+    const auto info = ReadRemoteImageAgentConfig(*path, &error);
+    if (!info) {
+        MessageBoxW(hwnd_, Utf8ToWide(error.empty() ? std::string("Could not read remote worker JSON.") : error).c_str(),
+            L"Load Remote Agent JSON", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    CommitCurrentModelEditToSettings();
+    settings_.remote_agent_config_json = info->raw_json;
+    settings_.remote_agent_worker_name = info->worker_name;
+    settings_.remote_agent_shared_secret = info->shared_secret;
+    settings_.remote_agent_certificate_fingerprint = info->certificate_fingerprint;
+    settings_.remote_agent_https_port = info->https_port;
+    settings_.remote_agent_model = info->model_name;
+    settings_.ollama_start_port = info->ollama_start_port;
+    settings_.ollama_instance_count = info->ollama_instance_count;
+    settings_.mode = "remote_agent";
+    settings_.vision_provider = "remote_agent";
+    settings_.ollama_start_locally = false;
+    if (Trim(settings_.remote_agent_base_url).empty()) {
+        settings_.remote_agent_base_url = "https://127.0.0.1";
+    }
+
+    Button_SetCheck(cpu_radio_, BST_UNCHECKED);
+    Button_SetCheck(paddle_radio_, BST_UNCHECKED);
+    Button_SetCheck(vision_radio_, BST_UNCHECKED);
+    Button_SetCheck(remote_radio_, BST_CHECKED);
+    ComboBox_SetCurSel(vision_provider_combo_, ImageVisionProviderComboIndex("remote_agent"));
+    if (TrimWide(GetWindowTextString(remote_agent_url_edit_)).empty()) {
+        SetWindowTextW(remote_agent_url_edit_, Utf8ToWide(settings_.remote_agent_base_url).c_str());
+    }
+    SetWindowTextW(ollama_instance_count_edit_, std::to_wstring(info->ollama_instance_count).c_str());
+    SetWindowTextW(ollama_start_port_edit_, std::to_wstring(info->ollama_start_port).c_str());
+    SetWindowTextW(remote_agent_port_edit_, std::to_wstring(info->https_port).c_str());
+    SetWindowTextW(remote_agent_json_status_label_, (L"Loaded: " + Utf8ToWide(info->worker_name)).c_str());
+    Button_SetCheck(ollama_start_locally_checkbox_, BST_UNCHECKED);
+    RefreshVisionModelField(true);
+    UpdateModeControlStates();
+    RefreshStatus();
+}
+
+void RagImageIngestSettingsDialog::UpdateModeControlStates() const {
+    const bool remote_mode = Button_GetCheck(remote_radio_) == BST_CHECKED;
+    if (remote_mode) {
+        ComboBox_SetCurSel(vision_provider_combo_, ImageVisionProviderComboIndex("remote_agent"));
+    }
+
+    EnableWindow(vision_provider_combo_, remote_mode ? FALSE : TRUE);
+    EnableWindow(vision_base_url_edit_, remote_mode ? FALSE : TRUE);
+    EnableWindow(vision_model_label_, remote_mode ? FALSE : TRUE);
+    EnableWindow(vision_model_edit_, remote_mode ? FALSE : TRUE);
+    EnableWindow(ollama_instance_count_edit_, remote_mode ? FALSE : TRUE);
+    EnableWindow(ollama_start_port_edit_, remote_mode ? FALSE : TRUE);
+    EnableWindow(ollama_start_locally_checkbox_, remote_mode ? FALSE : TRUE);
+    EnableWindow(remote_agent_url_edit_, remote_mode ? TRUE : FALSE);
+    EnableWindow(remote_agent_port_edit_, FALSE);
+    EnableWindow(remote_agent_load_json_button_, remote_mode ? TRUE : FALSE);
+    EnableWindow(remote_agent_json_status_label_, remote_mode ? TRUE : FALSE);
+    if (remote_mode) {
+        EnableWindow(install_paddle_button_, FALSE);
+        EnableWindow(install_ollama_button_, FALSE);
+        EnableWindow(pull_vision_model_button_, FALSE);
+    }
 }
 
 void RagImageIngestSettingsDialog::RefreshStatus() {
@@ -1550,8 +1820,11 @@ void RagImageIngestSettingsDialog::RefreshStatus() {
     log += L"- Start local Ollama: " + std::wstring(status.vision_ollama_start_locally ? L"yes" : L"no") + L"\r\n";
     log += L"- App-managed Ollama endpoints: " + std::to_wstring(status.vision_ollama_managed_count) + L"\r\n";
     log += L"- Vision endpoint running: " + std::wstring(status.vision_endpoint_running ? L"yes" : L"no") + L"\r\n";
-    log += L"- Ollama endpoints: " + Utf8ToWide(status.vision_endpoint_summary.empty() ? std::string("(none)") : status.vision_endpoint_summary) + L"\r\n";
-    log += L"- Ollama endpoints responding: " + std::to_wstring(status.vision_ollama_running_count) + L"/" + std::to_wstring(status.vision_ollama_instance_count) + L"\r\n";
+    log += L"- Vision endpoint(s): " + Utf8ToWide(status.vision_endpoint_summary.empty() ? std::string("(none)") : status.vision_endpoint_summary) + L"\r\n";
+    log += L"- Vision endpoints responding: " + std::to_wstring(status.vision_ollama_running_count) + L"/" + std::to_wstring(status.vision_ollama_instance_count) + L"\r\n";
+    log += L"- Remote Agent configured: " + std::wstring(status.remote_agent_configured ? L"yes" : L"no") + L"\r\n";
+    log += L"- Remote Agent worker: " + Utf8ToWide(status.remote_agent_worker_name.empty() ? std::string("(none)") : status.remote_agent_worker_name) + L"\r\n";
+    log += L"- Remote Agent model: " + Utf8ToWide(status.remote_agent_model.empty() ? std::string("(none)") : status.remote_agent_model) + L"\r\n";
     log += L"- Vision queue: " + std::to_wstring(status.vision_queue_active) + L" active, " + std::to_wstring(status.vision_queue_pending) + L" queued, " + std::to_wstring(status.vision_queue_workers) + L" worker(s)\r\n";
     log += L"- Document extraction queue: " + std::to_wstring(status.document_queue_active) + L" active, " + std::to_wstring(status.document_queue_pending) + L" queued, " + std::to_wstring(status.document_queue_workers) + L" worker(s)\r\n";
     log += L"- Message: " + Utf8ToWide(status.message) + L"\r\n";
@@ -1563,6 +1836,7 @@ void RagImageIngestSettingsDialog::RefreshStatus() {
     EnableWindow(install_paddle_button_, status.paddleocr_installed ? FALSE : TRUE);
     EnableWindow(install_ollama_button_, status.ollama_installed ? FALSE : TRUE);
     EnableWindow(pull_vision_model_button_, status.ollama_installed ? TRUE : FALSE);
+    UpdateModeControlStates();
 }
 
 void RagImageIngestSettingsDialog::InstallTool(const std::string& tool_id) {
@@ -1616,7 +1890,30 @@ bool RagImageIngestSettingsDialog::ValidateAndSave() {
         SetFocus(paddle_language_edit_);
         return false;
     }
-    if (NormalizeImageMode(settings.mode) == "vision_language_gpu" && settings.include_visual_description) {
+    const std::string mode = NormalizeImageMode(settings.mode);
+    if (mode == "remote_agent" && settings.include_visual_description) {
+        if (Trim(settings.remote_agent_base_url).empty()) {
+            MessageBoxW(hwnd_, L"Remote Agent URL is required for remote image ingestion.", L"Missing Remote Agent URL", MB_OK | MB_ICONERROR);
+            SetFocus(remote_agent_url_edit_);
+            return false;
+        }
+        if (settings.remote_agent_https_port < 1 || settings.remote_agent_https_port > 65535) {
+            MessageBoxW(hwnd_, L"Remote Agent HTTPS port must be loaded from a valid remote worker JSON file.", L"Invalid Remote Agent Port", MB_OK | MB_ICONERROR);
+            SetFocus(remote_agent_load_json_button_);
+            return false;
+        }
+        if (Trim(settings.remote_agent_shared_secret).empty() || Trim(settings.remote_agent_config_json).empty()) {
+            MessageBoxW(hwnd_, L"Load the Remote Agent worker JSON so the image ingest settings include the shared secret, certificate fingerprint, model, and worker details.", L"Remote Agent JSON Required", MB_OK | MB_ICONERROR);
+            SetFocus(remote_agent_load_json_button_);
+            return false;
+        }
+        if (Trim(settings.remote_agent_model).empty()) {
+            MessageBoxW(hwnd_, L"The loaded Remote Agent JSON did not include a model name.", L"Missing Remote Model", MB_OK | MB_ICONERROR);
+            SetFocus(remote_agent_load_json_button_);
+            return false;
+        }
+    }
+    if (mode == "vision_language_gpu" && settings.include_visual_description) {
         if (settings.vision_provider != "ollama") {
             MessageBoxW(hwnd_, L"Full vision mode currently requires the Ollama vision provider.", L"Vision Provider Required", MB_OK | MB_ICONERROR);
             SetFocus(vision_provider_combo_);
@@ -2362,7 +2659,7 @@ void RagServiceManagerWindow::ShowExtractionTools() {
 void RagServiceManagerWindow::ShowImageIngestSettings() {
     if (RagImageIngestSettingsDialog::Show(hwnd_, rag_service_)) {
         UpdateStatus(L"Image ingest settings saved. New image imports will use the updated system-wide pipeline.");
-        SetWindowTextW(results_edit_, L"Image ingest settings saved.\r\n\r\nSupported image files are preserved as originals and converted into extracted Markdown during RAG ingestion. CPU mode uses Tesseract OCR; GPU OCR mode attempts PaddleOCR with Tesseract fallback; full vision mode adds an Ollama vision-language description when available.");
+        SetWindowTextW(results_edit_, L"Image ingest settings saved.\r\n\r\nSupported image files are preserved as originals and converted into extracted Markdown during RAG ingestion. CPU mode uses Tesseract OCR; GPU OCR mode attempts PaddleOCR with Tesseract fallback; full vision mode adds an Ollama vision-language description; Remote Agent mode sends vision work to the configured HTTPS worker.");
     } else {
         UpdateStatus(L"Image ingest settings closed.");
     }

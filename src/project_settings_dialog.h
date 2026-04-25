@@ -45,3 +45,4 @@ struct ProjectSettingsResult {
 };
 
 std::optional<ProjectSettingsResult> ShowProjectSettingsDialog(HWND owner, const ProjectSettingsOptions& options);
+void ShowRemoteOllamaSetupDialog(HWND owner, AppStorage* storage, std::vector<ProviderConfig>* providers);

@@ -86,7 +86,7 @@ enum ControlId : int {
 struct DlgState {
     WebServer*           server;
     WebServerConfig*     cfg;
-    std::filesystem::path app_root;
+    RuntimePaths         runtime_paths;
 
     // Resolved web_root at dialog open (used to scan themes/)
     std::filesystem::path web_root_resolved;
@@ -280,7 +280,7 @@ static void PopulateThemeCombo(HWND dlg, DlgState* st)
 
     // Resolve web_root from the current edit field
     std::string wr = WideToUtf8(GetEditText(dlg, kWebRootEdit));
-    if (wr.empty()) wr = (st->app_root / "www").string();
+    if (wr.empty()) wr = (st->runtime_paths.startup_root / "www").string();
     std::filesystem::path web_root_path(wr);
 
     auto themes = ScanThemes(web_root_path);
@@ -387,7 +387,7 @@ static bool SaveFields(HWND dlg, DlgState* st, bool notify)
     if (!st || !st->cfg) return false;
 
     WebServerConfig newCfg = ReadFields(dlg, st);
-    const auto settings_path = st->app_root / "web_settings.json";
+    const auto settings_path = st->runtime_paths.config_root / "web_settings.json";
 
     try {
         newCfg.SaveToFile(settings_path);
@@ -918,7 +918,7 @@ static LRESULT CALLBACK WebConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
         if (id == kWebRootBrowse) {
             std::string cur = WideToUtf8(GetEditText(dlg, kWebRootEdit));
-            if (cur.empty()) cur = (st->app_root / "www").string();
+            if (cur.empty()) cur = (st->runtime_paths.startup_root / "www").string();
             std::string chosen = BrowseForFolder(dlg, cur);
             if (!chosen.empty()) {
                 SetDlgItemTextW(dlg, kWebRootEdit, Utf8ToWide(chosen).c_str());
@@ -1051,7 +1051,7 @@ static LRESULT CALLBACK WebConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 bool ShowWebConfigDialog(HWND                        owner,
                          WebServer*                  server,
                          WebServerConfig*            config,
-                         const std::filesystem::path app_root)
+                         const RuntimePaths&         runtime_paths)
 {
     // Ensure common controls are initialized (for UPDOWN_CLASS)
     INITCOMMONCONTROLSEX icex = { sizeof(icex), ICC_UPDOWN_CLASS };
@@ -1075,7 +1075,7 @@ bool ShowWebConfigDialog(HWND                        owner,
     DlgState state;
     state.server    = server;
     state.cfg       = config;
-    state.app_root  = app_root;
+    state.runtime_paths = runtime_paths;
 
     constexpr DWORD kWindowStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
     constexpr DWORD kWindowExStyle = WS_EX_DLGMODALFRAME;

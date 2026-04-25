@@ -25,6 +25,7 @@
 #include "web_server.h"
 #include "web_assets_default.h"
 
+#include "artifact_memory_tool_bridge.h"
 #include "mcp_manager.h"
 #include "openai_client.h"
 #include "rag_tool_bridge.h"
@@ -289,6 +290,78 @@ std::string BuildServerAddress(const WebServerConfig& config) {
     return scheme + "://" + host + ":" + std::to_string(config.port);
 }
 
+constexpr int kRememberMeLifetimeDays = 30;
+
+long long ToUnixSeconds(const std::chrono::system_clock::time_point& time_point) {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        time_point.time_since_epoch()).count();
+}
+
+std::chrono::system_clock::time_point FromUnixSeconds(long long seconds) {
+    return std::chrono::system_clock::time_point{std::chrono::seconds(seconds)};
+}
+
+bool JsonValueTruthy(const json& body, const std::string& key) {
+    if (!body.contains(key)) {
+        return false;
+    }
+    const auto& value = body[key];
+    if (value.is_boolean()) {
+        return value.get<bool>();
+    }
+    if (value.is_number_integer()) {
+        return value.get<int>() != 0;
+    }
+    if (value.is_string()) {
+        const std::string lowered = LowerAscii(Trim(value.get<std::string>()));
+        return lowered == "1" || lowered == "true" || lowered == "yes" ||
+               lowered == "on" || lowered == "remember";
+    }
+    return false;
+}
+
+std::string BuildSessionCookieHeader(const WebServerConfig& config,
+                                     const std::string& token,
+                                     std::optional<int> max_age_seconds = std::nullopt) {
+    std::string cookie = "session=" + token + "; Path=/; HttpOnly; SameSite=Strict";
+    if (!config.tls_mode.empty()) {
+        cookie += "; Secure";
+    }
+    if (max_age_seconds && *max_age_seconds >= 0) {
+        cookie += "; Max-Age=" + std::to_string(*max_age_seconds);
+    }
+    return cookie;
+}
+
+std::string BuildExpiredSessionCookieHeader(const WebServerConfig& config) {
+    return BuildSessionCookieHeader(config, "", 0);
+}
+
+std::optional<std::string> ValidateWebPasswordPolicy(const std::string& password) {
+    if (password.size() < 10) {
+        return std::string("Password must be at least 10 characters");
+    }
+
+    bool has_upper = false;
+    bool has_lower = false;
+    bool has_digit = false;
+    for (char c : password) {
+        if (std::isupper(static_cast<unsigned char>(c))) {
+            has_upper = true;
+        } else if (std::islower(static_cast<unsigned char>(c))) {
+            has_lower = true;
+        } else if (std::isdigit(static_cast<unsigned char>(c))) {
+            has_digit = true;
+        }
+    }
+
+    if (!has_upper || !has_lower || !has_digit) {
+        return std::string(
+            "Password must include at least one uppercase letter, one lowercase letter, and one digit");
+    }
+    return std::nullopt;
+}
+
 void SendRedirect(httplib::Response* res, const std::string& location) {
     res->status = 302;
     res->set_header("Location", location);
@@ -310,6 +383,71 @@ std::vector<ChatToolDefinition> BuildMcpToolDefinitions(
         definitions.push_back(std::move(definition));
     }
     return definitions;
+}
+
+size_t EstimateTokenCount(const std::string& text) {
+    if (text.empty()) {
+        return 0;
+    }
+
+    // A conservative cross-provider estimate; exact tokenizers vary by model.
+    return std::max<size_t>(1, (text.size() + 2) / 3);
+}
+
+size_t EstimateMessageTokens(const MessageRecord& message) {
+    size_t tokens = 8;  // Chat message framing overhead.
+    tokens += EstimateTokenCount(message.role);
+    tokens += EstimateTokenCount(message.content);
+    tokens += EstimateTokenCount(message.name);
+    tokens += EstimateTokenCount(message.tool_call_id);
+    tokens += EstimateTokenCount(message.tool_calls_json);
+    return tokens;
+}
+
+size_t EstimateToolTokens(const McpExposedTool& tool) {
+    size_t tokens = 20;  // Function/tool declaration framing overhead.
+    tokens += EstimateTokenCount(tool.alias);
+    tokens += EstimateTokenCount(tool.server_name);
+    tokens += EstimateTokenCount(tool.tool_name);
+    tokens += EstimateTokenCount(tool.title);
+    tokens += EstimateTokenCount(tool.description);
+    tokens += EstimateTokenCount(tool.input_schema_json);
+    return tokens;
+}
+
+size_t EstimateToolTokens(const ChatToolDefinition& tool) {
+    size_t tokens = 20;  // Function/tool declaration framing overhead.
+    tokens += EstimateTokenCount(tool.name);
+    tokens += EstimateTokenCount(tool.description);
+    tokens += EstimateTokenCount(tool.parameters_json);
+    return tokens;
+}
+
+size_t EstimateRequestInputTokens(const ChatRequestOptions& request,
+                                  const std::vector<McpExposedTool>& exposed_tools,
+                                  const std::vector<ChatToolDefinition>& extra_tools,
+                                  bool include_tools) {
+    size_t tokens = 3;  // Request-level framing overhead.
+    if (!request.system_prompt.empty()) {
+        MessageRecord system_message;
+        system_message.role = "system";
+        system_message.content = request.system_prompt;
+        tokens += EstimateMessageTokens(system_message);
+    }
+
+    for (const auto& message : request.messages) {
+        tokens += EstimateMessageTokens(message);
+    }
+
+    if (include_tools) {
+        for (const auto& tool : exposed_tools) {
+            tokens += EstimateToolTokens(tool);
+        }
+        for (const auto& tool : extra_tools) {
+            tokens += EstimateToolTokens(tool);
+        }
+    }
+    return tokens;
 }
 
 std::vector<ProjectMcpVariableValue> BuildWebRuntimeVariables(
@@ -676,7 +814,8 @@ AgentUploadArtifact CreateAgentMarkdownArtifact(
     const std::string& project_id,
     const std::string& chat_id,
     const std::string& username,
-    const std::string& download_url) {
+    const std::string& download_url,
+    const std::string& absolute_download_url) {
     AgentUploadArtifact artifact;
     const fs::path agent_dir = project_folder / ".agent";
     std::error_code ec;
@@ -711,6 +850,7 @@ AgentUploadArtifact CreateAgentMarkdownArtifact(
     markdown << "- Original file: " << original_abs << "\n";
     markdown << "- Project relative original: " << RelativePathUtf8(project_folder, original_path) << "\n";
     markdown << "- Web download route: " << download_url << "\n";
+    markdown << "- Web download URL: " << absolute_download_url << "\n";
     markdown << "- Agent Markdown file: " << markdown_abs << "\n";
     markdown << "- Agent upload index: " << index_abs << "\n\n";
     markdown << "## Processing\n\n";
@@ -749,6 +889,7 @@ AgentUploadArtifact CreateAgentMarkdownArtifact(
         {"original_path", original_abs},
         {"original_relative_path", original_relative},
         {"download_url", download_url},
+        {"absolute_download_url", absolute_download_url},
         {"markdown_path", markdown_abs},
         {"markdown_relative_path", artifact.markdown_relative_path},
         {"index_path", index_abs},
@@ -769,6 +910,7 @@ struct AgentIndexEntry {
     std::string original_path;
     std::string original_relative_path;
     std::string download_url;
+    std::string absolute_download_url;
     bool extraction_success = false;
     std::string extraction_error;
 };
@@ -816,6 +958,7 @@ std::optional<AgentIndexEntry> FindAgentIndexEntryForUpload(
         entry.original_path = it->value("original_path", "");
         entry.original_relative_path = original_relative;
         entry.download_url = it->value("download_url", "");
+        entry.absolute_download_url = it->value("absolute_download_url", "");
         entry.extraction_success = it->value("extraction_success", false);
         entry.extraction_error = it->value("extraction_error", "");
         return entry;
@@ -941,23 +1084,33 @@ std::string BuildWebFormattingContext(const std::string& server_address,
                                       const std::string& chat_id) {
     std::string context =
         "Web Chat Formatting Capabilities:\n"
-        "This response is being rendered in the web chat. Mermaid and Vega-Lite "
-        "libraries are available for visual output.\n"
+        "This response is being rendered in the web chat. Mermaid, Vega-Lite, "
+        "Cytoscape.js, and SVG are available for visual output.\n"
         "- Use fenced code blocks tagged `mermaid` for flowcharts, sequence diagrams, "
         "state diagrams, class diagrams, timelines, and similar diagrams.\n"
         "- Use fenced code blocks tagged `vega-lite` with JSON for charts and data graphics. "
         "Keep Vega-Lite specs self-contained with inline data when possible.\n"
-        "- Prefer these formats when a diagram, graph, or flow chart would make "
-        "the answer clearer.\n"
+        "- Use fenced code blocks tagged `cytoscape` with JSON for interactive graph and "
+        "network visualizations. Provide `elements`, and include `data.id` for nodes plus "
+        "`data.source` / `data.target` for edges. Add `style` or `layout` when useful.\n"
+        "- Use fenced code blocks tagged `svg` with raw `<svg>...</svg>` markup for custom "
+        "diagrams, callouts, overlays, annotations, or freeform visual explanations.\n"
+        "- Prefer the simplest useful visual format: Vega-Lite for numeric or tabular data, "
+        "Cytoscape.js for nodes and edges, Mermaid for process and flow diagrams, and SVG for "
+        "custom visuals that do not fit the other three.\n"
+        "- Output the visualization spec directly in the fenced block. Do not wrap it in "
+        "HTML or JavaScript.\n"
         "\nWeb Download Links:\n"
         "- You may generate direct download URLs from raw link data by combining the server address with the route. "
-        "Relative routes also work inside this web chat.\n"
+        "Relative routes also work inside this web chat, but absolute URLs are better for standalone HTML files.\n"
         "- Project-accessible files can be linked as `" + server_address + "/data/{project_id}/{chat_id}/{file_or_relative_path}` "
         "or `/data/{project_id}/{chat_id}/{file_or_relative_path}`. Use only file names or relative paths that came from the user, "
         "tool output, or project context; URL-encode spaces and special characters. The server only serves files inside configured "
         "folder variables for the current user and chat.\n"
         "- RAG originals can be linked as `" + server_address + "/rag/{project_id}/{rag_id}/{document_id}` "
         "or `/rag/{project_id}/{rag_id}/{document_id}` when a readable exposed RAG tool returns a document_id or download_url.\n"
+        "- When writing standalone HTML files that reference images, stylesheets, or sibling assets from the web server, prefer the full absolute URL "
+        "with the current server address instead of a bare `/data/...` or `/rag/...` route so the asset link stays explicit outside the chat UI.\n"
         "- For RAG documents, source_path, original_source_uri, and original file names are provenance only. They may refer to another "
         "computer or a file that no longer exists. Use download_url or the /rag route for downloadable links.";
     if (!server_address.empty()) {
@@ -1153,17 +1306,20 @@ void WebServerConfig::SaveToFile(const fs::path& path) const {
 WebServer::WebServer(AppStorage*       storage,
                      WebUserStore*     user_store,
                      WebServerConfig   config,
-                     fs::path          app_root,
+                     RuntimePaths      runtime_paths,
                      McpManager*       mcp_manager,
                      RagService*       rag_service)
     : storage_(storage)
     , user_store_(user_store)
     , mcp_manager_(mcp_manager)
     , rag_service_(rag_service)
+    , compression_service_(storage)
     , config_(std::move(config))
-    , app_root_(std::move(app_root))
+    , runtime_paths_(std::move(runtime_paths))
     , impl_(std::make_unique<WebServerImpl>())
-{}
+{
+    LoadPersistentSessions();
+}
 
 WebServer::~WebServer() {
     Stop();
@@ -1192,18 +1348,175 @@ std::string WebServer::GenerateToken() {
 }
 
 std::string WebServer::CreateSession(const WebUser& user,
-                                      const std::string& remote_addr) {
+                                     const std::string& remote_addr,
+                                     bool remember_me) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
+    const auto now = std::chrono::system_clock::now();
     const auto token = GenerateToken();
     Session s;
     s.user_id               = user.id;
     s.username              = user.username;
     s.force_password_reset  = user.force_password_reset;
+    s.needs_password_reset  = user.force_password_reset;
+    s.persistent            = remember_me;
     s.remote_addr           = remote_addr;
-    s.created_at            = std::chrono::system_clock::now();
-    s.last_activity         = std::chrono::steady_clock::now();
+    s.created_at            = now;
+    s.last_activity         = now;
+    if (remember_me) {
+        s.persistent_until = now + std::chrono::hours(24 * kRememberMeLifetimeDays);
+    }
     sessions_[token] = s;
+    if (remember_me) {
+        SavePersistentSessionsLocked();
+    }
     return token;
+}
+
+std::filesystem::path WebServer::PersistentSessionsPath() const {
+    return runtime_paths_.data_root / "web_remembered_sessions.json";
+}
+
+void WebServer::LoadPersistentSessions() {
+    const fs::path path = PersistentSessionsPath();
+    if (!fs::is_regular_file(path)) {
+        return;
+    }
+
+    json root;
+    try {
+        std::ifstream input(path, std::ios::binary);
+        root = json::parse(input);
+    } catch (...) {
+        return;
+    }
+
+    if (!root.contains("sessions") || !root["sessions"].is_array()) {
+        return;
+    }
+
+    const auto now = std::chrono::system_clock::now();
+    std::lock_guard<std::mutex> lock(sessions_mutex_);
+    for (const auto& item : root["sessions"]) {
+        if (!item.is_object()) {
+            continue;
+        }
+        const std::string token = item.value("token", "");
+        const std::string user_id = item.value("user_id", "");
+        if (token.empty() || user_id.empty()) {
+            continue;
+        }
+
+        std::optional<WebUser> user_opt;
+        if (user_store_) {
+            user_opt = user_store_->FindUserById(user_id);
+        }
+        if (!user_opt || !user_opt->enabled) {
+            continue;
+        }
+
+        Session session;
+        session.user_id = user_id;
+        session.username = item.value("username", user_opt->username);
+        session.force_password_reset =
+            item.value("force_password_reset", user_opt->force_password_reset);
+        session.needs_password_reset =
+            item.value("needs_password_reset", user_opt->force_password_reset);
+        session.persistent = item.value("persistent", true);
+        session.remote_addr = item.value("remote_addr", "");
+        session.created_at = FromUnixSeconds(
+            item.value("created_at_unix", ToUnixSeconds(now)));
+        session.last_activity = FromUnixSeconds(
+            item.value("last_activity_unix", ToUnixSeconds(session.created_at)));
+        session.persistent_until = FromUnixSeconds(
+            item.value("persistent_until_unix", 0LL));
+
+        if (!session.persistent ||
+            session.persistent_until.time_since_epoch().count() <= 0 ||
+            IsSessionExpired(session, now)) {
+            continue;
+        }
+
+        if (user_opt->force_password_reset) {
+            session.force_password_reset = true;
+            session.needs_password_reset = true;
+        }
+        sessions_[token] = std::move(session);
+    }
+}
+
+void WebServer::SavePersistentSessionsLocked() const {
+    const fs::path path = PersistentSessionsPath();
+    const auto now = std::chrono::system_clock::now();
+    json root;
+    root["sessions"] = json::array();
+    for (const auto& [token, session] : sessions_) {
+        if (!session.persistent || IsSessionExpired(session, now)) {
+            continue;
+        }
+        root["sessions"].push_back({
+            {"token", token},
+            {"user_id", session.user_id},
+            {"username", session.username},
+            {"force_password_reset", session.force_password_reset},
+            {"needs_password_reset", session.needs_password_reset},
+            {"persistent", session.persistent},
+            {"remote_addr", session.remote_addr},
+            {"created_at_unix", ToUnixSeconds(session.created_at)},
+            {"last_activity_unix", ToUnixSeconds(session.last_activity)},
+            {"persistent_until_unix", ToUnixSeconds(session.persistent_until)},
+        });
+    }
+
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    if (ec) {
+        return;
+    }
+
+    if (root["sessions"].empty()) {
+        fs::remove(path, ec);
+        return;
+    }
+
+    const fs::path tmp = path;
+    const fs::path tmp_with_suffix = tmp.string() + ".tmp";
+    try {
+        std::ofstream output(tmp_with_suffix, std::ios::binary | std::ios::trunc);
+        if (!output.is_open()) {
+            return;
+        }
+        output << root.dump(2);
+        output.close();
+        fs::rename(tmp_with_suffix, path, ec);
+        if (ec) {
+            std::error_code remove_ec;
+            fs::remove(path, remove_ec);
+            ec.clear();
+            fs::rename(tmp_with_suffix, path, ec);
+            if (ec) {
+                fs::remove(tmp_with_suffix, remove_ec);
+            }
+        }
+    } catch (...) {
+        std::error_code remove_ec;
+        fs::remove(tmp_with_suffix, remove_ec);
+    }
+}
+
+void WebServer::SavePersistentSessions() const {
+    std::lock_guard<std::mutex> lock(sessions_mutex_);
+    SavePersistentSessionsLocked();
+}
+
+bool WebServer::IsSessionExpired(const Session& session,
+                                 std::chrono::system_clock::time_point now) const {
+    if (session.persistent) {
+        return session.persistent_until.time_since_epoch().count() <= 0 ||
+               now >= session.persistent_until;
+    }
+    const auto age_min = std::chrono::duration_cast<std::chrono::minutes>(
+        now - session.last_activity).count();
+    return age_min >= config_.session_timeout_minutes;
 }
 
 std::string WebServer::GetRemoteAddr(const void* req_ptr) {
@@ -1215,9 +1528,9 @@ std::optional<WebServer::Session> WebServer::FindSession(const std::string& toke
     std::lock_guard<std::mutex> lock(sessions_mutex_);
     auto it = sessions_.find(token);
     if (it == sessions_.end()) return std::nullopt;
-    const auto age_min = std::chrono::duration_cast<std::chrono::minutes>(
-        std::chrono::steady_clock::now() - it->second.last_activity).count();
-    if (age_min >= config_.session_timeout_minutes) return std::nullopt;
+    if (IsSessionExpired(it->second, std::chrono::system_clock::now())) {
+        return std::nullopt;
+    }
     return it->second;
 }
 
@@ -1225,28 +1538,45 @@ bool WebServer::TouchSession(const std::string& token) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
     auto it = sessions_.find(token);
     if (it == sessions_.end()) return false;
-    const auto age_min = std::chrono::duration_cast<std::chrono::minutes>(
-        std::chrono::steady_clock::now() - it->second.last_activity).count();
-    if (age_min >= config_.session_timeout_minutes) {
+    if (IsSessionExpired(it->second, std::chrono::system_clock::now())) {
+        const bool should_save = it->second.persistent;
         sessions_.erase(it);
+        if (should_save) {
+            SavePersistentSessionsLocked();
+        }
         return false;
     }
-    it->second.last_activity = std::chrono::steady_clock::now();
+    it->second.last_activity = std::chrono::system_clock::now();
     return true;
 }
 
 void WebServer::DeleteSession(const std::string& token) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
-    sessions_.erase(token);
+    auto it = sessions_.find(token);
+    if (it == sessions_.end()) {
+        return;
+    }
+    const bool should_save = it->second.persistent;
+    sessions_.erase(it);
+    if (should_save) {
+        SavePersistentSessionsLocked();
+    }
 }
 
 void WebServer::PurgeExpiredSessions() {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = std::chrono::system_clock::now();
+    bool removed_persistent = false;
     for (auto it = sessions_.begin(); it != sessions_.end(); ) {
-        const auto age = std::chrono::duration_cast<std::chrono::minutes>(
-            now - it->second.last_activity).count();
-        it = (age >= config_.session_timeout_minutes) ? sessions_.erase(it) : ++it;
+        if (IsSessionExpired(it->second, now)) {
+            removed_persistent = removed_persistent || it->second.persistent;
+            it = sessions_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (removed_persistent) {
+        SavePersistentSessionsLocked();
     }
 }
 
@@ -1257,7 +1587,7 @@ int WebServer::ActiveSessions() const {
 
 std::vector<SessionInfo> WebServer::GetActiveSessions() const {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
-    const auto now_steady = std::chrono::steady_clock::now();
+    const auto now = std::chrono::system_clock::now();
     std::vector<SessionInfo> result;
     result.reserve(sessions_.size());
     for (const auto& [token, s] : sessions_) {
@@ -1268,7 +1598,7 @@ std::vector<SessionInfo> WebServer::GetActiveSessions() const {
         info.remote_addr  = s.remote_addr;
         info.created_at   = s.created_at;
         info.idle_seconds = std::chrono::duration_cast<std::chrono::seconds>(
-            now_steady - s.last_activity).count();
+            now - s.last_activity).count();
         result.push_back(std::move(info));
     }
     return result;
@@ -1276,17 +1606,33 @@ std::vector<SessionInfo> WebServer::GetActiveSessions() const {
 
 void WebServer::ForceLogoutUser(const std::string& user_id) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
+    bool removed_persistent = false;
     for (auto it = sessions_.begin(); it != sessions_.end(); ) {
-        if (it->second.user_id == user_id)
+        if (it->second.user_id == user_id) {
+            removed_persistent = removed_persistent || it->second.persistent;
             it = sessions_.erase(it);
-        else
+        } else {
             ++it;
+        }
+    }
+    if (removed_persistent) {
+        SavePersistentSessionsLocked();
     }
 }
 
 void WebServer::ForceLogoutAll() {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
+    bool had_persistent = false;
+    for (const auto& [token, session] : sessions_) {
+        if (session.persistent) {
+            had_persistent = true;
+            break;
+        }
+    }
     sessions_.clear();
+    if (had_persistent) {
+        SavePersistentSessionsLocked();
+    }
 }
 
 void WebServer::SetAuditLogPath(const std::filesystem::path& path) {
@@ -1415,6 +1761,7 @@ void WebServer::SendError(void* res_ptr, int status, const std::string& message)
 std::optional<WebServer::Session>
 WebServer::RequireAuth(const void* req_ptr, void* res_ptr) {
     const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    PurgeExpiredSessions();
     const auto cookie_hdr = req->get_header_value("Cookie");
     const auto token = GetCookieValue(cookie_hdr, "session");
     if (token.empty()) {
@@ -1432,6 +1779,7 @@ WebServer::RequireAuth(const void* req_ptr, void* res_ptr) {
     auto session = FindSession(token);
     if (!session) {
         auto* res = static_cast<httplib::Response*>(res_ptr);
+        res->set_header("Set-Cookie", BuildExpiredSessionCookieHeader(config_));
         const bool is_api = req->path.rfind("/api/", 0) == 0;
         if (is_api) {
             SendError(res_ptr, 401, "Session expired");
@@ -1542,8 +1890,8 @@ fs::path WebServer::ResolveWebRoot() const {
         const fs::path p(config_.web_root);
         if (fs::is_directory(p)) return p;
     }
-    // Fall back to <app_root>/www
-    return app_root_ / "www";
+    // Fall back to <startup_root>/www
+    return runtime_paths_.startup_root / "www";
 }
 
 fs::path WebServer::ResolveThemeRoot() const {
@@ -1706,13 +2054,15 @@ void WebServer::HandleStaticOrPage(const void* req_ptr, void* res_ptr) {
               "https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js" },
             { "js/vendor/mermaid.min.js",
               "https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js" },
-            { "js/vendor/vega.min.js",
-              "https://cdnjs.cloudflare.com/ajax/libs/vega/5.28.0/vega.min.js" },
-            { "js/vendor/vega-lite.min.js",
-              "https://cdnjs.cloudflare.com/ajax/libs/vega-lite/5.18.1/vega-lite.min.js" },
-            { "js/vendor/vega-embed.min.js",
-              "https://cdnjs.cloudflare.com/ajax/libs/vega-embed/6.25.0/vega-embed.min.js" },
-        };
+        { "js/vendor/vega.min.js",
+          "https://cdnjs.cloudflare.com/ajax/libs/vega/5.28.0/vega.min.js" },
+        { "js/vendor/vega-lite.min.js",
+          "https://cdnjs.cloudflare.com/ajax/libs/vega-lite/5.18.1/vega-lite.min.js" },
+        { "js/vendor/vega-embed.min.js",
+          "https://cdnjs.cloudflare.com/ajax/libs/vega-embed/6.25.0/vega-embed.min.js" },
+        { "js/vendor/cytoscape.min.js",
+          "https://cdn.jsdelivr.net/npm/cytoscape@3.33.2/dist/cytoscape.min.js" },
+    };
         const auto it = kVendorCdn.find(url_path);
         if (it != kVendorCdn.end()) {
             res->status = 302;
@@ -1733,6 +2083,7 @@ void WebServer::HandleLogin(const void* req_ptr, void* res_ptr) {
     auto* res       = static_cast<httplib::Response*>(res_ptr);
 
     const std::string ip = GetRemoteAddr(req_ptr);
+    PurgeExpiredSessions();
 
     // Rate-limit check
     if (IsRateLimited(ip)) {
@@ -1749,6 +2100,7 @@ void WebServer::HandleLogin(const void* req_ptr, void* res_ptr) {
 
     const std::string username = body_j.value("username", "");
     const std::string password = body_j.value("password", "");
+    const bool remember_me = JsonValueTruthy(body_j, "remember_me");
     if (username.empty() || password.empty()) {
         SendError(res_ptr, 400, "Username and password required"); return;
     }
@@ -1767,18 +2119,16 @@ void WebServer::HandleLogin(const void* req_ptr, void* res_ptr) {
 
     RecordLoginSuccess(ip);
     user_store_->RecordLogin(user_opt->id);
-    const std::string token = CreateSession(*user_opt, ip);
+    const std::string token = CreateSession(*user_opt, ip, remember_me);
     AppendAuditLog(ip, "login_success", "user=" + username);
 
     // If user needs password reset, update session and route to change-password.
     if (user_opt->force_password_reset) {
-        {
-            std::lock_guard<std::mutex> lock(sessions_mutex_);
-            auto it = sessions_.find(token);
-            if (it != sessions_.end()) it->second.needs_password_reset = true;
-        }
-        const std::string cookie = "session=" + token
-            + "; Path=/; HttpOnly; SameSite=Strict";
+        const std::optional<int> max_age_seconds = remember_me
+            ? std::optional<int>(kRememberMeLifetimeDays * 24 * 60 * 60)
+            : std::nullopt;
+        const std::string cookie = BuildSessionCookieHeader(
+            config_, token, max_age_seconds);
         res->set_header("Set-Cookie", cookie);
         if (form_post) {
             SendRedirect(res, "/change-password");
@@ -1794,8 +2144,11 @@ void WebServer::HandleLogin(const void* req_ptr, void* res_ptr) {
     }
 
     // Set HttpOnly session cookie (add Secure when TLS is enabled)
-    const std::string cookie = "session=" + token
-        + "; Path=/; HttpOnly; SameSite=Strict";
+    const std::optional<int> max_age_seconds = remember_me
+        ? std::optional<int>(kRememberMeLifetimeDays * 24 * 60 * 60)
+        : std::nullopt;
+    const std::string cookie = BuildSessionCookieHeader(
+        config_, token, max_age_seconds);
     res->set_header("Set-Cookie", cookie);
 
     if (form_post) {
@@ -1825,8 +2178,7 @@ void WebServer::HandleLogout(const void* req_ptr, void* res_ptr) {
     }
 
     // Expire the cookie
-    res->set_header("Set-Cookie",
-        "session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    res->set_header("Set-Cookie", BuildExpiredSessionCookieHeader(config_));
     res->status = 302;
     res->set_header("Location", "/login");
 }
@@ -1847,22 +2199,9 @@ void WebServer::HandleChangePassword(const void* req_ptr, void* res_ptr) {
                                   body_j.value("current-password", ""));
     const std::string new_pass = body_j.value("new_password",
                                   body_j.value("new-password", ""));
-    // Password policy: ≥10 chars, at least one uppercase, one lowercase, one digit
-    if (new_pass.size() < 10) {
-        SendError(res_ptr, 400, "Password must be at least 10 characters"); return;
-    }
-    {
-        bool has_upper = false, has_lower = false, has_digit = false;
-        for (char c : new_pass) {
-            if (std::isupper(static_cast<unsigned char>(c))) has_upper = true;
-            else if (std::islower(static_cast<unsigned char>(c))) has_lower = true;
-            else if (std::isdigit(static_cast<unsigned char>(c))) has_digit = true;
-        }
-        if (!has_upper || !has_lower || !has_digit) {
-            SendError(res_ptr, 400,
-                "Password must include at least one uppercase letter, one lowercase letter, and one digit");
-            return;
-        }
+    if (const auto password_error = ValidateWebPasswordPolicy(new_pass)) {
+        SendError(res_ptr, 400, *password_error);
+        return;
     }
 
     auto user_opt = user_store_->FindUserById(session->user_id);
@@ -1886,6 +2225,9 @@ void WebServer::HandleChangePassword(const void* req_ptr, void* res_ptr) {
         if (it != sessions_.end()) {
             it->second.force_password_reset = false;
             it->second.needs_password_reset = false;
+            if (it->second.persistent) {
+                SavePersistentSessionsLocked();
+            }
         }
     }
 
@@ -1894,6 +2236,93 @@ void WebServer::HandleChangePassword(const void* req_ptr, void* res_ptr) {
     } else {
         SendJson(res_ptr, 200, R"({"ok":true})");
     }
+}
+
+void WebServer::HandleUpdateMe(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const auto body_opt = ParseJsonOrFormBody(*req);
+    if (!body_opt) {
+        SendError(res_ptr, 400, "Invalid profile update request");
+        return;
+    }
+
+    const json& body_j = *body_opt;
+    auto user_opt = user_store_->FindUserById(session->user_id);
+    if (!user_opt) {
+        SendError(res_ptr, 404, "User not found");
+        return;
+    }
+
+    WebUser updated = *user_opt;
+    updated.display_name = Trim(body_j.value("display_name", updated.display_name));
+    updated.email = Trim(body_j.value("email", updated.email));
+
+    if (!updated.email.empty() && updated.email.find('@') == std::string::npos) {
+        SendError(res_ptr, 400, "Email address must contain @ or be left blank");
+        return;
+    }
+
+    const std::string current_password =
+        body_j.value("current_password", body_j.value("current-password", ""));
+    const std::string new_password =
+        body_j.value("new_password", body_j.value("new-password", ""));
+    const std::string confirm_password =
+        body_j.value("confirm_password", body_j.value("confirm-password", ""));
+
+    const bool wants_password_change = !Trim(new_password).empty() || !Trim(confirm_password).empty();
+    if (wants_password_change) {
+        if (new_password != confirm_password) {
+            SendError(res_ptr, 400, "New password and confirmation do not match");
+            return;
+        }
+        if (const auto password_error = ValidateWebPasswordPolicy(new_password)) {
+            SendError(res_ptr, 400, *password_error);
+            return;
+        }
+        if (!user_store_->VerifyPassword(*user_opt, current_password)) {
+            SendError(res_ptr, 401, "Current password incorrect");
+            return;
+        }
+    }
+
+    if (!user_store_->UpdateUser(updated)) {
+        SendError(res_ptr, 500, "Could not update the account");
+        return;
+    }
+
+    if (wants_password_change) {
+        if (!user_store_->SetPassword(session->user_id, new_password)) {
+            SendError(res_ptr, 500, "Could not update the password");
+            return;
+        }
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        const auto token = GetCookieValue(req->get_header_value("Cookie"), "session");
+        auto it = sessions_.find(token);
+        if (it != sessions_.end()) {
+            it->second.force_password_reset = false;
+            it->second.needs_password_reset = false;
+            if (it->second.persistent) {
+                SavePersistentSessionsLocked();
+            }
+        }
+    }
+
+    const auto refreshed_user = user_store_->FindUserById(session->user_id);
+    if (!refreshed_user) {
+        SendError(res_ptr, 500, "Account updated but could not reload profile");
+        return;
+    }
+
+    json resp = {
+        {"ok", true},
+        {"username", refreshed_user->username},
+        {"display_name", refreshed_user->display_name},
+        {"email", refreshed_user->email},
+    };
+    SendJson(res_ptr, 200, resp.dump());
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2069,15 +2498,126 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
 
     const auto messages = storage_->LoadMessages(*project_id, chat_id);
     json arr = json::array();
+    json pending_ui_trace = json::array();
+    std::unordered_map<std::string, size_t> tool_trace_indices;
+    std::string pending_created_at;
+
+    auto ensure_pending_created_at = [&](const std::string& created_at) {
+        if (pending_created_at.empty()) {
+            pending_created_at = created_at;
+        }
+    };
+
+    auto append_pending_text = [&](const std::string& text) {
+        if (text.empty()) return;
+        pending_ui_trace.push_back({
+            {"type", "text"},
+            {"content", text},
+        });
+    };
+
+    auto append_pending_tool_calls = [&](const std::string& tool_calls_json) {
+        if (tool_calls_json.empty()) return;
+        try {
+            const auto tool_calls = json::parse(tool_calls_json);
+            if (!tool_calls.is_array()) return;
+            for (const auto& tool_call : tool_calls) {
+                const std::string tool_call_id = tool_call.value("id", "");
+                std::string tool_name;
+                std::string arguments_json;
+                if (tool_call.contains("function") && tool_call["function"].is_object()) {
+                    const auto& fn = tool_call["function"];
+                    tool_name = fn.value("name", "");
+                    if (fn.contains("arguments")) {
+                        if (fn["arguments"].is_string()) {
+                            arguments_json = fn["arguments"].get<std::string>();
+                        } else {
+                            arguments_json = fn["arguments"].dump();
+                        }
+                    }
+                }
+                pending_ui_trace.push_back({
+                    {"type", "tool_usage"},
+                    {"tool_call_id", tool_call_id},
+                    {"tool_name", tool_name},
+                    {"arguments", arguments_json},
+                    {"status", "done"},
+                });
+                if (!tool_call_id.empty()) {
+                    tool_trace_indices[tool_call_id] = pending_ui_trace.size() - 1;
+                }
+            }
+        } catch (...) {}
+    };
+
+    auto append_pending_tool_result = [&](const MessageRecord& message) {
+        json segment = {
+            {"type", "tool_usage"},
+            {"tool_call_id", message.tool_call_id},
+            {"tool_name", message.name},
+            {"result", message.content},
+            {"status", "done"},
+        };
+        const auto it = tool_trace_indices.find(message.tool_call_id);
+        if (it != tool_trace_indices.end() &&
+            it->second < pending_ui_trace.size() &&
+            pending_ui_trace[it->second].is_object()) {
+            auto& current = pending_ui_trace[it->second];
+            if (current.value("tool_name", "").empty() && !message.name.empty()) {
+                current["tool_name"] = message.name;
+            }
+            current["result"] = message.content;
+            current["status"] = "done";
+        } else {
+            pending_ui_trace.push_back(segment);
+            if (!message.tool_call_id.empty()) {
+                tool_trace_indices[message.tool_call_id] = pending_ui_trace.size() - 1;
+            }
+        }
+    };
+
+    auto flush_pending_assistant = [&]() {
+        if (pending_ui_trace.empty()) return;
+        arr.push_back({
+            {"role", "assistant"},
+            {"content", ""},
+            {"created_at", pending_created_at},
+            {"ui_trace", pending_ui_trace},
+        });
+        pending_ui_trace = json::array();
+        tool_trace_indices.clear();
+        pending_created_at.clear();
+    };
+
     for (const auto& m : messages) {
-        if (m.role == "tool") continue;
-        if (m.role == "assistant" &&
-            (m.content.empty() || !m.tool_calls_json.empty())) {
+        if (m.role == "assistant" && !m.tool_calls_json.empty()) {
+            ensure_pending_created_at(m.created_at);
+            append_pending_text(m.content);
+            append_pending_tool_calls(m.tool_calls_json);
             continue;
         }
+        if (m.role == "tool") {
+            ensure_pending_created_at(m.created_at);
+            append_pending_tool_result(m);
+            continue;
+        }
+        if (m.role == "assistant") {
+            if (!pending_ui_trace.empty()) {
+                ensure_pending_created_at(m.created_at);
+                append_pending_text(m.content);
+                flush_pending_assistant();
+                continue;
+            }
+            if (m.content.empty()) continue;
+            arr.push_back({{"role", m.role}, {"content", m.content},
+                           {"created_at", m.created_at}});
+            continue;
+        }
+        flush_pending_assistant();
         arr.push_back({{"role", m.role}, {"content", m.content},
                        {"created_at", m.created_at}});
     }
+    flush_pending_assistant();
     SendJson(res_ptr, 200, arr.dump());
 }
 
@@ -2092,6 +2632,26 @@ std::string WebServer::BuildUserContentWithAttachments(
     const std::vector<std::string>& attachments) const
 {
     if (attachments.empty()) return user_content;
+
+    const std::string server_address = BuildServerAddress(config_);
+    const auto make_absolute_download_url =
+        [&](const std::string& route_or_url) -> std::string {
+            const std::string trimmed = Trim(route_or_url);
+            if (trimmed.empty()) {
+                return {};
+            }
+            const std::string lowered = LowerAscii(trimmed);
+            if (lowered.rfind("http://", 0) == 0 || lowered.rfind("https://", 0) == 0) {
+                return trimmed;
+            }
+            if (server_address.empty()) {
+                return trimmed;
+            }
+            if (!trimmed.empty() && trimmed.front() == '/') {
+                return server_address + trimmed;
+            }
+            return server_address + "/" + trimmed;
+        };
 
     std::string folder_error;
     const auto upload_folder = ResolveProjectUploadFolder(
@@ -2122,6 +2682,8 @@ std::string WebServer::BuildUserContentWithAttachments(
         const std::string attachment_download_url =
             "/data/" + project_id + "/" + chat_id + "/" +
             UrlEncodePath(attachment_file_relative);
+        const std::string attachment_absolute_download_url =
+            make_absolute_download_url(attachment_download_url);
 
         if (const auto agent_entry =
                 FindAgentIndexEntryForUpload(upload_folder->root, filename)) {
@@ -2137,10 +2699,16 @@ std::string WebServer::BuildUserContentWithAttachments(
                 (agent_entry->original_relative_path.empty()
                     ? attachment_file_relative
                     : agent_entry->original_relative_path) + "\n";
-            combined += "Web download route: " +
-                (agent_entry->download_url.empty()
+            const std::string agent_download_route =
+                agent_entry->download_url.empty()
                     ? attachment_download_url
-                    : agent_entry->download_url) + "\n";
+                    : agent_entry->download_url;
+            const std::string agent_absolute_download_url =
+                agent_entry->absolute_download_url.empty()
+                    ? make_absolute_download_url(agent_download_route)
+                    : agent_entry->absolute_download_url;
+            combined += "Web download route: " + agent_download_route + "\n";
+            combined += "Web download URL: " + agent_absolute_download_url + "\n";
             combined += "Processed Markdown file: " +
                 WideToUtf8(agent_entry->markdown_path.wstring()) + "\n";
             combined += "Agent upload index: " +
@@ -2164,7 +2732,8 @@ std::string WebServer::BuildUserContentWithAttachments(
             combined += "\n\n---\nAttached text/source file: " + filename + "\n";
             combined += "Stored file: " + attachment_file_abs + "\n";
             combined += "Project relative path: " + attachment_file_relative + "\n";
-            combined += "Web download route: " + attachment_download_url + "\n\n";
+            combined += "Web download route: " + attachment_download_url + "\n";
+            combined += "Web download URL: " + attachment_absolute_download_url + "\n\n";
             combined += text.empty() ? "[Error: could not read file]\n" : text;
             if (truncated) {
                 combined += "\n[... truncated at 128 KB ...]";
@@ -2177,6 +2746,7 @@ std::string WebServer::BuildUserContentWithAttachments(
             combined += "Stored file: " + attachment_file_abs + "\n";
             combined += "Project relative path: " + attachment_file_relative + "\n";
             combined += "Web download route: " + attachment_download_url + "\n";
+            combined += "Web download URL: " + attachment_absolute_download_url + "\n";
             combined += "[Binary file, " +
                 std::to_string(file_size_error ? 0 : attachment_file_size) +
                 " bytes; content not embedded]\n";
@@ -2215,6 +2785,169 @@ ModelVisibleMessages(const std::vector<MessageRecord>& messages) {
     return filtered;
 }
 
+struct PreparedWebHistory {
+    std::vector<MessageRecord> request_history;
+    std::string compressed_context;
+    std::optional<ContextCompressionConfig> selected_config;
+};
+
+void AppendPromptSection(std::string& prompt, const std::string& section) {
+    if (section.empty()) {
+        return;
+    }
+    if (!prompt.empty()) {
+        prompt += "\n\n";
+    }
+    prompt += section;
+}
+
+PreparedWebHistory PrepareWebRequestHistory(
+    ContextCompressionService* compression_service,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const ProjectSettings& project_settings,
+    const std::vector<MessageRecord>& stored_messages,
+    const std::vector<ProjectMcpVariableValue>& resolved_prompt_variables,
+    const std::function<void(const std::string&, const std::string&)>&
+        on_status = {}) {
+    PreparedWebHistory prepared;
+    prepared.request_history = ModelVisibleMessages(stored_messages);
+
+    if (!compression_service ||
+        project_settings.selected_compression_config_id.empty()) {
+        return prepared;
+    }
+
+    prepared.selected_config =
+        compression_service->GetGlobalConfig(
+            project_settings.selected_compression_config_id);
+    if (!prepared.selected_config) {
+        return prepared;
+    }
+
+    const auto compression_messages = ModelVisibleMessages(stored_messages);
+    if (compression_service->ShouldCompress(
+            project_id, chat_id, compression_messages.size())) {
+        if (on_status) {
+            on_status("compression_start", "Compressing context window...");
+        }
+        auto model_caller =
+            [](const ChatRequestOptions& opts)
+                -> std::optional<ChatCompletionResult> {
+            const auto result = OpenAIClient::CreateSimpleCompletion(opts);
+            return result.success ? std::make_optional(result) : std::nullopt;
+        };
+        prepared.compressed_context =
+            compression_service->CompressConversation(
+                compression_messages,
+                project_id,
+                chat_id,
+                project_settings.selected_compression_config_id,
+                model_caller,
+                false,
+                "automatic",
+                resolved_prompt_variables);
+        if (on_status) {
+            on_status(
+                "compression_done",
+                prepared.compressed_context.empty()
+                    ? "Context compression checked."
+                    : "Context window compressed.");
+        }
+    }
+
+    const auto compression_state =
+        compression_service->LoadChatState(project_id, chat_id);
+    if (prepared.compressed_context.empty()) {
+        prepared.compressed_context =
+            compression_state.current_compressed_context;
+    }
+    if (!prepared.compressed_context.empty() &&
+        compression_state.last_compression_message_index > 0) {
+        const size_t first_uncompressed = std::min(
+            compression_state.last_compression_message_index,
+            prepared.request_history.size());
+        prepared.request_history.erase(
+            prepared.request_history.begin(),
+            prepared.request_history.begin() + first_uncompressed);
+    }
+
+    return prepared;
+}
+
+std::string BuildWebSystemPrompt(
+    McpManager* mcp_manager,
+    AppStorage* storage,
+    RagService* rag_service,
+    const WebServerConfig& config,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const ProjectSettings& project_settings,
+    const std::vector<ProjectMcpVariableValue>& runtime_variables,
+    const std::vector<ProjectMcpVariableValue>& resolved_prompt_variables,
+    const std::string& compressed_context) {
+    std::string system_prompt = compressed_context;
+
+    const std::string instructions = variable_resolver::ExpandTemplate(
+        project_settings.project_instructions,
+        resolved_prompt_variables);
+    if (!instructions.empty()) {
+        AppendPromptSection(
+            system_prompt, "Project Instructions:\n" + instructions);
+    }
+
+    if (mcp_manager) {
+        EnsureProjectMcpConnections(
+            mcp_manager, project_id, runtime_variables);
+        AppendPromptSection(
+            system_prompt,
+            BuildMcpProjectContext(
+                mcp_manager, storage, project_id, runtime_variables));
+    }
+
+    if (rag_service) {
+        AppendPromptSection(
+            system_prompt,
+            rag_tools::BuildRagProjectContext(rag_service, project_id));
+    }
+
+    AppendPromptSection(
+        system_prompt,
+        BuildWebFormattingContext(
+            BuildServerAddress(config), project_id, chat_id));
+
+    return system_prompt;
+}
+
+void MaybeScheduleCompression(
+    ContextCompressionService* compression_service,
+    const std::optional<ContextCompressionConfig>& selected_config,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const ChatRequestOptions& request) {
+    if (!compression_service || !selected_config) {
+        return;
+    }
+
+    const size_t context_window =
+        request.model.context_window > 0
+            ? static_cast<size_t>(request.model.context_window)
+            : 0;
+    const int trigger_percent =
+        selected_config->context_window_trigger_percent;
+    if (context_window == 0 || trigger_percent <= 0) {
+        return;
+    }
+
+    const size_t estimated_tokens =
+        EstimateRequestInputTokens(request, {}, {}, false);
+    const size_t trigger_tokens =
+        context_window * static_cast<size_t>(trigger_percent) / 100;
+    if (estimated_tokens > trigger_tokens) {
+        compression_service->MarkCompressionScheduled(project_id, chat_id);
+    }
+}
+
 WebServer::ModelCallResult
 WebServer::CallModel(const std::string& project_id,
                      const std::string& chat_id,
@@ -2229,6 +2962,8 @@ WebServer::CallModel(const std::string& project_id,
         result.error = "No AI providers configured.";
         return result;
     }
+    OpenAIClient::SetProviderCache(providers);
+    OpenAIClient::SetStorage(storage_);
 
     // Load project settings to get preferred provider/model and instructions
     const auto proj_settings = storage_->LoadProjectSettings(project_id);
@@ -2267,46 +3002,30 @@ WebServer::CallModel(const std::string& project_id,
         return result;
     }
 
-    // Build system prompt: project instructions with project and chat variables.
-    std::string system_prompt;
-    {
-        const std::string instr = variable_resolver::ExpandTemplate(
-            proj_settings.project_instructions,
-            resolved_prompt_variables);
-        if (!instr.empty()) system_prompt = "Project Instructions:\n" + instr;
-    }
-    if (mcp_manager_) {
-        EnsureProjectMcpConnections(
-            mcp_manager_, project_id, runtime_variables);
-        const std::string mcp_context =
-            BuildMcpProjectContext(
-                mcp_manager_, storage_, project_id, runtime_variables);
-        if (!mcp_context.empty()) {
-            if (!system_prompt.empty()) system_prompt += "\n\n";
-            system_prompt += mcp_context;
-        }
-    }
-    if (rag_service_) {
-        const std::string rag_context =
-            rag_tools::BuildRagProjectContext(rag_service_, project_id);
-        if (!rag_context.empty()) {
-            if (!system_prompt.empty()) system_prompt += "\n\n";
-            system_prompt += rag_context;
-        }
-    }
-    {
-        const std::string web_formatting_context =
-            BuildWebFormattingContext(BuildServerAddress(config_), project_id, chat_id);
-        if (!web_formatting_context.empty()) {
-            if (!system_prompt.empty()) system_prompt += "\n\n";
-            system_prompt += web_formatting_context;
-        }
-    }
+    // Load existing message history and prepare any compressed request view.
+    const auto stored_messages = storage_->LoadMessages(project_id, chat_id);
+    const auto prepared_history = PrepareWebRequestHistory(
+        &compression_service_,
+        project_id,
+        chat_id,
+        proj_settings,
+        stored_messages,
+        resolved_prompt_variables);
+    const std::string system_prompt = BuildWebSystemPrompt(
+        mcp_manager_,
+        storage_,
+        rag_service_,
+        config_,
+        project_id,
+        chat_id,
+        proj_settings,
+        runtime_variables,
+        resolved_prompt_variables,
+        prepared_history.compressed_context);
 
-    // Load existing message history
-    auto messages = storage_->LoadMessages(project_id, chat_id);
+    auto messages = stored_messages;
 
-    // Append the new user message (with any attached file content injected)
+    // Append the new user message (with any attached file content injected).
     MessageRecord user_msg;
     user_msg.role       = "user";
     user_msg.content    = BuildUserContentWithAttachments(
@@ -2321,7 +3040,8 @@ WebServer::CallModel(const std::string& project_id,
     opts.system_prompt = system_prompt;
     opts.temperature  = 0.2;
     opts.max_tokens   = 1024;
-    opts.messages     = ModelVisibleMessages(messages);
+    opts.messages     = prepared_history.request_history;
+    opts.messages.push_back(user_msg);
 
     const auto exposed_tools = (mcp_manager_ && selected_model.supports_tools)
         ? mcp_manager_->GetExposedToolsForProject(project_id, runtime_variables)
@@ -2330,18 +3050,37 @@ WebServer::CallModel(const std::string& project_id,
     const auto rag_tool_set = (rag_service_ && selected_model.supports_tools)
         ? rag_tools::BuildRagToolSet(rag_service_, project_id)
         : rag_tools::RagToolSet{};
+    const auto artifact_tool_set = selected_model.supports_tools
+        ? artifact_memory_tools::BuildArtifactMemoryToolSet(
+            prepared_history.selected_config,
+            project_id,
+            chat_id,
+            resolved_prompt_variables)
+        : artifact_memory_tools::ArtifactMemoryToolSet{};
     tool_definitions.insert(
         tool_definitions.end(),
         rag_tool_set.definitions.begin(),
         rag_tool_set.definitions.end());
+    tool_definitions.insert(
+        tool_definitions.end(),
+        artifact_tool_set.definitions.begin(),
+        artifact_tool_set.definitions.end());
+
+    MaybeScheduleCompression(
+        &compression_service_,
+        prepared_history.selected_config,
+        project_id,
+        chat_id,
+        opts);
 
     if (!tool_definitions.empty()) {
         constexpr int kMaxToolRounds = 8;
+        std::vector<MessageRecord> working_messages = opts.messages;
         bool success = false;
 
         for (int round = 0; round < kMaxToolRounds; ++round) {
             ChatRequestOptions loop_opts = opts;
-            loop_opts.messages = ModelVisibleMessages(messages);
+            loop_opts.messages = working_messages;
 
             const auto completion =
                 OpenAIClient::CreateToolAwareCompletion(loop_opts, tool_definitions);
@@ -2356,10 +3095,16 @@ WebServer::CallModel(const std::string& project_id,
 
             if (!completion.tool_calls.empty()) {
                 AppendAssistantToolRequest(messages, completion);
+                AppendAssistantToolRequest(working_messages, completion);
                 for (const auto& tool_call : completion.tool_calls) {
                     McpToolCallResult tool_result;
                     if (!tool_call.arguments_valid) {
                         tool_result = InvalidToolArgumentsResult(tool_call);
+                    } else if (artifact_memory_tools::IsArtifactMemoryToolName(tool_call.name)) {
+                        tool_result = artifact_memory_tools::CallArtifactMemoryTool(
+                            artifact_tool_set.runtime,
+                            tool_call.name,
+                            tool_call.arguments_json);
                     } else if (rag_tools::IsRagToolName(tool_call.name, &rag_tool_set.routes)) {
                         tool_result = rag_tools::CallRagTool(
                             rag_service_,
@@ -2380,6 +3125,7 @@ WebServer::CallModel(const std::string& project_id,
                         tool_result = ToolUnavailableResult(tool_call);
                     }
                     AppendToolResultMessage(messages, tool_call, tool_result);
+                    AppendToolResultMessage(working_messages, tool_call, tool_result);
                 }
                 continue;
             }
@@ -2390,6 +3136,7 @@ WebServer::CallModel(const std::string& project_id,
                 asst_msg.content    = completion.assistant_text;
                 asst_msg.created_at = NowIso();
                 messages.push_back(asst_msg);
+                working_messages.push_back(asst_msg);
                 result.assistant_text = completion.assistant_text;
             }
             success = true;
@@ -2398,7 +3145,7 @@ WebServer::CallModel(const std::string& project_id,
 
         if (!success) {
             ChatRequestOptions final_opts = opts;
-            final_opts.messages = ModelVisibleMessages(messages);
+            final_opts.messages = working_messages;
             if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
             final_opts.system_prompt +=
                 "The MCP tool-call round limit has been reached. Do not call or "
@@ -2517,11 +3264,18 @@ std::string WebServer::StreamModel(const std::string& project_id,
                                    const std::string& user_content,
                                    const std::string& username,
                                    const std::function<bool(const std::string&)>& on_delta,
-                                   const std::vector<std::string>& attachments)
+                                   const std::vector<std::string>& attachments,
+                                   const std::function<void(size_t, size_t)>& on_context_usage,
+                                   const std::function<void(const std::string&, const std::string&)>& on_status,
+                                   const std::function<void(const ProviderQueueStatus&)>& on_queue_status,
+                                   const std::function<void(const std::string&, const std::string&)>& on_activity_status,
+                                   const std::function<void(const std::string&, const std::string&, const std::string&, const std::string&, const std::string&)>& on_tool_status)
 {
     // Load providers
     const auto providers = storage_->LoadProviders();
     if (providers.empty()) return "No AI providers configured.";
+    OpenAIClient::SetProviderCache(providers);
+    OpenAIClient::SetStorage(storage_);
 
     const auto proj_settings = storage_->LoadProjectSettings(project_id);
     const auto runtime_variables = BuildWebRuntimeVariables(
@@ -2551,54 +3305,40 @@ std::string WebServer::StreamModel(const std::string& project_id,
     }
     if (selected_model.id.empty()) return "No AI model configured.";
 
-    // Build system prompt with project and chat variable substitution.
-    std::string system_prompt;
-    {
-        const std::string instr = variable_resolver::ExpandTemplate(
-            proj_settings.project_instructions,
-            resolved_prompt_variables);
-        if (!instr.empty()) system_prompt = "Project Instructions:\n" + instr;
-    }
-    if (mcp_manager_) {
-        EnsureProjectMcpConnections(
-            mcp_manager_, project_id, runtime_variables);
-        const std::string mcp_context =
-            BuildMcpProjectContext(
-                mcp_manager_, storage_, project_id, runtime_variables);
-        if (!mcp_context.empty()) {
-            if (!system_prompt.empty()) system_prompt += "\n\n";
-            system_prompt += mcp_context;
-        }
-    }
-    if (rag_service_) {
-        const std::string rag_context =
-            rag_tools::BuildRagProjectContext(rag_service_, project_id);
-        if (!rag_context.empty()) {
-            if (!system_prompt.empty()) system_prompt += "\n\n";
-            system_prompt += rag_context;
-        }
-    }
-    {
-        const std::string web_formatting_context =
-            BuildWebFormattingContext(BuildServerAddress(config_), project_id, chat_id);
-        if (!web_formatting_context.empty()) {
-            if (!system_prompt.empty()) system_prompt += "\n\n";
-            system_prompt += web_formatting_context;
-        }
-    }
-
-    // Load history and append user message (with any attached file content injected)
-    auto messages = storage_->LoadMessages(project_id, chat_id);
+    // Load history, persist the user message immediately, then build the
+    // compressed request view from the pre-send history.
+    const auto stored_messages = storage_->LoadMessages(project_id, chat_id);
     MessageRecord user_msg;
     user_msg.role       = "user";
     user_msg.content    = BuildUserContentWithAttachments(
                               project_id, chat_id, username, user_content, attachments);
     user_msg.created_at = NowIso();
+    auto messages = stored_messages;
     messages.push_back(user_msg);
 
     // Persist user message immediately so it's visible if the stream aborts
     storage_->SaveMessages(project_id, chat_id, messages);
     NotifyContentChanged();
+
+    const auto prepared_history = PrepareWebRequestHistory(
+        &compression_service_,
+        project_id,
+        chat_id,
+        proj_settings,
+        stored_messages,
+        resolved_prompt_variables,
+        on_status);
+    const std::string system_prompt = BuildWebSystemPrompt(
+        mcp_manager_,
+        storage_,
+        rag_service_,
+        config_,
+        project_id,
+        chat_id,
+        proj_settings,
+        runtime_variables,
+        resolved_prompt_variables,
+        prepared_history.compressed_context);
 
     // Build request (streaming = true)
     ChatRequestOptions opts;
@@ -2607,7 +3347,8 @@ std::string WebServer::StreamModel(const std::string& project_id,
     opts.system_prompt = system_prompt;
     opts.temperature   = 0.2;
     opts.max_tokens    = 4096;  // allow longer outputs when streaming
-    opts.messages      = ModelVisibleMessages(messages);
+    opts.messages      = prepared_history.request_history;
+    opts.messages.push_back(user_msg);
 
     const auto exposed_tools = (mcp_manager_ && selected_model.supports_tools)
         ? mcp_manager_->GetExposedToolsForProject(project_id, runtime_variables)
@@ -2616,20 +3357,56 @@ std::string WebServer::StreamModel(const std::string& project_id,
     const auto rag_tool_set = (rag_service_ && selected_model.supports_tools)
         ? rag_tools::BuildRagToolSet(rag_service_, project_id)
         : rag_tools::RagToolSet{};
+    const auto artifact_tool_set = selected_model.supports_tools
+        ? artifact_memory_tools::BuildArtifactMemoryToolSet(
+            prepared_history.selected_config,
+            project_id,
+            chat_id,
+            resolved_prompt_variables)
+        : artifact_memory_tools::ArtifactMemoryToolSet{};
     tool_definitions.insert(
         tool_definitions.end(),
         rag_tool_set.definitions.begin(),
         rag_tool_set.definitions.end());
+    tool_definitions.insert(
+        tool_definitions.end(),
+        artifact_tool_set.definitions.begin(),
+        artifact_tool_set.definitions.end());
+
+    MaybeScheduleCompression(
+        &compression_service_,
+        prepared_history.selected_config,
+        project_id,
+        chat_id,
+        opts);
+
+    if (on_context_usage) {
+        std::vector<ChatToolDefinition> extra_tool_definitions = rag_tool_set.definitions;
+        extra_tool_definitions.insert(
+            extra_tool_definitions.end(),
+            artifact_tool_set.definitions.begin(),
+            artifact_tool_set.definitions.end());
+        const size_t estimated_input_tokens = EstimateRequestInputTokens(
+            opts,
+            exposed_tools,
+            extra_tool_definitions,
+            selected_model.supports_tools);
+        const size_t context_window = selected_model.context_window > 0
+            ? static_cast<size_t>(selected_model.context_window)
+            : 0;
+        on_context_usage(estimated_input_tokens, context_window);
+    }
 
     if (!tool_definitions.empty()) {
         constexpr int kMaxToolRounds = 8;
+        std::vector<MessageRecord> working_messages = opts.messages;
         std::string accumulated;
         bool aborted = false;
         bool success = false;
 
         for (int round = 0; round < kMaxToolRounds; ++round) {
             ChatRequestOptions loop_opts = opts;
-            loop_opts.messages = ModelVisibleMessages(messages);
+            loop_opts.messages = working_messages;
 
             const auto completion = OpenAIClient::StreamToolAwareCompletion(
                 loop_opts, tool_definitions,
@@ -2638,7 +3415,9 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     if (!on_delta(delta)) {
                         aborted = true;
                     }
-                });
+                },
+                on_queue_status,
+                on_activity_status);
 
             if (!completion.success && !aborted) {
                 return completion.error.empty()
@@ -2660,11 +3439,38 @@ std::string WebServer::StreamModel(const std::string& project_id,
             }
 
             if (!completion.tool_calls.empty()) {
+                if (on_activity_status) {
+                    const size_t tool_count = completion.tool_calls.size();
+                    std::ostringstream message;
+                    message << "Waiting for tool result";
+                    if (tool_count != 1) {
+                        message << "s";
+                    }
+                    if (tool_count > 0) {
+                        message << " (" << tool_count << ")";
+                    }
+                    message << "...";
+                    on_activity_status("waiting_for_tools", message.str());
+                }
                 AppendAssistantToolRequest(messages, completion);
+                AppendAssistantToolRequest(working_messages, completion);
                 for (const auto& tool_call : completion.tool_calls) {
+                    if (on_tool_status) {
+                        on_tool_status(
+                            tool_call.id,
+                            tool_call.name,
+                            tool_call.arguments_json,
+                            "",
+                            "live");
+                    }
                     McpToolCallResult tool_result;
                     if (!tool_call.arguments_valid) {
                         tool_result = InvalidToolArgumentsResult(tool_call);
+                    } else if (artifact_memory_tools::IsArtifactMemoryToolName(tool_call.name)) {
+                        tool_result = artifact_memory_tools::CallArtifactMemoryTool(
+                            artifact_tool_set.runtime,
+                            tool_call.name,
+                            tool_call.arguments_json);
                     } else if (rag_tools::IsRagToolName(tool_call.name, &rag_tool_set.routes)) {
                         tool_result = rag_tools::CallRagTool(
                             rag_service_,
@@ -2684,7 +3490,20 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     } else {
                         tool_result = ToolUnavailableResult(tool_call);
                     }
+                    if (on_tool_status) {
+                        const std::string diagnostic_result =
+                            !tool_result.raw_result_json.empty()
+                                ? tool_result.raw_result_json
+                                : tool_result.content_text;
+                        on_tool_status(
+                            tool_call.id,
+                            tool_call.name,
+                            tool_call.arguments_json,
+                            diagnostic_result,
+                            tool_result.success ? "done" : "error");
+                    }
                     AppendToolResultMessage(messages, tool_call, tool_result);
+                    AppendToolResultMessage(working_messages, tool_call, tool_result);
                 }
                 storage_->SaveMessages(project_id, chat_id, messages);
                 NotifyContentChanged();
@@ -2697,6 +3516,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 asst_msg.content = completion.assistant_text;
                 asst_msg.created_at = NowIso();
                 messages.push_back(asst_msg);
+                working_messages.push_back(asst_msg);
                 storage_->SaveMessages(project_id, chat_id, messages);
                 NotifyContentChanged();
             }
@@ -2706,7 +3526,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
 
         if (!success) {
             ChatRequestOptions final_opts = opts;
-            final_opts.messages = ModelVisibleMessages(messages);
+            final_opts.messages = working_messages;
             if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
             final_opts.system_prompt +=
                 "The MCP tool-call round limit has been reached. Do not call or "
@@ -2724,7 +3544,9 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     if (!on_delta(delta)) {
                         final_aborted = true;
                     }
-                });
+                },
+                on_queue_status,
+                on_activity_status);
 
             if (!final_result.success && !final_aborted) {
                 return final_result.error.empty()
@@ -2758,7 +3580,9 @@ std::string WebServer::StreamModel(const std::string& project_id,
             if (!on_delta(delta)) {
                 aborted = true;
             }
-        });
+        },
+        on_queue_status,
+        on_activity_status);
 
     if (!stream_result.success && !aborted) {
         // Nothing to save; return the error
@@ -2857,7 +3681,80 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 pipe->cv.notify_one();
                 return true;
             },
-            attachments);
+            attachments,
+            [&](size_t used_tokens, size_t total_tokens) {
+                {
+                    std::lock_guard<std::mutex> lk(pipe->mtx);
+                    if (pipe->abort) return;
+                    json ev = {
+                        {"ctx_used", used_tokens},
+                        {"ctx_total", total_tokens},
+                    };
+                    pipe->pending += encode_sse(ev.dump());
+                }
+                pipe->cv.notify_one();
+            },
+            [&](const std::string& status, const std::string& message) {
+                {
+                    std::lock_guard<std::mutex> lk(pipe->mtx);
+                    if (pipe->abort) return;
+                    json ev = {
+                        {"compression_status", status},
+                        {"compression_message", message},
+                    };
+                    pipe->pending += encode_sse(ev.dump());
+                }
+                pipe->cv.notify_one();
+            },
+            [&](const ProviderQueueStatus& status) {
+                {
+                    std::lock_guard<std::mutex> lk(pipe->mtx);
+                    if (pipe->abort) return;
+                    json ev = {
+                        {"queue_state", status.state},
+                        {"queue_provider", status.provider_name},
+                        {"queue_position", status.queue_position},
+                        {"queue_depth", status.queue_depth},
+                        {"queue_active", status.active_requests},
+                        {"queue_max_active", status.max_active_requests},
+                        {"queue_max_queue", status.max_queue_size},
+                    };
+                    pipe->pending += encode_sse(ev.dump());
+                }
+                pipe->cv.notify_one();
+            },
+            [&](const std::string& status, const std::string& message) {
+                {
+                    std::lock_guard<std::mutex> lk(pipe->mtx);
+                    if (pipe->abort) return;
+                    json ev = {
+                        {"activity_status", status},
+                        {"activity_message", message},
+                    };
+                    pipe->pending += encode_sse(ev.dump());
+                }
+                pipe->cv.notify_one();
+            },
+            [&](const std::string& tool_call_id,
+                const std::string& tool_name,
+                const std::string& tool_arguments,
+                const std::string& tool_result,
+                const std::string& tool_status) {
+                {
+                    std::lock_guard<std::mutex> lk(pipe->mtx);
+                    if (pipe->abort) return;
+                    json ev = {
+                        {"tool_event", tool_status == "live" ? "start" : "finish"},
+                        {"tool_call_id", tool_call_id},
+                        {"tool_name", tool_name},
+                        {"tool_arguments", tool_arguments},
+                        {"tool_result", tool_result},
+                        {"tool_status", tool_status},
+                    };
+                    pipe->pending += encode_sse(ev.dump());
+                }
+                pipe->cv.notify_one();
+            });
 
         // Enqueue final event
         {
@@ -2880,7 +3777,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
 
     res->set_chunked_content_provider(
         "text/event-stream; charset=utf-8",
-        [pipe](size_t /*offset*/, httplib::DataSink& sink) -> bool {
+        [pipe, last_keepalive = std::chrono::steady_clock::now()](size_t /*offset*/, httplib::DataSink& sink) mutable -> bool {
             std::unique_lock<std::mutex> lk(pipe->mtx);
             // Wait until there's data or the producer is done
             pipe->cv.wait_for(lk, std::chrono::milliseconds(200),
@@ -2902,6 +3799,18 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             if (pipe->done) {
                 sink.done();
                 return false;   // close the response
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_keepalive >= std::chrono::seconds(15)) {
+                last_keepalive = now;
+                lk.unlock();
+                static constexpr char kKeepAlive[] = ": keep-alive\n\n";
+                if (!sink.write(kKeepAlive, sizeof(kKeepAlive) - 1)) {
+                    std::lock_guard<std::mutex> lg(pipe->mtx);
+                    pipe->abort = true;
+                    return false;
+                }
             }
 
             return true;  // keep-alive poll
@@ -2990,7 +3899,8 @@ void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
 
     AgentUploadArtifact artifact;
     const bool creates_agent_markdown = ShouldCreateAgentMarkdownForUpload(dest);
-    if (creates_agent_markdown) {
+    const bool async_ingest = req->has_param("async") && req->get_param_value("async") == "true";
+    if (creates_agent_markdown && !async_ingest) {
         artifact = CreateAgentMarkdownArtifact(
             rag_service_,
             upload_dir,
@@ -2999,7 +3909,8 @@ void WebServer::HandleUpload(const void* req_ptr, void* res_ptr) {
             *project_id,
             chat_id,
             session->username,
-            data_route);
+            data_route,
+            absolute_data_url);
     }
 
     AppendAuditLog(GetRemoteAddr(req_ptr), "upload",
@@ -3280,13 +4191,16 @@ void WebServer::RegisterRoutes() {
         if (!user_opt) { SendError(&res, 404, "User not found"); return; }
         json resp = {
             {"username",     user_opt->username},
-            {"display_name", user_opt->display_name.empty()
-                             ? user_opt->username : user_opt->display_name},
+            {"display_name", user_opt->display_name},
+            {"email",        user_opt->email},
             {"force_password_reset", session->force_password_reset
                                      || session->needs_password_reset
                                      || user_opt->force_password_reset},
         };
         SendJson(&res, 200, resp.dump());
+    });
+    srv.Patch("/api/me", [this](const httplib::Request& req, httplib::Response& res) {
+        HandleUpdateMe(&req, &res);
     });
     srv.Get("/api/projects", [this](const httplib::Request& req, httplib::Response& res) {
         HandleGetProjects(&req, &res);
@@ -3351,6 +4265,18 @@ void WebServer::RegisterRoutes() {
     // ── Static files & HTML pages ─────────────────────────────────────────
     // login.html served without auth check
     srv.Get("/login", [this](const httplib::Request& req, httplib::Response& res) {
+        PurgeExpiredSessions();
+        const std::string token = GetCookieValue(req.get_header_value("Cookie"), "session");
+        if (!token.empty()) {
+            if (const auto session = FindSession(token)) {
+                TouchSession(token);
+                res.status = 302;
+                res.set_header("Location",
+                    session->needs_password_reset ? "/change-password" : "/");
+                return;
+            }
+            res.set_header("Set-Cookie", BuildExpiredSessionCookieHeader(config_));
+        }
         const auto f = ResolveWebRoot() / "login.html";
         if (fs::is_regular_file(f)) {
             std::ifstream fi(f); std::ostringstream oss; oss << fi.rdbuf();
@@ -3385,7 +4311,9 @@ void WebServer::RegisterRoutes() {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Default web-asset bootstrapping
-// Writes default files to web_root only if they are missing.  Never overwrites.
+// For the managed default web root, refresh bundled assets when they change so
+// shipped UI updates reach the browser. For a custom web_root, preserve
+// existing files and only create missing ones.
 // ──────────────────────────────────────────────────────────────────────────────
 void WebServer::EnsureDefaultWebAssets() const {
     struct Asset { const char* rel_path; const char* content; };
@@ -3404,11 +4332,22 @@ void WebServer::EnsureDefaultWebAssets() const {
     };
 
     const fs::path root = ResolveWebRoot();
+    const bool managed_default_root = Trim(config_.web_root).empty();
     for (const auto& a : kAssets) {
         const fs::path dest = root / a.rel_path;
-        if (fs::exists(dest)) continue;              // never overwrite existing files
-        fs::create_directories(dest.parent_path());  // ensure dirs exist
-        std::ofstream f(dest);
+        bool should_write = !fs::exists(dest);
+        if (!should_write && managed_default_root) {
+            std::ifstream in(dest, std::ios::binary);
+            std::ostringstream existing;
+            if (in) {
+                existing << in.rdbuf();
+            }
+            should_write = existing.str() != std::string(a.content);
+        }
+        if (!should_write) continue;
+
+        fs::create_directories(dest.parent_path());
+        std::ofstream f(dest, std::ios::binary | std::ios::trunc);
         if (f) f << a.content;
     }
 }
@@ -3521,6 +4460,8 @@ void WebServer::EnsureVendorLibs() const {
           "js/vendor/vega-lite.min.js" },
         { L"https://cdnjs.cloudflare.com/ajax/libs/vega-embed/6.25.0/vega-embed.min.js",
           "js/vendor/vega-embed.min.js" },
+        { L"https://cdn.jsdelivr.net/npm/cytoscape@3.33.2/dist/cytoscape.min.js",
+          "js/vendor/cytoscape.min.js" },
     };
 
     // Check if any files are missing before spawning a thread
@@ -3552,7 +4493,7 @@ void WebServer::EnsureVendorLibs() const {
 // TLS helpers
 // ──────────────────────────────────────────────────────────────────────────────
 fs::path WebServer::TlsCertsDir() const {
-    return app_root_ / "certs";
+    return runtime_paths_.startup_root / "certs";
 }
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
@@ -3792,6 +4733,10 @@ bool WebServer::Start()
         Logger::Error("WebServer", "Failed to create httplib server.");
         return false;
     }
+
+    impl_->server->set_read_timeout(std::chrono::hours(12));
+    impl_->server->set_write_timeout(std::chrono::hours(12));
+    impl_->server->set_keep_alive_timeout(static_cast<time_t>(3600));
 
     // Thread-pool size
     const int pool = std::max(1, config_.thread_pool_size);
