@@ -117,6 +117,14 @@ ProviderHttpResponse SendProviderRequest(const ProviderConfig& provider,
         throw std::runtime_error("Could not create provider request.");
     }
 
+    if (parsed.secure && !provider.tls_certificate_fingerprint.empty()) {
+        DWORD security_flags =
+            SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+            SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+            SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+            SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+        WinHttpSetOption(static_cast<HINTERNET>(request.get()), WINHTTP_OPTION_SECURITY_FLAGS, &security_flags, sizeof(security_flags));
+    }
     WinHttpSetTimeouts(static_cast<HINTERNET>(request.get()), 10000, 10000, 15000, 15000);
     std::wstring headers = L"Accept: application/json\r\n";
     if (!body.empty() || LowerAsciiCopy(method) == "post") {
@@ -192,6 +200,48 @@ std::vector<ModelConfig> LoadProviderCatalog(AppStorage* storage, const Provider
             return {};
         }
         return storage->LoadProviderManifestModels(normalized_type);
+    }
+
+    if (normalized_type == "agent_https") {
+        try {
+            const ProviderHttpResponse response = SendProviderRequest(provider, "GET", JoinUrlPath(provider.base_url, "/v1/models"));
+            if (response.status < 200 || response.status >= 300) {
+                std::ostringstream stream;
+                stream << "Remote worker returned HTTP " << response.status;
+                if (!response.body.empty()) {
+                    stream << ": " << response.body;
+                }
+                throw std::runtime_error(stream.str());
+            }
+
+            const auto data = json::parse(response.body);
+            std::vector<ModelConfig> models;
+            if (data.contains("data") && data["data"].is_array()) {
+                for (const auto& item : data["data"]) {
+                    if (!item.is_object()) {
+                        continue;
+                    }
+                    ModelConfig model;
+                    model.id = item.value("id", "");
+                    if (model.id.empty()) {
+                        continue;
+                    }
+                    model.display_name = item.value("display_name", model.id);
+                    model.supports_streaming = true;
+                    model.supports_tools = false;
+                    model.supports_vision = false;
+                    model.output_tokens_parameter = "auto";
+                    model.catalog_source = "discovered";
+                    models.push_back(std::move(model));
+                }
+            }
+            return models;
+        } catch (const std::exception& ex) {
+            if (error) {
+                *error = ex.what();
+            }
+            return {};
+        }
     }
 
     if (normalized_type == "lmstudio_local") {

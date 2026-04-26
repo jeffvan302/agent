@@ -22,6 +22,8 @@ constexpr int kDialogWidth = 900;
 constexpr int kDialogHeight = 560;
 
 enum ControlId : int {
+    kWorkerNameLabel = 8622,
+    kWorkerNameEdit = 8623,
     kLoadJson = 8601,
     kSaveJson = 8602,
     kSaveAsJson = 8603,
@@ -65,7 +67,7 @@ private:
         hwnd_ = CreateWindowExW(
             WS_EX_APPWINDOW,
             kClassName,
-            L"Remote Worker Setup",
+            L"Remote Model Config",
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             CW_USEDEFAULT, CW_USEDEFAULT,
             kDialogWidth, kDialogHeight,
@@ -165,6 +167,9 @@ private:
         save_button_ = MakeButton(L"Save JSON", kSaveJson);
         save_as_button_ = MakeButton(L"Save As", kSaveAsJson);
 
+        worker_name_label_ = MakeLabel(L"Remote name:", kWorkerNameLabel);
+        worker_name_edit_ = MakeEdit(L"Agent Remote Worker", kWorkerNameEdit);
+
         bind_address_label_ = MakeLabel(L"Bind address:", kBindAddressLabel);
         bind_address_edit_ = MakeEdit(L"0.0.0.0", kBindAddressEdit);
         port_label_ = MakeLabel(L"HTTPS port:", kPortLabel);
@@ -201,6 +206,7 @@ private:
         close_button_ = MakeButton(L"Close", kCloseButton);
 
         for (HWND ctl : {load_button_, save_button_, save_as_button_,
+                         worker_name_label_, worker_name_edit_,
                          bind_address_label_, bind_address_edit_, port_label_, port_edit_,
                          secret_label_, secret_edit_, generate_secret_button_,
                          cert_label_, cert_edit_, generate_cert_button_,
@@ -247,6 +253,11 @@ private:
         MoveWindow(save_button_, margin + Scale(100), y, Scale(90), btn_h, TRUE);
         MoveWindow(save_as_button_, margin + Scale(200), y, Scale(90), btn_h, TRUE);
         y += btn_h + gutter;
+
+        MoveWindow(worker_name_label_, margin, y, Scale(90), row_h, TRUE);
+        MoveWindow(worker_name_edit_, margin + Scale(100), y,
+                   width - margin * 2 - Scale(100), row_h, TRUE);
+        y += row_h + gutter;
 
         MoveWindow(bind_address_label_, margin, y, Scale(90), row_h, TRUE);
         MoveWindow(bind_address_edit_, margin + Scale(100), y,
@@ -476,7 +487,8 @@ private:
         }
         json root = {
             {"version", 2},
-            {"worker_name", "Agent Remote Worker"},
+            {"worker_name",
+             WideToUtf8(GetWindowTextString(worker_name_edit_))},
             {"agent_server",
              {{"bind_address",
                WideToUtf8(GetWindowTextString(bind_address_edit_))},
@@ -647,15 +659,17 @@ private:
             return;
         }
         SetWindowTextW(bind_address_edit_,
-                         Utf8ToWide(config->bind_address).c_str());
+                          Utf8ToWide(config->bind_address).c_str());
         SetWindowTextW(port_edit_,
-                         std::to_wstring(config->https_port).c_str());
+                          std::to_wstring(config->https_port).c_str());
         SetWindowTextW(secret_edit_,
-                         Utf8ToWide(config->shared_secret).c_str());
+                          Utf8ToWide(config->shared_secret).c_str());
+        SetWindowTextW(worker_name_edit_,
+                          Utf8ToWide(config->worker_name).c_str());
         cert_pem_ = config->certificate_pem;
         key_pem_ = config->private_key_pem;
         SetWindowTextW(cert_edit_,
-                         Utf8ToWide(config->certificate_fingerprint).c_str());
+                          Utf8ToWide(config->certificate_fingerprint).c_str());
 
         // Clear all checks
         for (auto& prov_checks : model_checked_)
@@ -686,7 +700,7 @@ private:
         }
         RemoteProviderWorkerConfig config;
         config.source_path = current_json_path_;
-        config.worker_name = "Agent Remote Worker";
+        config.worker_name = WideToUtf8(GetWindowTextString(worker_name_edit_));
         config.bind_address =
             WideToUtf8(GetWindowTextString(bind_address_edit_));
         config.https_port =
@@ -738,6 +752,8 @@ private:
     HWND load_button_ = nullptr;
     HWND save_button_ = nullptr;
     HWND save_as_button_ = nullptr;
+    HWND worker_name_label_ = nullptr;
+    HWND worker_name_edit_ = nullptr;
     HWND bind_address_label_ = nullptr;
     HWND bind_address_edit_ = nullptr;
     HWND port_label_ = nullptr;

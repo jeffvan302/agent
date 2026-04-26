@@ -583,7 +583,7 @@ private:
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
             0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProviderEditorTypeCombo), nullptr, nullptr);
         ComboBox_AddString(type_combo_, L"OpenAI-compatible HTTPS/API");
-        ComboBox_AddString(type_combo_, L"Agent HTTPS Remote Ollama Worker");
+        ComboBox_AddString(type_combo_, L"Agent HTTPS Remote Worker");
         ComboBox_AddString(type_combo_, L"OpenAI OAuth (ChatGPT/Codex)");
         ComboBox_AddString(type_combo_, L"LM Studio Local");
         ComboBox_AddString(type_combo_, L"Ollama Local");
@@ -760,7 +760,7 @@ private:
         ShowWindow(sign_in_button_, oauth ? SW_SHOW : SW_HIDE);
         ShowWindow(sign_out_button_, oauth ? SW_SHOW : SW_HIDE);
         ShowWindow(store_history_check_, oauth ? SW_SHOW : SW_HIDE);
-        ShowWindow(refresh_models_button_, managed_catalog ? SW_SHOW : SW_HIDE);
+        ShowWindow(refresh_models_button_, (managed_catalog || agent) ? SW_SHOW : SW_HIDE);
         EnableWindow(store_history_check_, FALSE);
         if (oauth) {
             Button_SetCheck(store_history_check_, BST_UNCHECKED);
@@ -935,12 +935,17 @@ private:
             return;
         }
         ProviderConfig preview = provider_;
-        preview.provider_type = ProviderTypeFromKind(SelectedProviderKind());
+        const auto kind = SelectedProviderKind();
+        const bool agent = ProviderKindUsesAgentHealth(kind);
+        preview.provider_type = ProviderTypeFromKind(kind);
         preview.base_url = WideToUtf8(TrimWide(GetWindowTextString(url_edit_)));
+        if (agent) {
+            preview.base_url = JoinUrlAndPort(preview.base_url, GetWindowTextString(port_edit_));
+        }
         preview.api_key = pending_auth_record_
             ? pending_auth_record_->api_key
             : preview.api_key;
-        preview.model_catalog_mode = DefaultCatalogModeForProviderKind(SelectedProviderKind());
+        preview.model_catalog_mode = DefaultCatalogModeForProviderKind(kind);
 
         std::string error;
         const auto catalog = LoadProviderCatalog(storage_, preview, &error);
@@ -969,12 +974,9 @@ private:
         SetWindowTextW(port_edit_, std::to_wstring(info->https_port).c_str());
         SetWindowTextW(secret_edit_, Utf8ToWide(info->shared_secret).c_str());
         SetWindowTextW(cert_edit_, Utf8ToWide(info->certificate_fingerprint).c_str());
-        imported_model_name_ = info->model_name;
-        imported_model_purpose_ = info->purpose;
-        if (!imported_model_name_.empty()) {
-            std::wstring help = L"Loaded worker JSON. Add Model will offer model: " + Utf8ToWide(imported_model_name_) + L".";
-            SetWindowTextW(help_label_, help.c_str());
-        }
+
+        // Auto-fetch models from the remote worker
+        RefreshCatalogPreview();
     }
 
     void ValidateAndSave() {
@@ -1043,18 +1045,6 @@ private:
             provider.oauth_store_remote_history = false;
         }
 
-        if (!imported_model_name_.empty() && provider.models.empty()) {
-            ModelConfig model;
-            model.id = imported_model_name_;
-            model.display_name = imported_model_name_;
-            model.context_window = 0;
-            model.supports_streaming = true;
-            model.supports_tools = true;
-            model.supports_vision = imported_model_purpose_ == "image_ingestion";
-            model.catalog_source = "agent_health";
-            provider.models.push_back(std::move(model));
-        }
-
         try {
             if (oauth) {
                 if (pending_clear_auth_ && !provider_.oauth_credential_id.empty()) {
@@ -1090,8 +1080,6 @@ private:
     ProviderConfig provider_;
     bool editing_ = false;
     std::optional<ProviderConfig> result_;
-    std::string imported_model_name_;
-    std::string imported_model_purpose_;
     std::optional<ProviderAuthRecord> pending_auth_record_;
     bool pending_clear_auth_ = false;
 

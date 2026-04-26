@@ -2,6 +2,7 @@
 
 #include "prompt_dialog.h"
 #include "rag_tool_bridge.h"
+#include "remote_worker_setup_dialog.h"
 #include "util.h"
 #include "variable_resolver.h"
 

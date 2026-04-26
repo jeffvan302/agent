@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <commctrl.h>
 #include <richedit.h>
 #include <shellapi.h>
@@ -12,6 +12,8 @@
 #include "project_settings_dialog.h"
 #include "provider_manager.h"
 #include "rag_service.h"
+#include "remote_worker_setup_dialog.h"
+#include "remote_provider_worker.h"
 #include "rag_tool_bridge.h"
 #include "rag_service_manager.h"
 #include "context_compression.h"
@@ -74,6 +76,7 @@ enum ControlId : int {
     kModelTools = 3020,
     kWebConfig = 3021,
     kAdminConfig = 3022,
+    kRemoteOllamaSetup = 3023,
 };
 
 struct TreeItemData {
@@ -187,6 +190,8 @@ enum class HeadlessCommandMode {
     None,
     OllamaSetup,
     OllamaRemote,
+    RemoteWorkerSetup,
+    RemoteWorkerRun,
 };
 
 struct HeadlessImageIngestSettings {
@@ -710,11 +715,21 @@ int RunHeadlessOllamaRemote(const std::filesystem::path& settings_path) {
 
 int RunHeadlessOllamaCommand(HeadlessCommandMode mode, const std::filesystem::path& settings_path) {
     EnsureHeadlessConsoleAttached();
+    if (mode == HeadlessCommandMode::RemoteWorkerSetup ||
+        mode == HeadlessCommandMode::RemoteWorkerRun) {
+        return RunRemoteProviderWorkerCommand(
+            mode == HeadlessCommandMode::RemoteWorkerSetup
+                ? RemoteProviderWorkerCommandMode::Setup
+                : RemoteProviderWorkerCommandMode::Run,
+            settings_path);
+    }
     if (settings_path.empty()) {
         HeadlessWriteLine(L"Missing image ingest settings JSON path.");
         HeadlessWriteLine(L"Usage:");
         HeadlessWriteLine(L"  agent --olama-setup rag_image_ingest_settings.json");
         HeadlessWriteLine(L"  agent --olama-remote rag_image_ingest_settings.json");
+        HeadlessWriteLine(L"  agent --remote-worker-setup worker.json");
+        HeadlessWriteLine(L"  agent --remote-worker worker.json");
         return 2;
     }
     if (mode == HeadlessCommandMode::OllamaSetup) {
@@ -2812,6 +2827,7 @@ private:
     HWND model_tools_button_ = nullptr;
     HWND web_config_button_ = nullptr;
     HWND admin_config_button_ = nullptr;
+    HWND remote_ollama_setup_button_ = nullptr;
     HWND rag_service_button_ = nullptr;
     HWND context_window_button_ = nullptr;
     HWND setup_system_button_ = nullptr;
@@ -2971,6 +2987,7 @@ void MainWindow::OnCreate() {
     model_tools_button_ = CreateWindowExW(0, L"BUTTON", L"Model Tools", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelTools), nullptr, nullptr);
     web_config_button_   = CreateWindowExW(0, L"BUTTON", L"Web Config",  WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kWebConfig),   nullptr, nullptr);
     admin_config_button_ = CreateWindowExW(0, L"BUTTON", L"Admin Config", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAdminConfig), nullptr, nullptr);
+    remote_ollama_setup_button_ = CreateWindowExW(0, L"BUTTON", L"Remote Model Config", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRemoteOllamaSetup), nullptr, nullptr);
     rag_service_button_ = CreateWindowExW(0, L"BUTTON", L"RAG Service", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagService), nullptr, nullptr);
     context_window_button_ = CreateWindowExW(0, L"BUTTON", L"Context Window", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextWindow), nullptr, nullptr);
     setup_system_button_ = CreateWindowExW(0, L"BUTTON", L"Setup System", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kSetupSystem), nullptr, nullptr);
@@ -2982,7 +2999,7 @@ void MainWindow::OnCreate() {
     context_messages_button_ = CreateWindowExW(0, L"BUTTON", L"Context Msgs", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextMessages), nullptr, nullptr);
     status_label_ = CreateWindowExW(0, L"STATIC", L"Initializing...", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
 
-    for (HWND control : {new_project_button_, new_chat_button_, rename_button_, delete_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, web_config_button_, admin_config_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
+    for (HWND control : {new_project_button_, new_chat_button_, rename_button_, delete_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, web_config_button_, admin_config_button_, remote_ollama_setup_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
 
@@ -3062,9 +3079,11 @@ void MainWindow::LayoutControls(int width, int height) {
     MoveWindow(rename_button_, margin, margin + button_height + gutter, left_button_width, button_height, TRUE);
     MoveWindow(delete_button_, margin + left_button_width + gutter, margin + button_height + gutter, left_button_width, button_height, TRUE);
     const int rag_button_y = height - margin - button_height;
+    const int remote_button_y = rag_button_y - button_height - gutter;
     const int tree_top = margin + (button_height + gutter) * 2;
-    MoveWindow(tree_, margin, tree_top, left_width, std::max(Scale(hwnd_, 80), rag_button_y - gutter - tree_top), TRUE);
+    MoveWindow(tree_, margin, tree_top, left_width, std::max(Scale(hwnd_, 80), remote_button_y - gutter - tree_top), TRUE);
     const int half_width = (left_width - gutter) / 2;
+    MoveWindow(remote_ollama_setup_button_, margin, remote_button_y, left_width, button_height, TRUE);
     MoveWindow(rag_service_button_, margin, rag_button_y, half_width, button_height, TRUE);
     MoveWindow(context_window_button_, margin + half_width + gutter, rag_button_y, half_width, button_height, TRUE);
 
@@ -3137,6 +3156,9 @@ void MainWindow::OnCommand(int control_id, int notification_code) {
         break;
     case kAdminConfig:
         OpenAdminConfig();
+        break;
+    case kRemoteOllamaSetup:
+        ShowRemoteOllamaSetupDialog(hwnd_, &storage_, &providers_);
         break;
     case kRagService:
         OpenRagServiceManager();
@@ -5236,6 +5258,19 @@ static CommandLineArgs ParseCommandLineArgs(PWSTR cmd_line) {
             args.headless_mode = HeadlessCommandMode::OllamaRemote;
             const size_t equals = arg.find(L'=');
             args.headless_settings_path = std::filesystem::path(arg.substr(equals + 1));
+        } else if (arg == L"--remote-worker" || arg == L"--remote-worker-setup") {
+            args.headless_mode = (arg == L"--remote-worker-setup")
+                ? HeadlessCommandMode::RemoteWorkerSetup
+                : HeadlessCommandMode::RemoteWorkerRun;
+            if (i + 1 < argc) {
+                args.headless_settings_path = std::filesystem::path(argv[++i]);
+            }
+        } else if (arg.rfind(L"--remote-worker=", 0) == 0 || arg.rfind(L"--remote-worker-setup=", 0) == 0) {
+            args.headless_mode = (arg.rfind(L"--remote-worker-setup=", 0) == 0)
+                ? HeadlessCommandMode::RemoteWorkerSetup
+                : HeadlessCommandMode::RemoteWorkerRun;
+            const size_t equals = arg.find(L'=');
+            args.headless_settings_path = std::filesystem::path(arg.substr(equals + 1));
         } else if (arg == L"--help" || arg == L"-h") {
             MessageBoxW(nullptr,
                 L"Agent Desktop Command Line Options:\n\n"
@@ -5245,11 +5280,16 @@ static CommandLineArgs ParseCommandLineArgs(PWSTR cmd_line) {
                 L"                   Install Ollama if needed and pull the configured image vision model\n"
                 L"  --olama-remote FILE\n"
                 L"                   Run local Ollama image vision endpoints from image ingest settings\n"
+                L"  --remote-worker-setup FILE\n"
+                L"                   Generate shared secret and self-signed certificate for remote worker\n"
+                L"  --remote-worker FILE\n"
+                L"                   Run the HTTPS remote provider worker\n"
                 L"  --ollama-setup / --ollama-remote are also accepted\n"
                 L"  --help, -h       Show this help message\n\n"
                 L"Example:\n"
                 L"  agent.exe --web-config --log-level debug\n"
-                L"  agent.exe --olama-remote rag_image_ingest_settings.json",
+                L"  agent.exe --olama-remote rag_image_ingest_settings.json\n"
+                L"  agent.exe --remote-worker worker.json",
                 L"Agent Desktop Help", MB_OK | MB_ICONINFORMATION);
         }
     }
