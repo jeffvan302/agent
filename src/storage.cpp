@@ -148,6 +148,8 @@ json ModelToJson(const ModelConfig& model) {
         {"supports_streaming", model.supports_streaming},
         {"supports_tools", model.supports_tools},
         {"supports_vision", model.supports_vision},
+        {"supports_embedding", model.supports_embedding},
+        {"supports_thinking", model.supports_thinking},
         {"prefer_max_completion_tokens", model.prefer_max_completion_tokens},
         {"output_tokens_parameter", NormalizeOutputTokensParameter(model.output_tokens_parameter)},
         {"catalog_source", model.catalog_source},
@@ -176,6 +178,8 @@ ModelConfig ModelFromJson(const json& item) {
     model.supports_streaming = item.value("supports_streaming", true);
     model.supports_tools = item.value("supports_tools", false);
     model.supports_vision = item.value("supports_vision", false);
+    model.supports_embedding = item.value("supports_embedding", false);
+    model.supports_thinking = item.value("supports_thinking", false);
     model.prefer_max_completion_tokens = item.value("prefer_max_completion_tokens", false);
     model.output_tokens_parameter = NormalizeOutputTokensParameter(
         item.value("output_tokens_parameter", model.prefer_max_completion_tokens ? "max_completion_tokens" : "auto"));
@@ -186,6 +190,9 @@ ModelConfig ModelFromJson(const json& item) {
                 model.reasoning_efforts.push_back(effort.get<std::string>());
             }
         }
+    }
+    if (!item.contains("supports_thinking") && !model.reasoning_efforts.empty()) {
+        model.supports_thinking = true;
     }
     if (item.contains("text_verbosity_modes") && item["text_verbosity_modes"].is_array()) {
         for (const auto& mode : item["text_verbosity_modes"]) {
@@ -374,6 +381,8 @@ json DefaultOpenAIOAuthManifest() {
                 {"supports_streaming", true},
                 {"supports_tools", true},
                 {"supports_vision", true},
+                {"supports_embedding", false},
+                {"supports_thinking", true},
                 {"prefer_max_completion_tokens", false},
                 {"output_tokens_parameter", "auto"},
                 {"catalog_source", "bundled"},
@@ -388,6 +397,8 @@ json DefaultOpenAIOAuthManifest() {
                 {"supports_streaming", true},
                 {"supports_tools", true},
                 {"supports_vision", true},
+                {"supports_embedding", false},
+                {"supports_thinking", true},
                 {"prefer_max_completion_tokens", false},
                 {"output_tokens_parameter", "auto"},
                 {"catalog_source", "bundled"},
@@ -402,6 +413,8 @@ json DefaultOpenAIOAuthManifest() {
                 {"supports_streaming", true},
                 {"supports_tools", true},
                 {"supports_vision", true},
+                {"supports_embedding", false},
+                {"supports_thinking", true},
                 {"prefer_max_completion_tokens", false},
                 {"output_tokens_parameter", "auto"},
                 {"catalog_source", "bundled"},
@@ -416,6 +429,8 @@ json DefaultOpenAIOAuthManifest() {
                 {"supports_streaming", true},
                 {"supports_tools", true},
                 {"supports_vision", true},
+                {"supports_embedding", false},
+                {"supports_thinking", true},
                 {"prefer_max_completion_tokens", false},
                 {"output_tokens_parameter", "auto"},
                 {"catalog_source", "bundled"},

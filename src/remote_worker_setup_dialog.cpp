@@ -380,6 +380,8 @@ private:
                         {"supports_streaming", m.supports_streaming},
                         {"supports_tools", m.supports_tools},
                         {"supports_vision", m.supports_vision},
+                        {"supports_embedding", m.supports_embedding},
+                        {"supports_thinking", m.supports_thinking},
                         {"is_binding_model", m.is_binding_model},
                         {"binding_routing_mode",
                          m.binding_routing_mode == BindingRoutingMode::RoundRobin
@@ -440,7 +442,11 @@ private:
                                          tm.supports_streaming},
                                         {"supports_tools", tm.supports_tools},
                                         {"supports_vision",
-                                         tm.supports_vision}});
+                                         tm.supports_vision},
+                                        {"supports_embedding",
+                                         tm.supports_embedding},
+                                        {"supports_thinking",
+                                         tm.supports_thinking}});
                                 }
                             }
                         }

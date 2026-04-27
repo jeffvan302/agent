@@ -1245,6 +1245,8 @@ private:
                 if (model.supports_streaming) label += L"  [stream]";
                 if (model.supports_tools)     label += L" [tools]";
                 if (model.supports_vision)    label += L" [vision]";
+                if (model.supports_embedding) label += L" [embed]";
+                if (model.supports_thinking)  label += L" [think]";
 
                 if (entry.provider_id == options_.preferred_provider_id &&
                     entry.model_id == options_.preferred_model_id) {

@@ -1168,6 +1168,8 @@ private:
                 if (model.supports_streaming) label += L"  [stream]";
                 if (model.supports_tools)     label += L" [tools]";
                 if (model.supports_vision)    label += L" [vision]";
+                if (model.supports_embedding) label += L" [embed]";
+                if (model.supports_thinking)  label += L" [think]";
                 if (prov.id == pref_provider && model.id == pref_model)
                     preferred = static_cast<int>(model_entries_.size());
                 model_entries_.push_back({prov.id, model.id});

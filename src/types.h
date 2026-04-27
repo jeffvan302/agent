@@ -52,6 +52,8 @@ struct ModelConfig {
     bool supports_streaming = true;
     bool supports_tools = false;
     bool supports_vision = false;
+    bool supports_embedding = false;
+    bool supports_thinking = false;
     bool prefer_max_completion_tokens = false;
     std::string output_tokens_parameter = "auto";  // auto | max_tokens | max_completion_tokens
     std::string catalog_source = "manual";         // manual | bundled | discovered | agent_health

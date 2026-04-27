@@ -94,35 +94,37 @@ enum ModelEditorControlId : int {
     kModelEditorStreamingCheck = 2307,
     kModelEditorToolsCheck = 2308,
     kModelEditorVisionCheck = 2309,
-    kModelEditorMaxCompletionCheck = 2310,
-    kModelEditorProviderLabel = 2311,
-    kModelEditorProviderCombo = 2312,
-    kModelEditorReasoningLabel = 2313,
-    kModelEditorReasoningCombo = 2314,
-    kModelEditorVerbosityLabel = 2315,
-    kModelEditorVerbosityCombo = 2316,
-    kModelEditorRoutingLabel = 2317,
-    kModelEditorRoutingCombo = 2318,
-    kModelEditorTargetsLabel = 2319,
-    kModelEditorTargetsList = 2320,
-    kModelEditorAddTarget = 2321,
-    kModelEditorEditTarget = 2322,
-    kModelEditorRemoveTarget = 2323,
-    kModelEditorMoveTargetUp = 2324,
-    kModelEditorMoveTargetDown = 2325,
-    kModelEditorOllamaLoadInfo = 2326,
-    kModelEditorOllamaSearch = 2327,
-    kModelEditorOllamaTimeoutLabel = 2328,
-    kModelEditorOllamaTimeoutEdit = 2329,
-    kModelEditorOllamaNumThreadsLabel = 2330,
-    kModelEditorOllamaNumThreadsEdit = 2331,
-    kModelEditorOllamaNoGpuCheck = 2332,
-    kModelEditorOllamaGpuLayersLabel = 2333,
-    kModelEditorOllamaGpuLayersEdit = 2334,
-    kModelEditorOllamaCtxLenLabel = 2335,
-    kModelEditorOllamaCtxLenEdit = 2336,
-    kModelEditorOllamaVerboseCheck = 2337,
-    kModelEditorOllamaPull = 2338,
+    kModelEditorEmbeddingCheck = 2310,
+    kModelEditorThinkingCheck = 2311,
+    kModelEditorMaxCompletionCheck = 2312,
+    kModelEditorProviderLabel = 2313,
+    kModelEditorProviderCombo = 2314,
+    kModelEditorReasoningLabel = 2315,
+    kModelEditorReasoningCombo = 2316,
+    kModelEditorVerbosityLabel = 2317,
+    kModelEditorVerbosityCombo = 2318,
+    kModelEditorRoutingLabel = 2319,
+    kModelEditorRoutingCombo = 2320,
+    kModelEditorTargetsLabel = 2321,
+    kModelEditorTargetsList = 2322,
+    kModelEditorAddTarget = 2323,
+    kModelEditorEditTarget = 2324,
+    kModelEditorRemoveTarget = 2325,
+    kModelEditorMoveTargetUp = 2326,
+    kModelEditorMoveTargetDown = 2327,
+    kModelEditorOllamaLoadInfo = 2328,
+    kModelEditorOllamaSearch = 2329,
+    kModelEditorOllamaTimeoutLabel = 2330,
+    kModelEditorOllamaTimeoutEdit = 2331,
+    kModelEditorOllamaNumThreadsLabel = 2332,
+    kModelEditorOllamaNumThreadsEdit = 2333,
+    kModelEditorOllamaNoGpuCheck = 2334,
+    kModelEditorOllamaGpuLayersLabel = 2335,
+    kModelEditorOllamaGpuLayersEdit = 2336,
+    kModelEditorOllamaCtxLenLabel = 2337,
+    kModelEditorOllamaCtxLenEdit = 2338,
+    kModelEditorOllamaVerboseCheck = 2339,
+    kModelEditorOllamaPull = 2340,
     kModelEditorSave = IDOK,
     kModelEditorCancel = IDCANCEL,
 };
@@ -357,8 +359,8 @@ constexpr int kProviderEditorInitialWidth = 760;
 constexpr int kProviderEditorInitialHeight = 620;
 constexpr int kProviderEditorExpandedHeight = 690;
 constexpr int kModelEditorWidth = 620;
-constexpr int kModelEditorBaseHeight = 520;
-constexpr int kModelEditorCapabilitiesHeight = 610;
+constexpr int kModelEditorBaseHeight = 580;
+constexpr int kModelEditorCapabilitiesHeight = 670;
 constexpr int kModelEditorBindingHeight = 800;
 
 std::wstring BuildCapabilityDefaultLabel(const char* capability_name) {
@@ -416,6 +418,8 @@ std::wstring DescribeModelCatalogEntry(const ModelConfig& model) {
     lines.push_back(L"Streaming: " + std::wstring(model.supports_streaming ? L"Yes" : L"No"));
     lines.push_back(L"Tools: " + std::wstring(model.supports_tools ? L"Yes" : L"No"));
     lines.push_back(L"Vision: " + std::wstring(model.supports_vision ? L"Yes" : L"No"));
+    lines.push_back(L"Embedding: " + std::wstring(model.supports_embedding ? L"Yes" : L"No"));
+    lines.push_back(L"Thinking: " + std::wstring(model.supports_thinking ? L"Yes" : L"No"));
     lines.push_back(L"Source: " + Utf8ToWide(model.catalog_source));
     if (!model.reasoning_efforts.empty()) {
         std::wstring joined;
@@ -1689,6 +1693,8 @@ private:
         streaming_check_ = CreateButton(L"Streaming capable", kModelEditorStreamingCheck, BS_AUTOCHECKBOX);
         tools_check_ = CreateButton(L"Tool capable", kModelEditorToolsCheck, BS_AUTOCHECKBOX);
         vision_check_ = CreateButton(L"Vision capable", kModelEditorVisionCheck, BS_AUTOCHECKBOX);
+        embedding_check_ = CreateButton(L"Embedding capable", kModelEditorEmbeddingCheck, BS_AUTOCHECKBOX);
+        thinking_check_ = CreateButton(L"Thinking capable", kModelEditorThinkingCheck, BS_AUTOCHECKBOX);
         max_completion_check_ = CreateButton(L"Prefer max_completion_tokens", kModelEditorMaxCompletionCheck, BS_AUTOCHECKBOX);
         reasoning_label_ = CreateLabel(L"Reasoning effort:", kModelEditorReasoningLabel);
         reasoning_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
@@ -1720,13 +1726,15 @@ private:
         Button_SetCheck(streaming_check_, model_.supports_streaming ? BST_CHECKED : BST_UNCHECKED);
         Button_SetCheck(tools_check_, model_.supports_tools ? BST_CHECKED : BST_UNCHECKED);
         Button_SetCheck(vision_check_, model_.supports_vision ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(embedding_check_, model_.supports_embedding ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(thinking_check_, model_.supports_thinking ? BST_CHECKED : BST_UNCHECKED);
         Button_SetCheck(max_completion_check_, model_.prefer_max_completion_tokens ? BST_CHECKED : BST_UNCHECKED);
         PopulateCapabilitySelectors();
         model_.is_binding_model = IsBindingProviderContext();
         ollama_metadata_loaded_ = editing_ && IsOllamaProviderContext();
         ApplyCatalogManagedEditState();
 
-        for (HWND control : {provider_label_, provider_combo_, id_label_, id_edit_, ollama_load_info_button_, ollama_search_button_, display_label_, display_edit_, context_label_, context_edit_, ollama_timeout_label_, ollama_timeout_edit_, ollama_num_threads_label_, ollama_num_threads_edit_, ollama_no_gpu_check_, ollama_gpu_layers_label_, ollama_gpu_layers_edit_, ollama_ctx_len_label_, ollama_ctx_len_edit_, ollama_verbose_check_, streaming_check_, tools_check_, vision_check_, max_completion_check_, reasoning_label_, reasoning_combo_, verbosity_label_, verbosity_combo_, routing_label_, routing_combo_, targets_label_, targets_list_, add_target_button_, edit_target_button_, remove_target_button_, move_target_up_button_, move_target_down_button_, save_button_, cancel_button_}) {
+        for (HWND control : {provider_label_, provider_combo_, id_label_, id_edit_, ollama_load_info_button_, ollama_search_button_, display_label_, display_edit_, context_label_, context_edit_, ollama_timeout_label_, ollama_timeout_edit_, ollama_num_threads_label_, ollama_num_threads_edit_, ollama_no_gpu_check_, ollama_gpu_layers_label_, ollama_gpu_layers_edit_, ollama_ctx_len_label_, ollama_ctx_len_edit_, ollama_verbose_check_, streaming_check_, tools_check_, vision_check_, embedding_check_, thinking_check_, max_completion_check_, reasoning_label_, reasoning_combo_, verbosity_label_, verbosity_combo_, routing_label_, routing_combo_, targets_label_, targets_list_, add_target_button_, edit_target_button_, remove_target_button_, move_target_up_button_, move_target_down_button_, save_button_, cancel_button_}) {
             if (!control) {
                 continue;
             }
@@ -1794,6 +1802,10 @@ private:
         MoveWindow(tools_check_, margin + label_width, y, Scale(180), edit_height, TRUE);
         y += edit_height + gutter;
         MoveWindow(vision_check_, margin + label_width, y, Scale(180), edit_height, TRUE);
+        y += edit_height + gutter;
+        MoveWindow(embedding_check_, margin + label_width, y, Scale(180), edit_height, TRUE);
+        y += edit_height + gutter;
+        MoveWindow(thinking_check_, margin + label_width, y, Scale(180), edit_height, TRUE);
         y += edit_height + gutter;
         MoveWindow(max_completion_check_, margin + label_width, y, Scale(220), edit_height, TRUE);
         y += edit_height + gutter;
@@ -2039,12 +2051,16 @@ private:
         model_.supports_streaming = fetched.supports_streaming;
         model_.supports_tools = fetched.supports_tools;
         model_.supports_vision = fetched.supports_vision;
+        model_.supports_embedding = fetched.supports_embedding;
+        model_.supports_thinking = fetched.supports_thinking;
         ollama_metadata_loaded_ = true;
 
         SetWindowTextW(context_edit_, fetched.context_window > 0 ? std::to_wstring(fetched.context_window).c_str() : L"");
         Button_SetCheck(streaming_check_, fetched.supports_streaming ? BST_CHECKED : BST_UNCHECKED);
         Button_SetCheck(tools_check_, fetched.supports_tools ? BST_CHECKED : BST_UNCHECKED);
         Button_SetCheck(vision_check_, fetched.supports_vision ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(embedding_check_, fetched.supports_embedding ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(thinking_check_, fetched.supports_thinking ? BST_CHECKED : BST_UNCHECKED);
         return true;
     }
 
@@ -2132,6 +2148,8 @@ private:
         EnableWindow(streaming_check_, !locked);
         EnableWindow(tools_check_, !locked);
         EnableWindow(vision_check_, !locked);
+        EnableWindow(embedding_check_, !locked);
+        EnableWindow(thinking_check_, !locked);
         EnableWindow(max_completion_check_, !locked);
         if (locked) {
             SetWindowTextW(context_label_, L"Context window (catalog):");
@@ -2336,6 +2354,8 @@ private:
             model.supports_streaming = Button_GetCheck(streaming_check_) == BST_CHECKED;
             model.supports_tools = Button_GetCheck(tools_check_) == BST_CHECKED;
             model.supports_vision = Button_GetCheck(vision_check_) == BST_CHECKED;
+            model.supports_embedding = Button_GetCheck(embedding_check_) == BST_CHECKED;
+            model.supports_thinking = Button_GetCheck(thinking_check_) == BST_CHECKED;
             model.prefer_max_completion_tokens = Button_GetCheck(max_completion_check_) == BST_CHECKED;
         }
         model.ollama_keep_alive_seconds = 0;
@@ -2440,6 +2460,14 @@ private:
                         MessageBoxW(hwnd_, L"Every binding target must support vision if the binding model is marked as vision-capable.", L"Incompatible Vision Capability", MB_OK | MB_ICONERROR);
                         return;
                     }
+                    if (model.supports_embedding && !model_it->supports_embedding) {
+                        MessageBoxW(hwnd_, L"Every binding target must support embeddings if the binding model is marked as embedding-capable.", L"Incompatible Embedding Capability", MB_OK | MB_ICONERROR);
+                        return;
+                    }
+                    if (model.supports_thinking && !model_it->supports_thinking) {
+                        MessageBoxW(hwnd_, L"Every binding target must support thinking if the binding model is marked as thinking-capable.", L"Incompatible Thinking Capability", MB_OK | MB_ICONERROR);
+                        return;
+                    }
                 }
                 if (min_context_window > 0 && model.context_window > min_context_window) {
                     MessageBoxW(hwnd_, (L"Binding model context window cannot exceed the smallest known target context window (" + std::to_wstring(min_context_window) + L").").c_str(), L"Context Window Too Large", MB_OK | MB_ICONERROR);
@@ -2494,6 +2522,8 @@ private:
     HWND streaming_check_ = nullptr;
     HWND tools_check_ = nullptr;
     HWND vision_check_ = nullptr;
+    HWND embedding_check_ = nullptr;
+    HWND thinking_check_ = nullptr;
     HWND max_completion_check_ = nullptr;
     HWND reasoning_label_ = nullptr;
     HWND reasoning_combo_ = nullptr;
@@ -2988,6 +3018,12 @@ private:
             if (model.is_binding_model) {
                 label += L"  [binding]";
             }
+            if (model.supports_embedding) {
+                label += L"  [embedding]";
+            }
+            if (model.supports_thinking) {
+                label += L"  [thinking]";
+            }
             SendMessageW(models_list_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
         }
 
@@ -3096,6 +3132,8 @@ private:
         model.supports_streaming = AskYesNo(hwnd_, L"Should this model be marked as streaming-capable?", L"Streaming Support");
         model.supports_tools = AskYesNo(hwnd_, L"Should this model be marked as tool-capable?", L"Tool Support");
         model.supports_vision = AskYesNo(hwnd_, L"Should this model be marked as vision-capable?", L"Vision Support");
+        model.supports_embedding = AskYesNo(hwnd_, L"Should this model be marked as embedding-capable?", L"Embedding Support");
+        model.supports_thinking = AskYesNo(hwnd_, L"Should this model be marked as thinking-capable?", L"Thinking Support");
         return true;
     }
 

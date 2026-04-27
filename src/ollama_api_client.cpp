@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <chrono>
 #include <thread>
@@ -25,6 +26,13 @@ static std::string LowerAscii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
+}
+
+static bool IsOllamaCloudModelId(const std::string& model_id) {
+    const std::string normalized = LowerAscii(Trim(model_id));
+    constexpr std::string_view kCloudSuffix = ":cloud";
+    return normalized.size() >= kCloudSuffix.size() &&
+           normalized.compare(normalized.size() - kCloudSuffix.size(), kCloudSuffix.size(), kCloudSuffix) == 0;
 }
 
 /* ── WinHTTP helpers ──────────────────────────────────────────────── */
@@ -456,6 +464,8 @@ static bool IsOllamaLocalProvider(const ProviderConfig& provider);
 bool IsOllamaModelAvailable(const ProviderConfig& provider, const ModelConfig& model, std::string* error) {
     if (!IsOllamaLocalProvider(provider)) { if (error) *error = "Not an Ollama local provider."; return false; }
     if (!EnsureOllamaLocalServer(provider, error)) return false;
+    // Ollama Cloud models are not pulled locally, so they are absent from /api/tags.
+    if (IsOllamaCloudModelId(model.id)) return true;
     std::string body;
     if (!GetOllamaApi(OllamaLocalBaseUrl(provider) + "/api/tags", &body, error)) return false;
     try {

@@ -75,6 +75,18 @@ ParsedUrl CrackUrl(const std::string& url_utf8) {
     return parsed;
 }
 
+void ApplyCertificateFingerprintBypass(HINTERNET request, const std::string& fingerprint) {
+    if (Trim(fingerprint).empty()) {
+        return;
+    }
+    DWORD security_flags =
+        SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+        SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+        SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+        SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+    WinHttpSetOption(request, WINHTTP_OPTION_SECURITY_FLAGS, &security_flags, sizeof(security_flags));
+}
+
 std::string JoinChatCompletionsUrl(const std::string& base_url) {
     std::string trimmed = base_url;
     while (!trimmed.empty() && trimmed.back() == '/') {
@@ -465,6 +477,7 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
         }
 
         WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 15000, 15000, 30000, 30000);
+        ApplyCertificateFingerprintBypass(static_cast<HINTERNET>(request_handle.get()), request.provider.tls_certificate_fingerprint);
 
         std::wstring headers = L"Content-Type: application/json\r\nAccept: ";
         headers += stream ? L"text/event-stream" : L"application/json";
@@ -711,6 +724,7 @@ ChatCompletionResult OpenAIClient::CreateToolAwareCompletion(const ChatRequestOp
             }
 
             WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 15000, 15000, 30000, 30000);
+            ApplyCertificateFingerprintBypass(static_cast<HINTERNET>(request_handle.get()), request.provider.tls_certificate_fingerprint);
 
             std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
             if (!request.provider.api_key.empty()) {
@@ -834,6 +848,7 @@ ChatCompletionResult OpenAIClient::CreateSimpleCompletion(const ChatRequestOptio
             }
 
             WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 15000, 15000, 30000, 30000);
+            ApplyCertificateFingerprintBypass(static_cast<HINTERNET>(request_handle.get()), request.provider.tls_certificate_fingerprint);
 
             std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
             if (!request.provider.api_key.empty()) {
@@ -964,13 +979,14 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
             const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
             UniqueInternetHandle request_handle(WinHttpOpenRequest(static_cast<HINTERNET>(connection.get()), L"POST", parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
             if (!request_handle) {
-                result.error = FormatWinHttpError("Failed to create WinHTTP request.", GetLastError());
+            result.error = FormatWinHttpError("Failed to create WinHTTP request.", GetLastError());
                 return result;
             }
 
             WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 15000, 15000, 30000, 30000);
+            ApplyCertificateFingerprintBypass(static_cast<HINTERNET>(request_handle.get()), request.provider.tls_certificate_fingerprint);
 
-            std::wstring headers = L"Content-Type: application/json\r\nAccept: text/event-stream\r\n";
+            std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
             if (!request.provider.api_key.empty()) {
                 headers += L"Authorization: Bearer ";
                 headers += Utf8ToWide(request.provider.api_key);

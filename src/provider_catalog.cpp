@@ -188,6 +188,24 @@ std::optional<int> ParseOllamaPositiveInt(std::string value) {
     }
     return *parsed;
 }
+
+bool JsonCapabilitiesContain(const json& item, const std::vector<std::string>& names) {
+    auto matches = [&](std::string value) {
+        value = LowerAsciiCopy(Trim(value));
+        return std::find(names.begin(), names.end(), value) != names.end();
+    };
+    if (item.contains("capabilities") && item["capabilities"].is_array()) {
+        for (const auto& capability : item["capabilities"]) {
+            if (capability.is_string() && matches(capability.get<std::string>())) {
+                return true;
+            }
+        }
+    }
+    if (item.contains("type") && item["type"].is_string() && matches(item["type"].get<std::string>())) {
+        return true;
+    }
+    return false;
+}
 }  // namespace
 
 std::vector<ModelConfig> LoadProviderCatalog(AppStorage* storage, const ProviderConfig& provider, std::string* error) {
@@ -227,9 +245,11 @@ std::vector<ModelConfig> LoadProviderCatalog(AppStorage* storage, const Provider
                         continue;
                     }
                     model.display_name = item.value("display_name", model.id);
-                    model.supports_streaming = true;
-                    model.supports_tools = false;
-                    model.supports_vision = false;
+                    model.supports_streaming = item.value("supports_streaming", true);
+                    model.supports_tools = item.value("supports_tools", false);
+                    model.supports_vision = item.value("supports_vision", false);
+                    model.supports_embedding = item.value("supports_embedding", false) || JsonCapabilitiesContain(item, {"embedding", "embeddings"});
+                    model.supports_thinking = item.value("supports_thinking", false) || JsonCapabilitiesContain(item, {"thinking", "reasoning"});
                     model.output_tokens_parameter = "auto";
                     model.catalog_source = "discovered";
                     models.push_back(std::move(model));
@@ -269,9 +289,11 @@ std::vector<ModelConfig> LoadProviderCatalog(AppStorage* storage, const Provider
                         continue;
                     }
                     model.display_name = item.value("display_name", model.id);
-                    model.supports_streaming = true;
-                    model.supports_tools = false;
-                    model.supports_vision = false;
+                    model.supports_streaming = item.value("supports_streaming", true);
+                    model.supports_tools = item.value("supports_tools", false);
+                    model.supports_vision = item.value("supports_vision", false);
+                    model.supports_embedding = item.value("supports_embedding", false) || JsonCapabilitiesContain(item, {"embedding", "embeddings"});
+                    model.supports_thinking = item.value("supports_thinking", false) || JsonCapabilitiesContain(item, {"thinking", "reasoning"});
                     model.output_tokens_parameter = "auto";
                     model.catalog_source = "discovered";
                     models.push_back(std::move(model));
@@ -340,6 +362,8 @@ bool LoadOllamaModelMetadata(const ProviderConfig& provider,
         resolved.supports_streaming = true;
         resolved.supports_tools = false;
         resolved.supports_vision = false;
+        resolved.supports_embedding = false;
+        resolved.supports_thinking = false;
         resolved.reasoning_efforts.clear();
 
         std::istringstream stream(text);
@@ -381,7 +405,10 @@ bool LoadOllamaModelMetadata(const ProviderConfig& provider,
                     resolved.supports_tools = true;
                 } else if (capability == "vision") {
                     resolved.supports_vision = true;
+                } else if (capability == "embedding" || capability == "embeddings") {
+                    resolved.supports_embedding = true;
                 } else if (capability == "thinking") {
+                    resolved.supports_thinking = true;
                     resolved.reasoning_efforts = {"none", "low", "medium", "high"};
                 }
             }

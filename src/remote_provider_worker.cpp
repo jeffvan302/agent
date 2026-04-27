@@ -423,8 +423,14 @@ json BuildModelsList(const RemoteProviderWorkerConfig& config) {
             models.push_back({
                 {"id", m.id},
                 {"object", "model"},
+                {"display_name", m.display_name.empty() ? m.id : m.display_name},
                 {"owned_by", exp.provider.name},
                 {"provider_id", exp.provider.id},
+                {"supports_streaming", m.supports_streaming},
+                {"supports_tools", m.supports_tools},
+                {"supports_vision", m.supports_vision},
+                {"supports_embedding", m.supports_embedding},
+                {"supports_thinking", m.supports_thinking},
             });
         }
     }
@@ -574,6 +580,8 @@ std::optional<RemoteProviderWorkerConfig> LoadRemoteProviderWorkerConfig(
                             mc.supports_streaming = m.value("supports_streaming", true);
                             mc.supports_tools = m.value("supports_tools", false);
                             mc.supports_vision = m.value("supports_vision", false);
+                            mc.supports_embedding = m.value("supports_embedding", false);
+                            mc.supports_thinking = m.value("supports_thinking", false);
                             mc.is_binding_model = m.value("is_binding_model", false);
                             std::string routing_str = m.value("binding_routing_mode", "top_down_failover");
                             mc.binding_routing_mode = (routing_str == "round_robin" || routing_str == "round-robin")
@@ -633,6 +641,8 @@ std::optional<RemoteProviderWorkerConfig> LoadRemoteProviderWorkerConfig(
                             mc.supports_streaming = m.value("supports_streaming", true);
                             mc.supports_tools = m.value("supports_tools", false);
                             mc.supports_vision = m.value("supports_vision", false);
+                            mc.supports_embedding = m.value("supports_embedding", false);
+                            mc.supports_thinking = m.value("supports_thinking", false);
                             mc.is_binding_model = m.value("is_binding_model", false);
                             std::string routing_str = m.value("binding_routing_mode", "top_down_failover");
                             mc.binding_routing_mode = (routing_str == "round_robin" || routing_str == "round-robin")
@@ -695,6 +705,8 @@ bool SaveRemoteProviderWorkerConfig(const RemoteProviderWorkerConfig& config, st
                     {"supports_streaming", m.supports_streaming},
                     {"supports_tools", m.supports_tools},
                     {"supports_vision", m.supports_vision},
+                    {"supports_embedding", m.supports_embedding},
+                    {"supports_thinking", m.supports_thinking},
                 });
             }
             prov["models"] = std::move(models);
@@ -821,20 +833,19 @@ void ProxyPostSync(const httplib::Request& req,
     const std::string base = UpstreamBaseUrl(*exp);
     const std::string path = ollama_path ? "/api/chat" : UpstreamChatPath(*exp);
 
-    // Parse base URL into host/port
-    std::string upstream_host = base;
-    int upstream_port = 443;
-    bool upstream_secure = false;
+    // Build scheme-aware httplib client URL (strip any path for the constructor;
+    // httplib::Client("https://api.openai.com:443" or "http://host:port") automatically
+    // creates an TLS or plain Client internally).
+    std::string client_url = base;
     {
-        std::string u = base;
-        if (u.rfind("https://", 0) == 0) { upstream_secure = true; u = u.substr(8); }
-        else if (u.rfind("http://", 0) == 0) { upstream_secure = false; u = u.substr(7); }
-        size_t colon = u.find(':');
-        if (colon != std::string::npos) {
-            upstream_host = u.substr(0, colon);
-            try { upstream_port = std::stoi(u.substr(colon + 1)); } catch (...) {}
-        } else {
-            upstream_port = upstream_secure ? 443 : 80;
+        size_t path_start = std::string::npos;
+        if (client_url.rfind("https://", 0) == 0) {
+            path_start = client_url.find('/', 8);
+        } else if (client_url.rfind("http://", 0) == 0) {
+            path_start = client_url.find('/', 7);
+        }
+        if (path_start != std::string::npos) {
+            client_url = client_url.substr(0, path_start);
         }
     }
 
@@ -843,16 +854,16 @@ void ProxyPostSync(const httplib::Request& req,
         res.set_header("X-Accel-Buffering", "no");
         res.set_chunked_content_provider(
             ollama_path ? "application/x-ndjson" : "text/event-stream",
-            [body, upstream_host, upstream_port, upstream_secure, exp, ollama_path](size_t offset, httplib::DataSink& sink) mutable {
+            [body, client_url, exp, ollama_path](size_t offset, httplib::DataSink& sink) mutable {
                 if (offset > 0) { sink.done(); return true; }
-                httplib::Client client(upstream_host, upstream_port);
+                httplib::Client client(client_url);
                 client.set_connection_timeout(10, 0);
                 client.set_read_timeout(43200, 0); // 12h
-                if (upstream_secure) {
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+                if (client_url.rfind("https://", 0) == 0) {
                     client.enable_server_certificate_verification(false);
-#endif
                 }
+#endif
                 std::string auth = UpstreamAuthHeader(*exp);
                 httplib::Headers hdrs;
                 if (!auth.empty()) hdrs.emplace("Authorization", auth);
@@ -878,14 +889,14 @@ void ProxyPostSync(const httplib::Request& req,
     }
 
     // Non-streaming
-    httplib::Client client(upstream_host, upstream_port);
+    httplib::Client client(client_url);
     client.set_connection_timeout(10, 0);
     client.set_read_timeout(43200, 0);
-    if (upstream_secure) {
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    if (client_url.rfind("https://", 0) == 0) {
         client.enable_server_certificate_verification(false);
-#endif
     }
+#endif
     std::string auth = UpstreamAuthHeader(*exp);
     httplib::Headers hdrs;
     if (!auth.empty()) hdrs.emplace("Authorization", auth);
@@ -1015,6 +1026,12 @@ int RunRemoteProviderWorker(const fs::path& config_path) {
     });
 
     server.Post("/v1/chat/completions", [&](const httplib::Request& req, httplib::Response& res) {
+        bool stream = false;
+        try { auto p = json::parse(req.body); stream = p.value("stream", false); } catch (...) {}
+        ProxyPostSync(req, res, *config, stream, false);
+    });
+
+    server.Post("/chat/completions", [&](const httplib::Request& req, httplib::Response& res) {
         bool stream = false;
         try { auto p = json::parse(req.body); stream = p.value("stream", false); } catch (...) {}
         ProxyPostSync(req, res, *config, stream, false);
