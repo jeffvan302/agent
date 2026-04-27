@@ -399,6 +399,59 @@ bool PostOllamaApi(const std::string& url, const json& body, std::string* out_re
     return true;
 }
 
+std::string JoinOllamaUrl(std::string base_url, const std::string& path) {
+    base_url = Trim(base_url);
+    while (!base_url.empty() && base_url.back() == '/') base_url.pop_back();
+    if (path.empty()) return base_url;
+    if (path.front() == '/') return base_url + path;
+    return base_url + "/" + path;
+}
+
+bool ExtractEmbeddingDimensions(const json& payload, int* dimensions) {
+    if (payload.contains("embeddings") && payload["embeddings"].is_array() && !payload["embeddings"].empty()) {
+        const auto& first = payload["embeddings"][0];
+        if (first.is_array() && !first.empty()) {
+            if (dimensions) *dimensions = static_cast<int>(first.size());
+            return true;
+        }
+    }
+    if (payload.contains("embedding") && payload["embedding"].is_array() && !payload["embedding"].empty()) {
+        if (dimensions) *dimensions = static_cast<int>(payload["embedding"].size());
+        return true;
+    }
+    if (payload.contains("data") && payload["data"].is_array() && !payload["data"].empty()) {
+        const auto& first = payload["data"][0];
+        if (first.contains("embedding") && first["embedding"].is_array() && !first["embedding"].empty()) {
+            if (dimensions) *dimensions = static_cast<int>(first["embedding"].size());
+            return true;
+        }
+    }
+    return false;
+}
+
+bool TryOllamaEmbeddingEndpoint(const std::string& base_url,
+                                const std::string& endpoint,
+                                const json& body,
+                                int* dimensions,
+                                std::string* error) {
+    std::string response_text;
+    if (!PostOllamaApi(JoinOllamaUrl(base_url, endpoint), body, &response_text, error)) {
+        return false;
+    }
+
+    try {
+        const auto payload = json::parse(response_text);
+        if (!ExtractEmbeddingDimensions(payload, dimensions)) {
+            if (error) *error = endpoint + " did not return a usable embedding vector.";
+            return false;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        if (error) *error = endpoint + " returned non-JSON: " + ex.what();
+        return false;
+    }
+}
+
 /* ── Helper to normalize tool call arguments ─────────────────────── */
 
 struct ToolArgsNorm {
@@ -497,36 +550,66 @@ bool TestOllamaEmbeddingConnection(const ProviderConfig& provider, const ModelCo
     ReportOllamaLocalActivity(provider, model);
 
     const std::string base_url = OllamaLocalBaseUrl(provider);
-    json body;
-    body["model"] = model.id;
-    body["input"] = json::array({"Diagnostic connection test."});
 
-    std::string embed_url = base_url;
-    if (!embed_url.empty() && embed_url.back() == '/') embed_url.pop_back();
-    embed_url += "/api/embed";
+    // Try modern /api/embed endpoint first
+    {
+        json body;
+        body["model"] = model.id;
+        body["input"] = json::array({"Diagnostic connection test."});
 
-    std::string response_text;
-    if (!PostOllamaApi(embed_url, body, &response_text, message)) {
-        return false;
+        std::string embed_url = base_url;
+        if (!embed_url.empty() && embed_url.back() == '/') embed_url.pop_back();
+        embed_url += "/api/embed";
+
+        std::string response_text;
+        std::string first_error;
+        if (PostOllamaApi(embed_url, body, &response_text, &first_error)) {
+            try {
+                auto j = json::parse(response_text);
+                if (j.contains("embeddings") && j["embeddings"].is_array() && !j["embeddings"].empty()) {
+                    const auto& first = j["embeddings"][0];
+                    if (first.is_array()) {
+                        const int dims = static_cast<int>(first.size());
+                        if (message) *message = "Embedding connection OK (" + std::to_string(dims) + " dimensions).";
+                        return true;
+                    }
+                }
+            } catch (...) {
+                // Fall through to legacy endpoint
+            }
+        }
+        // If we reach here, /api/embed either failed or returned unexpected data.
+        // Continue to legacy fallback so a 405 doesn't block the user.
     }
 
-    try {
-        auto j = json::parse(response_text);
-        if (!j.contains("embeddings") || !j["embeddings"].is_array() || j["embeddings"].empty()) {
-            if (message) *message = "Embedding endpoint did not return embeddings.";
+    // Fallback to legacy /api/embeddings endpoint
+    {
+        json body;
+        body["model"] = model.id;
+        body["prompt"] = "Diagnostic connection test.";
+
+        std::string legacy_url = base_url;
+        if (!legacy_url.empty() && legacy_url.back() == '/') legacy_url.pop_back();
+        legacy_url += "/api/embeddings";
+
+        std::string response_text;
+        if (!PostOllamaApi(legacy_url, body, &response_text, message)) {
             return false;
         }
-        const auto& first = j["embeddings"][0];
-        if (!first.is_array()) {
-            if (message) *message = "Embedding endpoint returned a non-array embedding.";
+
+        try {
+            auto j = json::parse(response_text);
+            if (!j.contains("embedding") || !j["embedding"].is_array()) {
+                if (message) *message = "Legacy embedding endpoint did not return a valid embedding.";
+                return false;
+            }
+            const int dims = static_cast<int>(j["embedding"].size());
+            if (message) *message = "Embedding connection OK (" + std::to_string(dims) + " dimensions).";
+            return true;
+        } catch (const std::exception& ex) {
+            if (message) *message = std::string("Legacy embedding endpoint returned non-JSON: ") + ex.what();
             return false;
         }
-        const int dims = static_cast<int>(first.size());
-        if (message) *message = "Embedding connection OK (" + std::to_string(dims) + " dimensions).";
-        return true;
-    } catch (const std::exception& ex) {
-        if (message) *message = std::string("Embedding endpoint returned non-JSON: ") + ex.what();
-        return false;
     }
 }
 
