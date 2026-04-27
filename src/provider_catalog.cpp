@@ -359,11 +359,12 @@ bool LoadOllamaModelMetadata(const ProviderConfig& provider,
         if (resolved.display_name.empty()) {
             resolved.display_name = model_id;
         }
-        resolved.supports_streaming = true;
+        resolved.supports_streaming = false;
         resolved.supports_tools = false;
         resolved.supports_vision = false;
         resolved.supports_embedding = false;
         resolved.supports_thinking = false;
+        bool found_any_capability = false;
         resolved.reasoning_efforts.clear();
 
         std::istringstream stream(text);
@@ -403,16 +404,23 @@ bool LoadOllamaModelMetadata(const ProviderConfig& provider,
                 const std::string capability = LowerAsciiCopy(trimmed);
                 if (capability == "tools") {
                     resolved.supports_tools = true;
+                    found_any_capability = true;
                 } else if (capability == "vision") {
                     resolved.supports_vision = true;
+                    found_any_capability = true;
                 } else if (capability == "embedding" || capability == "embeddings") {
                     resolved.supports_embedding = true;
                 } else if (capability == "thinking") {
                     resolved.supports_thinking = true;
+                    found_any_capability = true;
                     resolved.reasoning_efforts = {"none", "low", "medium", "high"};
                 }
             }
         }
+
+        // Only mark as streaming-capable if the model has at least one
+        // chat-like capability. Embedding-only models are not streaming-capable.
+        resolved.supports_streaming = found_any_capability;
 
         if (model) {
             *model = std::move(resolved);

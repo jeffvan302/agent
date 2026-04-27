@@ -18,6 +18,8 @@ std::string OllamaLocalBaseUrl(const ProviderConfig& provider);
 
 bool IsOllamaModelAvailable(const ProviderConfig& provider, const ModelConfig& model, std::string* error);
 
+bool TestOllamaEmbeddingConnection(const ProviderConfig& provider, const ModelConfig& model, std::string* message);
+
 bool PullOllamaModel(const ProviderConfig& provider, const std::string& model_id,
                      const std::function<void(const std::string&)>& on_status,
                      std::string* error);

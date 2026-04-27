@@ -482,6 +482,54 @@ bool IsOllamaModelAvailable(const ProviderConfig& provider, const ModelConfig& m
     return false;
 }
 
+bool TestOllamaEmbeddingConnection(const ProviderConfig& provider, const ModelConfig& model, std::string* message) {
+    if (!IsOllamaLocalProvider(provider)) {
+        if (message) *message = "Not an Ollama local provider.";
+        return false;
+    }
+    if (!EnsureOllamaLocalServer(provider, message)) {
+        return false;
+    }
+    if (IsOllamaCloudModelId(model.id)) {
+        if (message) *message = "Cannot test embedding connections for Ollama Cloud models locally.";
+        return false;
+    }
+    ReportOllamaLocalActivity(provider, model);
+
+    const std::string base_url = OllamaLocalBaseUrl(provider);
+    json body;
+    body["model"] = model.id;
+    body["input"] = json::array({"Diagnostic connection test."});
+
+    std::string embed_url = base_url;
+    if (!embed_url.empty() && embed_url.back() == '/') embed_url.pop_back();
+    embed_url += "/api/embed";
+
+    std::string response_text;
+    if (!PostOllamaApi(embed_url, body, &response_text, message)) {
+        return false;
+    }
+
+    try {
+        auto j = json::parse(response_text);
+        if (!j.contains("embeddings") || !j["embeddings"].is_array() || j["embeddings"].empty()) {
+            if (message) *message = "Embedding endpoint did not return embeddings.";
+            return false;
+        }
+        const auto& first = j["embeddings"][0];
+        if (!first.is_array()) {
+            if (message) *message = "Embedding endpoint returned a non-array embedding.";
+            return false;
+        }
+        const int dims = static_cast<int>(first.size());
+        if (message) *message = "Embedding connection OK (" + std::to_string(dims) + " dimensions).";
+        return true;
+    } catch (const std::exception& ex) {
+        if (message) *message = std::string("Embedding endpoint returned non-JSON: ") + ex.what();
+        return false;
+    }
+}
+
 bool PullOllamaModel(const ProviderConfig& provider, const std::string& model_id, const std::function<void(const std::string&)>& on_status, std::string* error) {
     if (!IsOllamaLocalProvider(provider)) { if (error) *error = "Not an Ollama local provider."; return false; }
     if (!EnsureOllamaLocalServer(provider, error)) return false;

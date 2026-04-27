@@ -1,0 +1,9 @@
+{
+  "id": "chat_1777260864408_17",
+  "max_tokens": 1024,
+  "model_id": "deepseek-v4-flash:cloud",
+  "name": "mmtest",
+  "provider_id": "provider_1777000661309_11",
+  "system_prompt": "",
+  "temperature": 0.2
+}

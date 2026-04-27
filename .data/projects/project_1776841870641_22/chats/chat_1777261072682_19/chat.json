@@ -1,0 +1,9 @@
+{
+  "id": "chat_1777261072682_19",
+  "max_tokens": 1024,
+  "model_id": "",
+  "name": "Tester [admin]",
+  "provider_id": "",
+  "system_prompt": "",
+  "temperature": 0.2
+}

@@ -30,7 +30,7 @@
     }
   ],
   "model_tool_ids": [],
-  "preferred_model_id": "minimax-m2.7:cloud",
+  "preferred_model_id": "deepseek-v4-flash:cloud",
   "preferred_provider_id": "provider_1777000661309_11",
   "project_instructions": "",
   "project_name": "Open AI Tester",
@@ -61,5 +61,5 @@
       "retrieval_priority": 10
     }
   ],
-  "selected_compression_config_id": ""
+  "selected_compression_config_id": "cc_1776744536752_9"
 }

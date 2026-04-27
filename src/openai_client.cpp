@@ -620,16 +620,23 @@ TestConnectionResult OpenAIClient::TestConnection(const ProviderConfig& provider
     TestConnectionResult result;
     try {
         if (NormalizeProviderType(provider.provider_type) == "ollama_local") {
+            // Embedding models use /api/embed which inherently validates model availability.
+            if (model.supports_embedding) {
+                result.success = TestOllamaEmbeddingConnection(provider, model, &result.message);
+                return result;
+            }
+
+            if (!IsOllamaModelAvailable(provider, model, &result.message)) {
+                result.success = false;
+                return result;
+            }
+
             ChatRequestOptions request;
             request.provider = provider;
             request.model = model;
             request.temperature = 0.0;
             request.max_tokens = 8;
             request.messages.push_back(MessageRecord{"user", "Reply with the single word pong.", CurrentTimestampUtc()});
-            if (!IsOllamaModelAvailable(provider, model, &result.message)) {
-                result.success = false;
-                return result;
-            }
             const ChatExecutionResult response = RunOllamaLocalHttpChat(request, [](const std::string&) {}, {}, {});
             result.success = response.success;
             result.message = response.success ? response.full_text : response.error;

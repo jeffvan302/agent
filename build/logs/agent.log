@@ -1,12 +1,19 @@
 
-=== Logger initialized at 2026-04-26T23:13:29Z ===
-2026-04-26T23:13:29Z [INFO]  Agent Desktop starting
-2026-04-26T23:13:29Z [INFO]  Command line: 
-2026-04-26T23:14:03Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
-2026-04-26T23:14:03Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
-2026-04-26T23:14:03Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
-2026-04-26T23:15:31Z [INFO]  Agent Desktop shutting down
-2026-04-26T23:15:31Z [INFO]  [WebServer] Listener thread exited.
-2026-04-26T23:15:31Z [INFO]  [WebServer] Redirect listener thread exited.
-2026-04-26T23:15:31Z [INFO]  [WebServer] Server stopped.
-2026-04-26T23:15:32Z [INFO]  Agent Desktop shutdown complete
+=== Logger initialized at 2026-04-27T10:02:46Z ===
+2026-04-27T10:02:46Z [INFO]  Agent Desktop starting
+2026-04-27T10:02:46Z [INFO]  Command line: 
+2026-04-27T10:03:03Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-27T10:03:03Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-27T10:03:03Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
+2026-04-27T10:03:50Z [INFO]  Agent Desktop shutting down
+2026-04-27T10:03:50Z [INFO]  [WebServer] Listener thread exited.
+2026-04-27T10:03:50Z [INFO]  [WebServer] Redirect listener thread exited.
+2026-04-27T10:03:50Z [INFO]  [WebServer] Server stopped.
+2026-04-27T10:03:51Z [INFO]  Agent Desktop shutdown complete
+
+=== Logger initialized at 2026-04-27T10:16:33Z ===
+2026-04-27T10:16:33Z [INFO]  Agent Desktop starting
+2026-04-27T10:16:33Z [INFO]  Command line: 
+2026-04-27T10:16:49Z [INFO]  [WebServer] Starting HTTPS server on port 8080 (cert=C:\Users\TheunisvanNiekerk\Code\agent\certs\cert.pem)
+2026-04-27T10:16:49Z [INFO]  [WebServer] HTTP→HTTPS redirect running on port 80
+2026-04-27T10:16:49Z [INFO]  [WebServer] Server started — https://0.0.0.0:8080
