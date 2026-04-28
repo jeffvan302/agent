@@ -719,6 +719,7 @@ json ChatToJson(const ChatInfo& chat) {
         {"system_prompt", chat.system_prompt},
         {"temperature", chat.temperature},
         {"max_tokens", chat.max_tokens},
+        {"selected_agentic_mode_id", chat.selected_agentic_mode_id},
     };
 }
 
@@ -731,6 +732,7 @@ ChatInfo ChatFromJson(const json& item, const std::string& fallback_id) {
     chat.system_prompt = item.value("system_prompt", "");
     chat.temperature = item.value("temperature", 0.2);
     chat.max_tokens = item.value("max_tokens", 1024);
+    chat.selected_agentic_mode_id = item.value("selected_agentic_mode_id", "");
     return chat;
 }
 
@@ -1813,6 +1815,15 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     }
     j["project_variables"] = pv_arr;
 
+    j["selected_agentic_mode_id"] = settings.selected_agentic_mode_id;
+
+    json am_arr = json::array();
+    for (const auto& id : settings.enabled_agentic_mode_ids) {
+        am_arr.push_back(id);
+    }
+    j["enabled_agentic_mode_ids"] = am_arr;
+    j["enable_chat_logging"] = settings.enable_chat_logging;
+
     return j;
 }
 
@@ -1862,6 +1873,18 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
             }
         }
     }
+
+    settings.selected_agentic_mode_id = j.value("selected_agentic_mode_id", "");
+
+    if (j.contains("enabled_agentic_mode_ids") && j["enabled_agentic_mode_ids"].is_array()) {
+        for (const auto& item : j["enabled_agentic_mode_ids"]) {
+            if (item.is_string()) {
+                settings.enabled_agentic_mode_ids.push_back(item.get<std::string>());
+            }
+        }
+    }
+
+    settings.enable_chat_logging = j.value("enable_chat_logging", false);
 
     return settings;
 }

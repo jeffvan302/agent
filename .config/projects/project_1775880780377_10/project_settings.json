@@ -1,5 +1,9 @@
 {
   "compression_configs": [],
+  "enabled_agentic_mode_ids": [
+    "mode_1135061031",
+    "mode_1141688484"
+  ],
   "mcp_bindings": [
     {
       "server_id": "mcp_server_1775828640792_3",
@@ -78,5 +82,6 @@
       "retrieval_priority": 20
     }
   ],
+  "selected_agentic_mode_id": "mode_1135061031",
   "selected_compression_config_id": "cc_1776744536752_9"
 }

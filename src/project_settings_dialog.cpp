@@ -96,6 +96,14 @@ enum ControlId : int {
     kProjVarsDescriptionEdit = 6459,
     kProjVarsInjectCheck = 6460,
 
+    // Agentic modes
+    kAgenticModeLabel      = 6462,
+    kAgenticModeCombo      = 6463,
+    kAgenticModesListLabel = 6464,
+    kAgenticModesList      = 6465,
+
+    kChatLoggingCheck = 6466,
+
     // Footer
     kCheckContextButton = 6461,
     kSaveButton = IDOK,
@@ -681,6 +689,16 @@ private:
         proj_vars_description_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsDescriptionEdit), nullptr, nullptr);
         proj_vars_inject_check_ = CreateWindowExW(0, L"BUTTON", L"Inject this variable into the context window", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsInjectCheck), nullptr, nullptr);
 
+        agentic_mode_label_ = CreateWindowExW(0, L"STATIC", L"Default Agentic Mode:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAgenticModeLabel), nullptr, nullptr);
+        agentic_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAgenticModeCombo), nullptr, nullptr);
+        agentic_modes_list_label_ = CreateWindowExW(0, L"STATIC", L"Enabled Agentic Modes:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAgenticModesListLabel), nullptr, nullptr);
+        agentic_modes_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAgenticModesList), nullptr, nullptr);
+        chat_logging_check_ = CreateWindowExW(0, L"BUTTON", L"Enable detailed chat logging",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kChatLoggingCheck), nullptr, nullptr);
+
         instructions_label_ = CreateWindowExW(0, L"STATIC", L"Project Instructions:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstructionsLabel), nullptr, nullptr);
         import_instructions_button_ = CreateWindowExW(0, L"BUTTON", L"Import Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImportInstructions), nullptr, nullptr);
         instructions_edit_ = CreateWindowExW(
@@ -719,6 +737,7 @@ private:
             proj_vars_header_, proj_vars_list_, proj_vars_add_btn_, proj_vars_remove_btn_,
             proj_vars_name_label_, proj_vars_name_edit_, proj_vars_value_label_, proj_vars_value_edit_,
             proj_vars_description_label_, proj_vars_description_edit_, proj_vars_inject_check_,
+            agentic_mode_label_, agentic_mode_combo_, agentic_modes_list_label_, agentic_modes_list_, chat_logging_check_,
             instructions_label_, import_instructions_button_, instructions_edit_,
             check_context_button_, save_button_, cancel_button_
         };
@@ -764,6 +783,32 @@ private:
             std::wstring label = (enabled ? L"[✓] " : L"[ ] ") +
                 Utf8ToWide(mt.name.empty() ? "(unnamed)" : mt.name);
             ListBox_AddString(model_tools_list_, label.c_str());
+        }
+
+        // Populate agentic modes
+        agentic_mode_enabled_.clear();
+        ComboBox_AddString(agentic_mode_combo_, L"(none)");
+        for (const auto& mode : options_.agentic_modes) {
+            const int idx = ComboBox_AddString(agentic_mode_combo_, Utf8ToWide(mode.name).c_str());
+            bool enabled = std::find(options_.enabled_agentic_mode_ids.begin(),
+                options_.enabled_agentic_mode_ids.end(), mode.id) != options_.enabled_agentic_mode_ids.end();
+            agentic_mode_enabled_.push_back(enabled);
+            std::wstring label = (enabled ? L"[✓] " : L"[ ] ") + Utf8ToWide(mode.name);
+            ListBox_AddString(agentic_modes_list_, label.c_str());
+            if (mode.id == options_.selected_agentic_mode_id) {
+                ComboBox_SetCurSel(agentic_mode_combo_, idx);
+                enabled = true;  // default must be checked
+                agentic_mode_enabled_.back() = true;
+                // refresh list label
+                ListBox_DeleteString(agentic_modes_list_, static_cast<int>(agentic_mode_enabled_.size()) - 1);
+                ListBox_InsertString(agentic_modes_list_, static_cast<int>(agentic_mode_enabled_.size()) - 1, label.c_str());
+            }
+        }
+        if (options_.selected_agentic_mode_id.empty() || ComboBox_GetCurSel(agentic_mode_combo_) < 0) {
+            ComboBox_SetCurSel(agentic_mode_combo_, 0);
+        }
+        if (options_.enable_chat_logging) {
+            CheckDlgButton(hwnd_, kChatLoggingCheck, BST_CHECKED);
         }
     }
 
@@ -899,6 +944,21 @@ private:
             y += Scale(hwnd_, 22) + gutter;
         }
 
+        // Agentic modes section - two panels side by side
+        const int am_half = (right_width - gutter) / 2;
+        const int am_top = y;
+        const int am_label_h = label_height;
+        const int am_control_h = Scale(hwnd_, 130);
+
+        MoveWindow(agentic_mode_label_,       right_x,              am_top,              am_half, am_label_h, TRUE);
+        MoveWindow(agentic_mode_combo_,        right_x,              am_top + am_label_h + gutter,
+                                              am_half,              Scale(hwnd_, 200), TRUE);
+        MoveWindow(agentic_modes_list_label_, right_x + am_half + gutter, am_top,       am_half, am_label_h, TRUE);
+        MoveWindow(agentic_modes_list_,       right_x + am_half + gutter, am_top + am_label_h + gutter,
+                                              am_half,              am_control_h, TRUE);
+        MoveWindow(chat_logging_check_, right_x, am_top + am_label_h + gutter + Scale(hwnd_, 200) + gutter, am_half, Scale(hwnd_, 20), TRUE);
+        y = am_top + am_label_h + gutter + Scale(hwnd_, 200) + gutter + Scale(hwnd_, 20) + gutter;
+
         const int import_width = Scale(hwnd_, 130);
         MoveWindow(instructions_label_, right_x, y + Scale(hwnd_, 5), right_width - import_width - gutter, label_height, TRUE);
         MoveWindow(import_instructions_button_, right_x + right_width - import_width, y, import_width, button_height, TRUE);
@@ -1029,6 +1089,22 @@ private:
         case kProjVarsInjectCheck:
             if (notification_code == BN_CLICKED && !updating_proj_var_) {
                 OnProjVarEditChanged();
+            }
+            break;
+        case kAgenticModesList:
+            if (notification_code == LBN_SELCHANGE && !toggling_agentic_mode_) {
+                const int sel = ListBox_GetCurSel(agentic_modes_list_);
+                if (sel >= 0 && sel < static_cast<int>(agentic_mode_enabled_.size())) {
+                    toggling_agentic_mode_ = true;
+                    agentic_mode_enabled_[sel] = !agentic_mode_enabled_[sel];
+                    const auto& mode = options_.agentic_modes[sel];
+                    std::wstring label = (agentic_mode_enabled_[sel] ? L"[✓] " : L"[ ] ") +
+                        Utf8ToWide(mode.name.empty() ? "(unnamed)" : mode.name);
+                    ListBox_DeleteString(agentic_modes_list_, sel);
+                    ListBox_InsertString(agentic_modes_list_, sel, label.c_str());
+                    ListBox_SetCurSel(agentic_modes_list_, sel);
+                    toggling_agentic_mode_ = false;
+                }
             }
             break;
         case kImportInstructions:
@@ -1720,6 +1796,26 @@ private:
             }
         }
 
+        // Collect agentic modes
+        std::string selected_agentic_mode_id;
+        std::vector<std::string> enabled_agentic_mode_ids;
+        {
+            const int mode_sel = ComboBox_GetCurSel(agentic_mode_combo_);
+            if (mode_sel > 0 && static_cast<size_t>(mode_sel - 1) < options_.agentic_modes.size()) {
+                selected_agentic_mode_id = options_.agentic_modes[static_cast<size_t>(mode_sel - 1)].id;
+            }
+            for (size_t i = 0; i < agentic_mode_enabled_.size(); ++i) {
+                if (agentic_mode_enabled_[i] && i < options_.agentic_modes.size()) {
+                    enabled_agentic_mode_ids.push_back(options_.agentic_modes[i].id);
+                }
+            }
+            if (!selected_agentic_mode_id.empty() &&
+                std::find(enabled_agentic_mode_ids.begin(), enabled_agentic_mode_ids.end(),
+                          selected_agentic_mode_id) == enabled_agentic_mode_ids.end()) {
+                enabled_agentic_mode_ids.push_back(selected_agentic_mode_id);
+            }
+        }
+
         result.project_name = WideToUtf8(options_.project_name);
         result.project_instructions = WideToUtf8(GetWindowTextString(instructions_edit_));
         result.selected_compression_config_id = selected_compression_config_id_;
@@ -1727,6 +1823,9 @@ private:
         result.preferred_model_id = preferred_model_id;
         result.model_tool_ids = std::move(model_tool_ids);
         result.project_variables = project_variables_;
+        result.selected_agentic_mode_id = std::move(selected_agentic_mode_id);
+        result.enabled_agentic_mode_ids = std::move(enabled_agentic_mode_ids);
+        result.enable_chat_logging = (IsDlgButtonChecked(hwnd_, kChatLoggingCheck) == BST_CHECKED);
         return result;
     }
 
@@ -1956,6 +2055,21 @@ private:
         if (!Trim(instructions).empty()) {
             context += "Project Instructions:\n";
             context += instructions;
+        }
+
+        // Preview selected agentic mode instructions
+        if (!settings.selected_agentic_mode_id.empty()) {
+            const auto it = std::find_if(options_.agentic_modes.begin(), options_.agentic_modes.end(),
+                [&](const AgenticModeConfig& m) { return m.id == settings.selected_agentic_mode_id; });
+            if (it != options_.agentic_modes.end()) {
+                const std::string mode_instructions =
+                    variable_resolver::ExpandTemplate(it->instructions, resolved_values);
+                if (!Trim(mode_instructions).empty()) {
+                    if (!context.empty()) context += "\n\n";
+                    context += "Agentic Mode Instructions (" + it->name + "):\n";
+                    context += mode_instructions;
+                }
+            }
         }
 
         const std::string mcp_context =
@@ -2222,6 +2336,15 @@ private:
     HWND model_tools_list_ = nullptr;
     std::vector<bool> model_tool_enabled_;
     bool toggling_model_tool_ = false;  // re-entrancy guard for checkbox toggle
+
+    HWND agentic_mode_label_ = nullptr;
+    HWND agentic_mode_combo_ = nullptr;
+    HWND agentic_modes_list_label_ = nullptr;
+    HWND agentic_modes_list_ = nullptr;
+    HWND chat_logging_check_ = nullptr;
+    std::vector<bool> agentic_mode_enabled_;
+    bool toggling_agentic_mode_ = false;
+
     HWND instructions_label_ = nullptr;
     HWND instructions_edit_ = nullptr;
     HWND import_instructions_button_ = nullptr;

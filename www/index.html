@@ -48,11 +48,16 @@
         <div id="attach-list"></div>
       </div>
       <div id="compose">
-        <button id="attach-btn" title="Attach file" disabled>📎</button>
-        <input id="file-input" type="file" multiple style="display:none">
-        <textarea id="message-input" placeholder="Type a message…"
-                  rows="1" disabled></textarea>
-        <button id="send-btn" disabled>Send</button>
+        <div id="compose-top">
+          <span id="agentic-mode-label" class="agentic-mode-none">Mode: None</span>
+        </div>
+        <div id="compose-bottom">
+          <button id="attach-btn" title="Attach file" disabled>&#128206;</button>
+          <input id="file-input" type="file" multiple style="display:none">
+          <textarea id="message-input" placeholder="Type a message…"
+                    rows="1" disabled></textarea>
+          <button id="send-btn" disabled>Send</button>
+        </div>
       </div>
     </main>
   </div>

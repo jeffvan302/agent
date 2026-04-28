@@ -214,6 +214,10 @@ private:
     void HandleProjectDataDownload(const void* req, void* res);
     void HandleRagDocumentDownload(const void* req, void* res);
 
+    // Agentic modes
+    void HandleGetProjectAgenticModes(const void* req, void* res);
+    void HandleSetChatAgenticMode   (const void* req, void* res);
+
     // ── Static file serving ───────────────────────────────────────────────
     void HandleStaticOrPage(const void* req, void* res);
     bool ServeFile         (const std::filesystem::path& abs_path, void* res);

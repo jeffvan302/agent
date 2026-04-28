@@ -9,6 +9,7 @@
 #include "openai_client.h"
 #include "prompt_dialog.h"
 #include "project_setup_dialog.h"
+#include "chat_request_logger.h"
 #include "project_settings_dialog.h"
 #include "provider_manager.h"
 #include "rag_service.h"
@@ -2764,6 +2765,7 @@ public:
     MainWindow();
     HWND Create(HINSTANCE instance);
     void OpenWebConfig();  // public so command-line options can trigger it
+    HWND GetAgenticModesWindow() const { return agentic_modes_window_; }
 
 private:
     static int Scale(HWND hwnd, int value);
@@ -3469,8 +3471,15 @@ void MainWindow::EditProjectSettings() {
     options.model_tools = storage_.LoadModelTools();
     options.initial_model_tool_ids = project_settings.model_tool_ids;
 
+    // Agentic modes
+    options.agentic_modes = storage_.LoadAgenticModes();
+    options.selected_agentic_mode_id = project_settings.selected_agentic_mode_id;
+    options.enabled_agentic_mode_ids = project_settings.enabled_agentic_mode_ids;
+
     // Project variables
     options.initial_project_variables = project_settings.project_variables;
+    options.enable_chat_logging = project_settings.enable_chat_logging;
+
     // Pre-seed ProjectFolder from MCP global binding values if not already set.
     for (const auto& gv : mcp_manager_.global_variables()) {
         const bool already_set = std::find_if(
@@ -3508,6 +3517,9 @@ void MainWindow::EditProjectSettings() {
     saved_settings.preferred_model_id = result->preferred_model_id;
     saved_settings.model_tool_ids = result->model_tool_ids;
     saved_settings.project_variables = result->project_variables;
+    saved_settings.selected_agentic_mode_id = result->selected_agentic_mode_id;
+    saved_settings.enabled_agentic_mode_ids = result->enabled_agentic_mode_ids;
+    saved_settings.enable_chat_logging = result->enable_chat_logging;
     storage_.SaveProjectSettings(active_project_id_, saved_settings);
     storage_.SaveProjectCompressionSettings(active_project_id_, ProjectCompressionSettings{
         !result->selected_compression_config_id.empty(),
@@ -4213,6 +4225,22 @@ void MainWindow::SendCurrentMessage() {
             request.system_prompt += "Project Instructions:\n";
             request.system_prompt += project_instructions;
         }
+        // Inject selected agentic mode instructions after project instructions
+        if (!proj_settings.selected_agentic_mode_id.empty()) {
+            const auto all_modes = storage_.LoadAgenticModes();
+            const auto it = std::find_if(all_modes.begin(), all_modes.end(),
+                [&](const AgenticModeConfig& m) { return m.id == proj_settings.selected_agentic_mode_id; });
+            if (it != all_modes.end()) {
+                std::string mode_instructions = Trim(it->instructions);
+                if (!mode_instructions.empty()) {
+                    if (!request.system_prompt.empty()) {
+                        request.system_prompt += "\n\n";
+                    }
+                    request.system_prompt += "Agentic Mode Instructions (" + it->name + "):\n";
+                    request.system_prompt += mode_instructions;
+                }
+            }
+        }
     }
 
     const std::string mcp_project_context = BuildMcpProjectContext();
@@ -4267,6 +4295,21 @@ void MainWindow::SendCurrentMessage() {
 
     const std::string project_id = active_project_id_;
     const std::string chat_id = active_chat_id_;
+
+    // ── Chat logging setup (Desktop) ──────────────────────────────────
+    ChatRequestLogger::MaybeInitialize(
+        storage_.runtime_paths().data_root, project_id, proj_settings.enable_chat_logging);
+    const bool logging = proj_settings.enable_chat_logging;
+    const std::string ts = CurrentTimestampUtc();
+    std::string log_header;
+    if (logging) {
+        log_header = ChatRequestLogger::FormatHeader(ts, project_id, chat_id);
+        log_header += ChatRequestLogger::FormatProvider(*selected_provider, *selected_model);
+        log_header += ChatRequestLogger::FormatBlock("System Prompt", request.system_prompt);
+        log_header += ChatRequestLogger::FormatBlock("Request Messages", ChatRequestLogger::FormatMessages(request.messages));
+    }
+    // ── End logging setup ───────────────────────────────────────────
+
     for (const auto& config : mcp_manager_.configs()) {
         if (config.enabled && config.auto_connect &&
             mcp_manager_.IsServerSelectedForProject(project_id, config.id)) {
@@ -4429,7 +4472,7 @@ void MainWindow::SendCurrentMessage() {
     const size_t existing_count = request.messages.size();
 
     if (!include_tools) {
-        std::thread([hwnd = hwnd_, request, project_id, chat_id]() {
+        std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging]() {
             const auto result = OpenAIClient::StreamChat(request, [hwnd, project_id, chat_id](const std::string& piece) {
                 auto* payload = new ChatDeltaPayload;
                 payload->project_id = project_id;
@@ -4443,6 +4486,15 @@ void MainWindow::SendCurrentMessage() {
             final_payload->project_id = project_id;
             final_payload->chat_id = chat_id;
             final_payload->error = result.error;
+            if (logging) {
+                if (!result.success) {
+                    ChatRequestLogger::Log(project_id, logging,
+                        log_header + ChatRequestLogger::FormatErrorResponse(result.error));
+                } else {
+                    ChatRequestLogger::Log(project_id, logging,
+                        log_header + ChatRequestLogger::FormatSuccessResponse(result.full_text));
+                }
+            }
             if (result.success && !result.full_text.empty()) {
                 MessageRecord assistant_message;
                 assistant_message.role = "assistant";
@@ -4455,7 +4507,7 @@ void MainWindow::SendCurrentMessage() {
         return;
     }
 
-    std::thread([hwnd = hwnd_, request, project_id, chat_id, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, model_tool_definitions, model_tools, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
+    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, model_tool_definitions, model_tools, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
         constexpr int kMaxToolRounds = 8;
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
@@ -4710,6 +4762,16 @@ void MainWindow::SendCurrentMessage() {
                 error = final_result.error.empty()
                     ? "The model exceeded the MCP tool-call loop limit."
                     : "The model exceeded the MCP tool-call loop limit, and the final summary failed: " + final_result.error;
+            }
+        }
+
+        if (logging) {
+            if (!success || !error.empty()) {
+                ChatRequestLogger::Log(project_id, logging,
+                    log_header + ChatRequestLogger::FormatErrorResponse(error));
+            } else if (!working_messages.empty()) {
+                ChatRequestLogger::Log(project_id, logging,
+                    log_header + ChatRequestLogger::FormatSuccessResponse(working_messages.back().content));
             }
         }
 
@@ -5358,6 +5420,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmd_line, int show_comm
 
         MSG msg{};
         while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            const HWND agentic_hwnd = window.GetAgenticModesWindow();
+            if (agentic_hwnd && IsWindow(agentic_hwnd) &&
+                IsDialogMessageW(agentic_hwnd, &msg)) {
+                continue;
+            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

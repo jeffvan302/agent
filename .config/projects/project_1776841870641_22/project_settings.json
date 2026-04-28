@@ -1,5 +1,12 @@
 {
   "compression_configs": [],
+  "enable_chat_logging": true,
+  "enabled_agentic_mode_ids": [
+    "mode_1135061031",
+    "mode_1141688484",
+    "mode_1155308375",
+    "mode_1155581546"
+  ],
   "mcp_bindings": [
     {
       "server_id": "mcp_server_1775828640792_3",
@@ -30,8 +37,8 @@
     }
   ],
   "model_tool_ids": [],
-  "preferred_model_id": "deepseek-v4-flash:cloud",
-  "preferred_provider_id": "provider_1777000661309_11",
+  "preferred_model_id": "codex-MiniMax-M2.7",
+  "preferred_provider_id": "provider_1775726633372_1",
   "project_instructions": "",
   "project_name": "Open AI Tester",
   "project_variables": [
@@ -61,5 +68,6 @@
       "retrieval_priority": 10
     }
   ],
+  "selected_agentic_mode_id": "mode_1135061031",
   "selected_compression_config_id": "cc_1776744536752_9"
 }

@@ -29,6 +29,10 @@ struct ProjectSettingsOptions {
     std::vector<ModelToolConfig> model_tools;          // all configured model tools
     std::vector<std::string> initial_model_tool_ids;   // currently enabled tool IDs for this project
     std::vector<ProjectMcpVariableValue> initial_project_variables;  // existing project-level variables
+    std::vector<AgenticModeConfig> agentic_modes;      // all available agentic modes
+    std::string selected_agentic_mode_id;                // currently selected default mode
+    std::vector<std::string> enabled_agentic_mode_ids;  // currently enabled mode IDs
+    bool enable_chat_logging = false;                    // current chat logging setting
 };
 
 struct ProjectSettingsResult {
@@ -42,6 +46,9 @@ struct ProjectSettingsResult {
     std::string preferred_model_id;
     std::vector<std::string> model_tool_ids;   // enabled tool IDs after editing
     std::vector<ProjectMcpVariableValue> project_variables;  // project-level variables after editing
+    std::string selected_agentic_mode_id;       // selected default agentic mode
+    std::vector<std::string> enabled_agentic_mode_ids;  // enabled agentic mode IDs after editing
+    bool enable_chat_logging = false;             // whether detailed chat logging is enabled
 };
 
 std::optional<ProjectSettingsResult> ShowProjectSettingsDialog(HWND owner, const ProjectSettingsOptions& options);

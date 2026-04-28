@@ -1,0 +1,10 @@
+{
+  "id": "chat_1777356340326_17",
+  "max_tokens": 1024,
+  "model_id": "",
+  "name": "New Chattter [admin]",
+  "provider_id": "",
+  "selected_agentic_mode_id": "mode_1155308375",
+  "system_prompt": "",
+  "temperature": 0.2
+}

@@ -23,6 +23,8 @@
 #endif
 
 #include "web_server.h"
+
+#include "chat_request_logger.h"
 #include "web_assets_default.h"
 
 #include "artifact_memory_tool_bridge.h"
@@ -2367,7 +2369,7 @@ void WebServer::HandleGetChats(const void* req_ptr, void* res_ptr) {
             if (chat.name.size() >= suffix.size() &&
                 chat.name.compare(chat.name.size() - suffix.size(),
                                   suffix.size(), suffix) == 0) {
-                arr.push_back({{"id", chat.id}, {"name", chat.name}});
+                arr.push_back({{"id", chat.id}, {"name", chat.name}, {"selected_agentic_mode_id", chat.selected_agentic_mode_id}});
             }
         }
         break;
@@ -2428,6 +2430,69 @@ void WebServer::HandleDeleteChat(const void* req_ptr, void* res_ptr) {
             storage_->DeleteChat(proj.info.id, chat_id);
             AppendAuditLog(GetRemoteAddr(req_ptr), "chat_deleted",
                            "user=" + session->username + " chat=" + chat_id);
+            NotifyContentChanged();
+            SendJson(res_ptr, 200, R"({"ok":true})");
+            return;
+        }
+    }
+    SendError(res_ptr, 404, "Chat not found");
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// HandleRenameChat — PATCH /api/chats/:id
+// Body: { "name": "new title" }
+// ──────────────────────────────────────────────────────────────────────────────
+void WebServer::HandleGetProjectAgenticModes(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string project_id = req->path_params.at("id");
+
+    if (!UserCanAccessProject(*session, project_id)) {
+        SendError(res_ptr, 403, "Access denied"); return;
+    }
+
+    const auto proj_settings = storage_->LoadProjectSettings(project_id);
+    const auto modes = storage_->LoadAgenticModes();
+
+    json modes_arr = json::array();
+    for (const auto& m : modes) {
+        modes_arr.push_back({{"id", m.id}, {"name", m.name}});
+    }
+
+    json resp = {
+        {"default_id", proj_settings.selected_agentic_mode_id},
+        {"enabled_ids", proj_settings.enabled_agentic_mode_ids},
+        {"modes", modes_arr},
+    };
+    SendJson(res_ptr, 200, resp.dump());
+}
+
+void WebServer::HandleSetChatAgenticMode(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string chat_id = req->path_params.at("id");
+
+    json body_j;
+    try { body_j = json::parse(req->body); } catch (...) {
+        SendError(res_ptr, 400, "Invalid JSON"); return;
+    }
+    const std::string selected_mode_id = body_j.value("selected_agentic_mode_id", "");
+
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    const auto all_projects = storage_->LoadProjects();
+    for (const auto& proj : all_projects) {
+        if (proj.info.id != *project_id) continue;
+        for (const auto& chat : proj.chats) {
+            if (chat.id != chat_id) continue;
+            ChatInfo updated = chat;
+            updated.selected_agentic_mode_id = selected_mode_id;
+            storage_->SaveChat(*project_id, updated);
             NotifyContentChanged();
             SendJson(res_ptr, 200, R"({"ok":true})");
             return;
@@ -2885,7 +2950,8 @@ std::string BuildWebSystemPrompt(
     const ProjectSettings& project_settings,
     const std::vector<ProjectMcpVariableValue>& runtime_variables,
     const std::vector<ProjectMcpVariableValue>& resolved_prompt_variables,
-    const std::string& compressed_context) {
+    const std::string& compressed_context,
+    const std::string& chat_selected_agentic_mode_id) {
     std::string system_prompt = compressed_context;
 
     const std::string instructions = variable_resolver::ExpandTemplate(
@@ -2894,6 +2960,24 @@ std::string BuildWebSystemPrompt(
     if (!instructions.empty()) {
         AppendPromptSection(
             system_prompt, "Project Instructions:\n" + instructions);
+    }
+
+    // Inject selected agentic mode instructions (per-chat override wins)
+    const std::string mode_id = chat_selected_agentic_mode_id.empty()
+                                    ? project_settings.selected_agentic_mode_id
+                                    : chat_selected_agentic_mode_id;
+    if (!mode_id.empty()) {
+        const auto all_modes = storage->LoadAgenticModes();
+        const auto it = std::find_if(all_modes.begin(), all_modes.end(),
+            [&](const AgenticModeConfig& m) { return m.id == mode_id; });
+        if (it != all_modes.end()) {
+            const std::string mode_instructions = variable_resolver::ExpandTemplate(
+                Trim(it->instructions), resolved_prompt_variables);
+            if (!mode_instructions.empty()) {
+                AppendPromptSection(system_prompt,
+                    "Agentic Mode Instructions (" + it->name + "):\n" + mode_instructions);
+            }
+        }
     }
 
     if (mcp_manager) {
@@ -3002,6 +3086,11 @@ WebServer::CallModel(const std::string& project_id,
         return result;
     }
 
+    // Determine per-chat mode override
+    std::string chat_selected_agentic_mode_id;
+    const auto chat_info = FindChatInProject(project_id, chat_id);
+    if (chat_info) chat_selected_agentic_mode_id = chat_info->selected_agentic_mode_id;
+
     // Load existing message history and prepare any compressed request view.
     const auto stored_messages = storage_->LoadMessages(project_id, chat_id);
     const auto prepared_history = PrepareWebRequestHistory(
@@ -3021,7 +3110,8 @@ WebServer::CallModel(const std::string& project_id,
         proj_settings,
         runtime_variables,
         resolved_prompt_variables,
-        prepared_history.compressed_context);
+        prepared_history.compressed_context,
+        chat_selected_agentic_mode_id);
 
     auto messages = stored_messages;
 
@@ -3042,6 +3132,18 @@ WebServer::CallModel(const std::string& project_id,
     opts.max_tokens   = 1024;
     opts.messages     = prepared_history.request_history;
     opts.messages.push_back(user_msg);
+
+    ChatRequestLogger::MaybeInitialize(
+        runtime_paths_.data_root, project_id, proj_settings.enable_chat_logging);
+    const bool logging = proj_settings.enable_chat_logging;
+    const std::string ts = NowIso();
+    std::string log_block;
+    if (logging) {
+        log_block = ChatRequestLogger::FormatHeader(ts, project_id, chat_id, username);
+        log_block += ChatRequestLogger::FormatProvider(selected_provider, selected_model);
+        log_block += ChatRequestLogger::FormatBlock("System Prompt", system_prompt);
+        log_block += ChatRequestLogger::FormatBlock("Request Messages", ChatRequestLogger::FormatMessages(opts.messages));
+    }
 
     const auto exposed_tools = (mcp_manager_ && selected_model.supports_tools)
         ? mcp_manager_->GetExposedToolsForProject(project_id, runtime_variables)
@@ -3088,6 +3190,10 @@ WebServer::CallModel(const std::string& project_id,
                 result.error = completion.error.empty()
                     ? "Model call failed"
                     : completion.error;
+                if (logging) {
+                    ChatRequestLogger::Log(project_id, logging,
+                        log_block + ChatRequestLogger::FormatErrorResponse(result.error));
+                }
                 storage_->SaveMessages(project_id, chat_id, messages);
                 NotifyContentChanged();
                 return result;
@@ -3189,6 +3295,10 @@ WebServer::CallModel(const std::string& project_id,
 
     if (!call_result.success) {
         result.error = call_result.error.empty() ? "Model call failed" : call_result.error;
+        if (logging) {
+            ChatRequestLogger::Log(project_id, logging,
+                log_block + ChatRequestLogger::FormatErrorResponse(result.error));
+        }
         // Still save the user message so the chat shows it
         storage_->SaveMessages(project_id, chat_id, messages);
         NotifyContentChanged();
@@ -3205,6 +3315,11 @@ WebServer::CallModel(const std::string& project_id,
     // Persist
     storage_->SaveMessages(project_id, chat_id, messages);
     NotifyContentChanged();
+
+    if (logging) {
+        ChatRequestLogger::Log(project_id, logging,
+            log_block + ChatRequestLogger::FormatSuccessResponse(call_result.assistant_text));
+    }
 
     result.success        = true;
     result.assistant_text = call_result.assistant_text;
@@ -3320,6 +3435,11 @@ std::string WebServer::StreamModel(const std::string& project_id,
     storage_->SaveMessages(project_id, chat_id, messages);
     NotifyContentChanged();
 
+    // Determine per-chat mode override
+    std::string chat_selected_agentic_mode_id;
+    const auto chat_info2 = FindChatInProject(project_id, chat_id);
+    if (chat_info2) chat_selected_agentic_mode_id = chat_info2->selected_agentic_mode_id;
+
     const auto prepared_history = PrepareWebRequestHistory(
         &compression_service_,
         project_id,
@@ -3338,7 +3458,8 @@ std::string WebServer::StreamModel(const std::string& project_id,
         proj_settings,
         runtime_variables,
         resolved_prompt_variables,
-        prepared_history.compressed_context);
+        prepared_history.compressed_context,
+        chat_selected_agentic_mode_id);
 
     // Build request (streaming = true)
     ChatRequestOptions opts;
@@ -3349,6 +3470,20 @@ std::string WebServer::StreamModel(const std::string& project_id,
     opts.max_tokens    = 4096;  // allow longer outputs when streaming
     opts.messages      = prepared_history.request_history;
     opts.messages.push_back(user_msg);
+
+    // ── Chat logging setup (StreamModel) ─────────────────────────────
+    ChatRequestLogger::MaybeInitialize(
+        runtime_paths_.data_root, project_id, proj_settings.enable_chat_logging);
+    const bool logging = proj_settings.enable_chat_logging;
+    const std::string ts = NowIso();
+    std::string log_header;
+    if (logging) {
+        log_header = ChatRequestLogger::FormatHeader(ts, project_id, chat_id, username);
+        log_header += ChatRequestLogger::FormatProvider(selected_provider, selected_model);
+        log_header += ChatRequestLogger::FormatBlock("System Prompt", system_prompt);
+        log_header += ChatRequestLogger::FormatBlock("Request Messages", ChatRequestLogger::FormatMessages(opts.messages));
+    }
+    // ── End logging setup ──────────────────────────────────────────
 
     const auto exposed_tools = (mcp_manager_ && selected_model.supports_tools)
         ? mcp_manager_->GetExposedToolsForProject(project_id, runtime_variables)
@@ -3420,9 +3555,14 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 on_activity_status);
 
             if (!completion.success && !aborted) {
-                return completion.error.empty()
+                const std::string err_msg = completion.error.empty()
                     ? "Streaming model call failed."
                     : completion.error;
+                if (logging) {
+                    ChatRequestLogger::Log(project_id, logging,
+                        log_header + ChatRequestLogger::FormatErrorResponse(err_msg));
+                }
+                return err_msg;
             }
 
             if (aborted) {
@@ -3434,6 +3574,11 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     messages.push_back(asst_msg);
                     storage_->SaveMessages(project_id, chat_id, messages);
                     NotifyContentChanged();
+                }
+                if (logging) {
+                    ChatRequestLogger::Log(project_id, logging,
+                        log_header + ChatRequestLogger::FormatSuccessResponse(
+                            accumulated.empty() ? "(aborted, no text)" : accumulated));
                 }
                 return {};
             }
@@ -3521,6 +3666,11 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 NotifyContentChanged();
             }
             success = true;
+            if (logging) {
+                ChatRequestLogger::Log(project_id, logging,
+                    log_header + ChatRequestLogger::FormatSuccessResponse(
+                        completion.assistant_text.empty() ? "(no text)" : completion.assistant_text));
+            }
             break;
         }
 
@@ -3549,10 +3699,15 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 on_activity_status);
 
             if (!final_result.success && !final_aborted) {
-                return final_result.error.empty()
+                const std::string err_msg = final_result.error.empty()
                     ? "The model exceeded the MCP tool-call loop limit."
                     : "The model exceeded the MCP tool-call loop limit, and the final summary failed: " +
                           final_result.error;
+                if (logging) {
+                    ChatRequestLogger::Log(project_id, logging,
+                        log_header + ChatRequestLogger::FormatErrorResponse(err_msg));
+                }
+                return err_msg;
             }
 
             if (!final_text.empty()) {
@@ -3563,6 +3718,17 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 messages.push_back(asst_msg);
                 storage_->SaveMessages(project_id, chat_id, messages);
                 NotifyContentChanged();
+            }
+            if (logging) {
+                if (!final_result.success) {
+                    ChatRequestLogger::Log(project_id, logging,
+                        log_header + ChatRequestLogger::FormatErrorResponse(
+                            final_result.error.empty() ? "Tool loop limit reached" : final_result.error));
+                } else {
+                    ChatRequestLogger::Log(project_id, logging,
+                        log_header + ChatRequestLogger::FormatSuccessResponse(
+                            final_text.empty() ? "(no text)" : final_text));
+                }
             }
             return {};
         }
@@ -3585,8 +3751,13 @@ std::string WebServer::StreamModel(const std::string& project_id,
         on_activity_status);
 
     if (!stream_result.success && !aborted) {
+        const std::string err_msg = stream_result.error.empty() ? "Streaming model call failed." : stream_result.error;
+        if (logging) {
+            ChatRequestLogger::Log(project_id, logging,
+                log_header + ChatRequestLogger::FormatErrorResponse(err_msg));
+        }
         // Nothing to save; return the error
-        return stream_result.error.empty() ? "Streaming model call failed." : stream_result.error;
+        return err_msg;
     }
 
     // Save completed assistant message (even if aborted mid-stream, save what we got)
@@ -3598,6 +3769,18 @@ std::string WebServer::StreamModel(const std::string& project_id,
         messages.push_back(asst_msg);
         storage_->SaveMessages(project_id, chat_id, messages);
         NotifyContentChanged();
+    }
+
+    if (logging) {
+        if (!stream_result.success && !aborted) {
+            ChatRequestLogger::Log(project_id, logging,
+                log_header + ChatRequestLogger::FormatErrorResponse(
+                    stream_result.error.empty() ? "Streaming model call failed" : stream_result.error));
+        } else {
+            ChatRequestLogger::Log(project_id, logging,
+                log_header + ChatRequestLogger::FormatSuccessResponse(
+                    accumulated.empty() ? "(no text)" : accumulated));
+        }
     }
 
     return {};  // success
@@ -4247,6 +4430,15 @@ void WebServer::RegisterRoutes() {
     srv.Post(R"(/api/chats/([^/]+)/upload)", [this](const httplib::Request& req, httplib::Response& res) {
         const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
         HandleUpload(&req, &res);
+    });
+
+    srv.Get(R"(/api/projects/([^/]+)/agentic-modes)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleGetProjectAgenticModes(&req, &res);
+    });
+    srv.Post(R"(/api/chats/([^/]+)/agentic-mode)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleSetChatAgenticMode(&req, &res);
     });
 
     srv.Get(R"(/data/([^/]+)/([^/]+)/(.+))", [this](const httplib::Request& req, httplib::Response& res) {

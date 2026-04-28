@@ -126,3 +126,7 @@
 2026-04-22T18:02:18Z [127.0.0.1] download_project_file user=admin project=project_1775880780377_10 chat=chat_1776839935391_11 file=final_comprehensive_report.md
 2026-04-22T18:02:39Z [127.0.0.1] download_project_file user=admin project=project_1775880780377_10 chat=chat_1776839935391_11 file=final_comprehensive_report.md
 2026-04-27T03:37:52Z [127.0.0.1] chat_created user=admin project=project_1776841870641_22 chat=chat_1777261072682_19
+2026-04-28T05:02:46Z [127.0.0.1] logout user=admin
+2026-04-28T05:02:56Z [127.0.0.1] login_success user=admin
+2026-04-28T05:14:14Z [127.0.0.1] login_success user=admin
+2026-04-28T06:05:40Z [127.0.0.1] chat_created user=admin project=project_1776841870641_22 chat=chat_1777356340326_17

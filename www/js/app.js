@@ -42,6 +42,10 @@ let state = {
   displayName:       '',
   email:             '',
   pendingFiles:      [],     // File objects queued for upload before send
+  selectedChatAgenticModeId: null,
+  projectAgenticModes:       [],
+  projectDefaultAgenticModeId: '',
+  projectEnabledAgenticModeIds: [],
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -55,6 +59,8 @@ const messageInput = $('message-input');
 const sendBtn      = $('send-btn');
 const headerUser   = $('header-username');
 const headerAccountBtn = $('header-account-btn');
+const agenticModeLabel = $('agentic-mode-label');
+let   agenticModePicker = null;
 const attachBtn    = $('attach-btn');
 const fileInput    = $('file-input');
 const attachList   = $('attach-list');
@@ -1527,6 +1533,7 @@ async function loadChats(projectId) {
 async function selectChat(projectId, chatId, chatName) {
   state.selectedProjectId = projectId;
   state.selectedChatId    = chatId;
+  state.selectedChatAgenticModeId = null;
   document.querySelectorAll('.chat-entry').forEach(el =>
     el.classList.toggle('active', el.dataset.chatId === chatId));
   chatTitle.textContent = stripUserSuffix(chatName);
@@ -1534,7 +1541,146 @@ async function selectChat(projectId, chatId, chatName) {
   sendBtn.disabled      = false;
   newChatBtn.disabled   = false;
   if (attachBtn) attachBtn.disabled = false;
-  await loadMessages(projectId, chatId);
+  await Promise.all([
+    loadMessages(projectId, chatId),
+    loadProjectAgenticModes(projectId),
+  ]);
+  renderAgenticModeLabel();
+}
+
+async function loadProjectAgenticModes(projectId) {
+  const resp = await api('GET', `/api/projects/${projectId}/agentic-modes`);
+  if (!resp || !resp.ok) {
+    state.projectAgenticModes = [];
+    state.projectDefaultAgenticModeId = '';
+    state.projectEnabledAgenticModeIds = [];
+    return;
+  }
+  const data = await resp.json();
+  state.projectDefaultAgenticModeId = data.default_id || '';
+  state.projectEnabledAgenticModeIds = data.enabled_ids || [];
+  state.projectAgenticModes = data.modes || [];
+
+  // Load chat-level override from chat metadata (not available via API yet)
+  for (const chat of (state.chats[projectId] || [])) {
+    if (chat.id === state.selectedChatId) {
+      state.selectedChatAgenticModeId = chat.selected_agentic_mode_id || null;
+      break;
+    }
+  }
+}
+
+function currentAgenticModeId() {
+  if (state.selectedChatAgenticModeId != null) return state.selectedChatAgenticModeId || '';
+  return state.projectDefaultAgenticModeId || '';
+}
+
+function renderAgenticModeLabel() {
+  if (!agenticModeLabel) return;
+  const activeId = currentAgenticModeId();
+  const available = state.projectAgenticModes.filter(m =>
+    state.projectEnabledAgenticModeIds.includes(m.id));
+
+  let labelText = 'None';
+  let hasChoices = available.length > 0;
+
+  if (activeId) {
+    const mode = state.projectAgenticModes.find(m => m.id === activeId);
+    if (mode) labelText = mode.name;
+  } else if (state.projectDefaultAgenticModeId) {
+    const mode = state.projectAgenticModes.find(m => m.id === state.projectDefaultAgenticModeId);
+    if (mode) labelText = mode.name;
+  }
+
+  agenticModeLabel.textContent = 'Mode: ' + labelText;
+  agenticModeLabel.className = activeId
+    ? (hasChoices ? 'agentic-mode-active' : 'agentic-mode-active disabled')
+    : 'agentic-mode-none';
+
+  // Clickable only if there are multiple enabled modes (or more than just the default)
+  const canSwitch = available.length > 1 ||
+    (available.length === 1 && activeId !== available[0].id) ||
+    (available.length === 0 && state.projectAgenticModes.length > 0);
+
+  if (canSwitch) {
+    agenticModeLabel.style.pointerEvents = '';
+    agenticModeLabel.title = 'Click to change agentic mode';
+  } else {
+    agenticModeLabel.style.pointerEvents = 'none';
+    agenticModeLabel.title = '';
+  }
+}
+
+function openAgenticModePicker() {
+  if (agenticModePicker) { agenticModePicker.remove(); agenticModePicker = null; return; }
+
+  const available = state.projectAgenticModes.filter(m =>
+    state.projectEnabledAgenticModeIds.includes(m.id));
+  // Always include current default even if not enabled
+  const current = currentAgenticModeId();
+  const items = [];
+
+  // None option
+  items.push({ id: '', name: 'None' });
+
+  for (const m of available) {
+    items.push(m);
+  }
+  if (current && !items.some(i => i.id === current)) {
+    const m = state.projectAgenticModes.find(x => x.id === current);
+    if (m) items.push(m);
+  }
+
+  const menu = document.createElement('div');
+  menu.id = 'agentic-mode-picker';
+  menu.style.cssText = `
+    position:absolute; bottom:8px; left:20px; z-index:100;
+    background:var(--color-bg-main); border:1px solid var(--color-border-main);
+    border-radius:var(--radius-input); box-shadow:0 4px 12px rgba(0,0,0,0.15);
+    max-height:240px; overflow:auto; min-width:180px;
+  `;
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.style.cssText = `
+      padding:8px 12px; cursor:pointer;
+      color: var(--color-text-primary); font-size:var(--font-size-base);
+      border-bottom:1px solid var(--color-border-main);
+    `;
+    row.textContent = item.name || 'None';
+    if (item.id === current) {
+      row.style.fontWeight = '700';
+      row.style.color = 'var(--color-accent-primary)';
+    }
+    row.addEventListener('mouseenter', () => { row.style.background = 'var(--color-bg-sidebar-hover)'; });
+    row.addEventListener('mouseleave', () => { row.style.background = ''; });
+    row.addEventListener('click', async () => {
+      state.selectedChatAgenticModeId = item.id || '';
+      renderAgenticModeLabel();
+      // Persist per-chat override
+      if (state.selectedChatId) {
+        await api('POST', `/api/chats/${state.selectedChatId}/agentic-mode`, {
+          selected_agentic_mode_id: state.selectedChatAgenticModeId,
+        });
+      }
+      menu.remove(); agenticModePicker = null;
+    });
+    menu.appendChild(row);
+  }
+  document.body.appendChild(menu);
+  agenticModePicker = menu;
+
+  // Close on outside click
+  const close = e => {
+    if (!menu.contains(e.target) && e.target !== agenticModeLabel) {
+      menu.remove(); agenticModePicker = null;
+      document.removeEventListener('click', close);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
+
+if (agenticModeLabel) {
+  agenticModeLabel.addEventListener('click', openAgenticModePicker);
 }
 
 async function loadMessages(projectId, chatId) {
@@ -1820,7 +1966,7 @@ async function sendMessage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ content, attachments: uploadedFiles }),
+      body: JSON.stringify({ content, attachments: uploadedFiles, selected_agentic_mode_id: state.selectedChatAgenticModeId || '' }),
       signal: abortCtrl.signal,
     });
 
@@ -2009,7 +2155,8 @@ messageInput.addEventListener('keydown', e => {
 // ── Textarea auto-resize ──────────────────────────────────────────────────
 function resizeTextarea() {
   messageInput.style.height = 'auto';
-  messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + 'px';
+  const maxH = Math.floor(window.innerHeight / 3);
+  messageInput.style.height = Math.min(messageInput.scrollHeight, maxH) + 'px';
 }
 messageInput.addEventListener('input', resizeTextarea);
 

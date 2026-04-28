@@ -140,6 +140,7 @@ struct ChatInfo {
     std::string system_prompt;
     double temperature = 0.2;
     int max_tokens = 1024;
+    std::string selected_agentic_mode_id;  // per-chat override; empty means use project default
 };
 
 struct ProjectInfo {
@@ -636,4 +637,7 @@ struct ProjectSettings {
     std::string preferred_model_id;
     std::vector<std::string> model_tool_ids;  // IDs of model tools enabled for this project
     std::vector<ProjectMcpVariableValue> project_variables;  // Project-level key-value variables
+    std::string selected_agentic_mode_id;       // ID of the default agentic mode for this project
+    std::vector<std::string> enabled_agentic_mode_ids; // IDs of agentic modes enabled for this project
+    bool enable_chat_logging = false;             // Enable detailed per-chat/request logging for this project
 };
