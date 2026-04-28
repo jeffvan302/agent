@@ -619,6 +619,12 @@ struct ModelToolConfig {
     std::vector<ProjectRagBinding> rag_bindings;        // which RAG libraries this tool may use
 };
 
+struct AgenticModeConfig {
+    std::string id;
+    std::string name;
+    std::string instructions;  // system prompt / instructions for this mode, stored as markdown
+};
+
 struct ProjectSettings {
     std::string project_name;
     std::string project_instructions;

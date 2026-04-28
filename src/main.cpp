@@ -19,6 +19,7 @@
 #include "context_compression.h"
 #include "context_compression_manager.h"
 #include "model_tools_manager.h"
+#include "agentic_modes_manager.h"
 #include "web_server.h"
 #include "web_user_store.h"
 #include "web_config_dialog.h"
@@ -77,6 +78,7 @@ enum ControlId : int {
     kWebConfig = 3021,
     kAdminConfig = 3022,
     kRemoteOllamaSetup = 3023,
+    kAgenticModes = 3024,
 };
 
 struct TreeItemData {
@@ -2783,6 +2785,7 @@ private:
     void OpenRagServiceManager();
     void OpenCompressionManager();
     void OpenModelTools();
+    void OpenAgenticModes();
     void EditProjectSettings();
     void RunSetupSystem();
     void RestartApplication();
@@ -2825,6 +2828,7 @@ private:
     HWND mcp_servers_button_ = nullptr;
     HWND project_mcp_button_ = nullptr;
     HWND model_tools_button_ = nullptr;
+    HWND agentic_modes_button_ = nullptr;
     HWND web_config_button_ = nullptr;
     HWND admin_config_button_ = nullptr;
     HWND remote_ollama_setup_button_ = nullptr;
@@ -2843,6 +2847,7 @@ private:
     HWND rag_service_window_ = nullptr;
     HWND compression_manager_window_ = nullptr;
     HWND model_tools_window_ = nullptr;
+    HWND agentic_modes_window_ = nullptr;
     HFONT font_ = nullptr;
 
     AppStorage storage_;
@@ -2985,6 +2990,7 @@ void MainWindow::OnCreate() {
     mcp_servers_button_ = CreateWindowExW(0, L"BUTTON", L"MCP Servers", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kMcpServers), nullptr, nullptr);
     project_mcp_button_ = CreateWindowExW(0, L"BUTTON", L"Project Settings", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjectMcp), nullptr, nullptr);
     model_tools_button_ = CreateWindowExW(0, L"BUTTON", L"Model Tools", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelTools), nullptr, nullptr);
+    agentic_modes_button_ = CreateWindowExW(0, L"BUTTON", L"Agentic Modes", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAgenticModes), nullptr, nullptr);
     web_config_button_   = CreateWindowExW(0, L"BUTTON", L"Web Config",  WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kWebConfig),   nullptr, nullptr);
     admin_config_button_ = CreateWindowExW(0, L"BUTTON", L"Admin Config", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAdminConfig), nullptr, nullptr);
     remote_ollama_setup_button_ = CreateWindowExW(0, L"BUTTON", L"Remote Model Config", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRemoteOllamaSetup), nullptr, nullptr);
@@ -2999,7 +3005,7 @@ void MainWindow::OnCreate() {
     context_messages_button_ = CreateWindowExW(0, L"BUTTON", L"Context Msgs", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextMessages), nullptr, nullptr);
     status_label_ = CreateWindowExW(0, L"STATIC", L"Initializing...", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
 
-    for (HWND control : {new_project_button_, new_chat_button_, rename_button_, delete_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, web_config_button_, admin_config_button_, remote_ollama_setup_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
+    for (HWND control : {new_project_button_, new_chat_button_, rename_button_, delete_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, agentic_modes_button_, web_config_button_, admin_config_button_, remote_ollama_setup_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
 
@@ -3093,6 +3099,7 @@ void MainWindow::LayoutControls(int width, int height) {
     const int mcp_width          = Scale(hwnd_, 80);
     const int project_mcp_width  = Scale(hwnd_, 120);
     const int model_tools_width  = Scale(hwnd_, 100);
+    const int agentic_modes_width = Scale(hwnd_, 110);
     const int web_config_width   = Scale(hwnd_, 90);
     const int admin_config_width = Scale(hwnd_, 100);
     const int settings_width     = Scale(hwnd_, 110);
@@ -3102,6 +3109,7 @@ void MainWindow::LayoutControls(int width, int height) {
     MoveWindow(mcp_servers_button_,  bx, margin, mcp_width,          top_row_height, TRUE); bx += mcp_width + gutter;
     MoveWindow(project_mcp_button_,  bx, margin, project_mcp_width,  top_row_height, TRUE); bx += project_mcp_width + gutter;
     MoveWindow(model_tools_button_,  bx, margin, model_tools_width,  top_row_height, TRUE); bx += model_tools_width + gutter;
+    MoveWindow(agentic_modes_button_, bx, margin, agentic_modes_width, top_row_height, TRUE); bx += agentic_modes_width + gutter;
     MoveWindow(web_config_button_,   bx, margin, web_config_width,   top_row_height, TRUE); bx += web_config_width + gutter;
     MoveWindow(admin_config_button_, bx, margin, admin_config_width, top_row_height, TRUE); bx += admin_config_width + gutter;
     MoveWindow(setup_system_button_, bx, margin, settings_width,     top_row_height, TRUE);
@@ -3150,6 +3158,9 @@ void MainWindow::OnCommand(int control_id, int notification_code) {
         break;
     case kModelTools:
         OpenModelTools();
+        break;
+    case kAgenticModes:
+        OpenAgenticModes();
         break;
     case kWebConfig:
         OpenWebConfig();
@@ -3388,6 +3399,14 @@ void MainWindow::OpenModelTools() {
         return;
     }
     model_tools_window_ = OpenModelToolsManager(hwnd_, &storage_, providers_, &mcp_manager_, &rag_service_);
+}
+
+void MainWindow::OpenAgenticModes() {
+    if (agentic_modes_window_ && IsWindow(agentic_modes_window_)) {
+        SetForegroundWindow(agentic_modes_window_);
+        return;
+    }
+    agentic_modes_window_ = OpenAgenticModesManager(hwnd_, &storage_);
 }
 
 void MainWindow::OpenCompressionManager() {

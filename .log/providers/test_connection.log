@@ -1,0 +1,71 @@
+Provider Test Connection diagnostic log
+[2026-04-28T01:02:16Z] TestConnection called
+  provider=Ollama type=ollama_local
+  model=qwen3.5:0.8b (vision process) embedding=no
+  ollama_local non-embedding path
+[2026-04-28T01:02:16Z] IsOllamaModelAvailable START
+[2026-04-28T01:02:16Z]   provider=Ollama model=qwen3.5:0.8b
+[2026-04-28T01:02:16Z]   GET http://127.0.0.1:12484/api/tags
+[2026-04-28T01:02:16Z]   /api/tags response body length=17
+[2026-04-28T01:02:16Z]   FAIL: JSON parse error on /api/tags response
+[2026-04-28T01:02:16Z]   FAIL: model not found in /api/tags
+  model not available: Model 'qwen3.5:0.8b' is not available. Pull it first via the model editor.
+--- end connection test ---
+
+Provider Test Connection diagnostic log
+[2026-04-28T01:08:43Z] TestConnection called
+  provider=Ollama type=ollama_local
+  model=qwen3.5:0.8b (vision process) embedding=no
+  ollama_local non-embedding path
+[2026-04-28T01:08:43Z] IsOllamaModelAvailable START
+[2026-04-28T01:08:43Z]   provider=Ollama model=qwen3.5:0.8b
+[2026-04-28T01:08:44Z]   GET http://127.0.0.1:12484/api/tags
+[2026-04-28T01:08:44Z] GetOllamaApi: GET http://127.0.0.1:12484/api/tags
+[2026-04-28T01:08:44Z]   parsed host=127.0.0.1 port=12484 path=/api/tags
+[2026-04-28T01:08:44Z]   sending GET request...
+[2026-04-28T01:08:44Z]   HTTP status=200 body length=5156
+[2026-04-28T01:08:44Z]   /api/tags response body length=5156
+[2026-04-28T01:08:44Z]   parsed JSON, models count=14
+[2026-04-28T01:08:44Z]     found model: qwen3.5:0.8b
+[2026-04-28T01:08:44Z]   MATCH: exact match
+  sending ping to Ollama /api/chat
+[2026-04-28T01:08:44Z] PostOllamaApiChat: POST http://127.0.0.1:12484/api/chat
+[2026-04-28T01:08:44Z]   body: {"keep_alive":300,"messages":[{"content":"Reply with the single word pong.","role":"user"}],"model":"qwen3.5:0.8b","options":{"num_predict":8,"temperature":0.0},"stream":true}
+[2026-04-28T01:08:44Z]   stream=1
+[2026-04-28T01:08:44Z]   parsed host=127.0.0.1 port=12484 path=/api/chat
+[2026-04-28T01:08:44Z]   request created, sending...
+[2026-04-28T01:08:47Z]   HTTP status=200
+  ping result success=1 message=
+--- end connection test ---
+
+Provider Test Connection diagnostic log
+[2026-04-28T01:08:56Z] TestConnection called
+  provider=Ollama type=ollama_local
+  model=nomic-embed-text (provider-nomic-embed-text) embedding=yes
+  supports_embedding=true, dispatching to embedding test path
+  IsOllamaLocalProvider=true, calling TestOllamaEmbeddingConnection
+[2026-04-28T01:08:56Z] TestOllamaEmbeddingConnection START
+[2026-04-28T01:08:56Z]   provider name=Ollama type=ollama_local
+[2026-04-28T01:08:56Z]   model id=nomic-embed-text display=provider-nomic-embed-text
+[2026-04-28T01:08:56Z]   ollama_local_port=12484
+[2026-04-28T01:08:56Z]   Managed Ollama server ensured: http://127.0.0.1:12484
+[2026-04-28T01:08:56Z]   Candidate base URLs:
+[2026-04-28T01:08:56Z]     http://127.0.0.1:12484
+[2026-04-28T01:08:56Z]     http://localhost:12484
+[2026-04-28T01:08:56Z]     http://127.0.0.1:11434
+[2026-04-28T01:08:56Z]     http://localhost:11434
+[2026-04-28T01:08:56Z]   Probing http://127.0.0.1:12484...
+[2026-04-28T01:08:56Z]   ProbeOllamaEmbedding: base_url=http://127.0.0.1:12484
+[2026-04-28T01:08:56Z]   Trying /api/embed at http://127.0.0.1:12484/api/embed
+[2026-04-28T01:08:56Z]   PostAndCheckEmbedding: POST http://127.0.0.1:12484/api/embed
+[2026-04-28T01:08:56Z]     body: {"input":["Diagnostic connection test."],"model":"nomic-embed-text"}
+[2026-04-28T01:08:56Z]     parsed host=127.0.0.1 port=12484 path=/api/embed
+[2026-04-28T01:08:56Z]     session/request created, sending...
+[2026-04-28T01:08:57Z]     HTTP status=200 body length=9660
+[2026-04-28T01:08:57Z]     JSON parsed successfully
+[2026-04-28T01:08:57Z]     found embeddings[768]
+[2026-04-28T01:08:57Z]   Success via /api/embed
+[2026-04-28T01:08:57Z]   Embedding connection OK at http://127.0.0.1:12484 (768 dimensions).
+  result success=1 message=Embedding connection OK at http://127.0.0.1:12484 (768 dimensions).
+--- end connection test ---
+

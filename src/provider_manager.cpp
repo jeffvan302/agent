@@ -49,6 +49,7 @@ enum ControlId : int {
 struct ProviderTestPayload {
     bool success = false;
     std::wstring message;
+    std::string details_log;
 };
 
 enum ProviderEditorControlId : int {
@@ -3382,11 +3383,24 @@ private:
         EnableWindow(test_connection_button_, FALSE);
         SetWindowTextW(status_label_, L"Testing provider connection...");
 
-        std::thread([hwnd = hwnd_, provider, model]() {
+        std::thread([hwnd = hwnd_, provider, model, storage = storage_]() {
             const TestConnectionResult result = OpenAIClient::TestConnection(provider, model);
+            // Write diagnostic log to file
+            if (!result.details_log.empty() && storage) {
+                try {
+                    const auto log_path = storage->log_root() / "providers" / "test_connection.log";
+                    std::filesystem::create_directories(log_path.parent_path());
+                    std::ofstream log_file(log_path, std::ios::binary | std::ios::app);
+                    if (log_file.is_open()) {
+                        log_file << result.details_log;
+                        log_file << "--- end connection test ---\r\n\r\n";
+                    }
+                } catch (...) {}
+            }
             auto* payload = new ProviderTestPayload;
             payload->success = result.success;
             payload->message = Utf8ToWide(result.message);
+            payload->details_log = result.details_log;
             PostMessageW(hwnd, kProviderTestResultMessage, 0, reinterpret_cast<LPARAM>(payload));
         }).detach();
     }

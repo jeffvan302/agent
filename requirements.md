@@ -172,6 +172,15 @@ This section is the current source-of-truth implementation checkpoint. It captur
 - Context compression preview window.
 - Context messages debug window with saved request context and compression snapshot details.
 
+#### Agentic Modes (April 28, 2026)
+
+- The main screen has an "Agentic Modes" button between "Model Tools" and "Web Config" that opens a dedicated dialog.
+- The dialog has a left panel with a mode list, "New Mode" button, and "Delete Mode" button. The right panel shows the selected mode's name edit field at the top, an "Import" button at the top-right, and a large multiline instructions edit field below that fills the remaining space.
+- Modes are persisted to `.config/agentic_modes.json` as an array of `{id, name, instructions}` objects.
+- Editing the name or instructions text fields auto-saves immediately to disk without requiring a Save button.
+- The Import button opens a file dialog for `.md`, `.markdown`, or `.txt` files and loads the content into the instructions field.
+- Re-clicking the "Agentic Modes" button brings the existing window to the foreground rather than creating a new one.
+
 #### Web Server Implementation (April 15, 2026)
 
 The embedded web server and multi-user chat interface are now in a working Phase 1 state. The full design spec is in `web_requirements.md`.

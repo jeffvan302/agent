@@ -1429,6 +1429,10 @@ std::filesystem::path AppStorage::ModelToolsPath() const {
     return config_root() / "model_tools.json";
 }
 
+std::filesystem::path AppStorage::AgenticModesPath() const {
+    return config_root() / "agentic_modes.json";
+}
+
 std::filesystem::path AppStorage::ProjectCompressionPath(const std::string& project_id) const {
     return ProjectConfigPath(project_id) / "context_compression.json";
 }
@@ -2048,4 +2052,42 @@ void AppStorage::SaveModelTools(const std::vector<ModelToolConfig>& tools) const
         payload["tools"].push_back(ModelToolConfigToJson(tool));
     }
     SaveJsonFile(ModelToolsPath(), payload);
+}
+
+// ── Agentic Mode config serialization (matching free-function pattern above) ──
+
+static json AgenticModeConfigToJson(const AgenticModeConfig& mode) {
+    json j;
+    j["id"] = mode.id;
+    j["name"] = mode.name;
+    j["instructions"] = mode.instructions;
+    return j;
+}
+
+static AgenticModeConfig AgenticModeConfigFromJson(const json& j) {
+    AgenticModeConfig mode;
+    mode.id = j.value("id", "");
+    mode.name = j.value("name", "");
+    mode.instructions = j.value("instructions", "");
+    return mode;
+}
+
+std::vector<AgenticModeConfig> AppStorage::LoadAgenticModes() const {
+    const json data = LoadJsonFile(AgenticModesPath(), json{{"modes", json::array()}});
+    std::vector<AgenticModeConfig> modes;
+    if (data.contains("modes") && data["modes"].is_array()) {
+        for (const auto& item : data["modes"]) {
+            modes.push_back(AgenticModeConfigFromJson(item));
+        }
+    }
+    return modes;
+}
+
+void AppStorage::SaveAgenticModes(const std::vector<AgenticModeConfig>& modes) const {
+    json payload;
+    payload["modes"] = json::array();
+    for (const auto& mode : modes) {
+        payload["modes"].push_back(AgenticModeConfigToJson(mode));
+    }
+    SaveJsonFile(AgenticModesPath(), payload);
 }

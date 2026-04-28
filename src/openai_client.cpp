@@ -439,12 +439,17 @@ DWORD QueryStatusCode(HINTERNET request) {
 
 ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, const std::function<void(const std::string&)>& on_delta) {
     const std::string url = JoinChatCompletionsUrl(request.provider.base_url);
+    AppendDetail("RunRequest: POST " + url);
+    AppendDetail("  stream=" + std::to_string(stream) + " provider=" + request.provider.name + " model=" + request.model.id);
     const ParsedUrl parsed = CrackUrl(url);
     const std::string body = BuildRequestBody(request, stream).dump();
+    AppendDetail("  body: " + body);
+    AppendDetail("  parsed host=" + WideToUtf8(parsed.host) + " port=" + std::to_string(parsed.port) + " path=" + WideToUtf8(parsed.path));
     constexpr int kMaxAttempts = 4;
     std::string last_error;
 
     for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+        AppendDetail("  attempt " + std::to_string(attempt) + "/" + std::to_string(kMaxAttempts));
         ChatExecutionResult result;
 
         UniqueInternetHandle session(WinHttpOpen(L"AgentDesktop/0.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
@@ -490,6 +495,7 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
 
         if (!WinHttpSendRequest(static_cast<HINTERNET>(request_handle.get()), headers.c_str(), static_cast<DWORD>(headers.size()), reinterpret_cast<LPVOID>(const_cast<char*>(body.data())), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0)) {
             last_error = FormatWinHttpError("Failed to send HTTP request.", GetLastError());
+            AppendDetail("  FAIL attempt " + std::to_string(attempt) + ": WinHttpSendRequest: " + last_error);
             if (attempt < kMaxAttempts) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
                 continue;
@@ -500,6 +506,7 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
 
         if (!WinHttpReceiveResponse(static_cast<HINTERNET>(request_handle.get()), nullptr)) {
             last_error = FormatWinHttpError("Failed to receive HTTP response.", GetLastError());
+            AppendDetail("  FAIL attempt " + std::to_string(attempt) + ": WinHttpReceiveResponse: " + last_error);
             if (attempt < kMaxAttempts) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
                 continue;
@@ -509,12 +516,15 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
         }
 
         const DWORD status_code = QueryStatusCode(static_cast<HINTERNET>(request_handle.get()));
+        AppendDetail("  attempt " + std::to_string(attempt) + " HTTP status=" + std::to_string(status_code));
         if (status_code < 200 || status_code >= 300) {
             const std::string error_body = ReadEntireResponse(static_cast<HINTERNET>(request_handle.get()));
             const std::string details = ExtractErrorMessage(error_body);
             last_error = FormatHttpErrorMessage(status_code, details, attempt);
+            AppendDetail("  FAIL attempt " + std::to_string(attempt) + ": " + last_error);
 
             if (IsRetryableStatusCode(status_code) && attempt < kMaxAttempts) {
+                AppendDetail("  retrying...");
                 std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, QueryRetryAfterSeconds(static_cast<HINTERNET>(request_handle.get())))));
                 continue;
             }
@@ -525,6 +535,7 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
 
         if (!stream) {
             const std::string response = ReadEntireResponse(static_cast<HINTERNET>(request_handle.get()));
+            AppendDetail("  response length=" + std::to_string(response.size()));
             try {
                 const auto payload = json::parse(response);
                 result.success = true;
@@ -616,18 +627,120 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
 }
 }  // namespace
 
+// Minimal stub: tests an OpenAI-compatible embedding endpoint at /embeddings.
+bool TestOpenAICompatibleEmbeddingConnection(const ProviderConfig& provider, const ModelConfig& model, std::string* message) {
+    std::string base = provider.base_url;
+    while (!base.empty() && base.back() == '/') base.pop_back();
+    const std::string url = base + "/embeddings";
+
+    json body;
+    body["model"] = model.id;
+    body["input"] = "Diagnostic connection test.";
+
+    try {
+        const auto parsed = CrackUrl(url);
+        auto session_h = WinHttpOpen(L"AgentEmbedTest/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!session_h) { if (message) *message = "WinHttpOpen failed"; return false; }
+        auto conn_h = WinHttpConnect(session_h, parsed.host.c_str(), parsed.port, 0);
+        if (!conn_h) { if (message) *message = "WinHttpConnect failed"; return false; }
+        DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
+        auto req_h = WinHttpOpenRequest(conn_h, L"POST", parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        if (!req_h) { if (message) *message = "WinHttpOpenRequest failed"; return false; }
+        WinHttpSetTimeouts(req_h, 10000, 10000, 30000, 180000);
+
+        const std::string body_str = body.dump();
+        std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
+        if (!provider.api_key.empty()) {
+            headers += L"Authorization: Bearer ";
+            headers += Utf8ToWide(provider.api_key);
+            headers += L"\r\n";
+        }
+
+        if (!WinHttpSendRequest(req_h, headers.c_str(), static_cast<DWORD>(headers.size()),
+                const_cast<char*>(body_str.data()), static_cast<DWORD>(body_str.size()),
+                static_cast<DWORD>(body_str.size()), 0)) {
+            if (message) *message = "POST request failed";
+            WinHttpCloseHandle(req_h); WinHttpCloseHandle(conn_h); WinHttpCloseHandle(session_h);
+            return false;
+        }
+        if (!WinHttpReceiveResponse(req_h, nullptr)) {
+            if (message) *message = "Response receive failed";
+            WinHttpCloseHandle(req_h); WinHttpCloseHandle(conn_h); WinHttpCloseHandle(session_h);
+            return false;
+        }
+
+        DWORD status = 0, len = sizeof(status);
+        WinHttpQueryHeaders(req_h, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &len, WINHTTP_NO_HEADER_INDEX);
+        std::string rsp;
+        {
+            std::vector<char> buf;
+            DWORD avail;
+            while (WinHttpQueryDataAvailable(req_h, &avail) && avail > 0) {
+                size_t old = buf.size(); buf.resize(old + avail);
+                DWORD read = 0;
+                WinHttpReadData(req_h, buf.data() + old, avail, &read);
+                buf.resize(old + read);
+            }
+            rsp.assign(buf.data(), buf.size());
+        }
+        WinHttpCloseHandle(req_h); WinHttpCloseHandle(conn_h); WinHttpCloseHandle(session_h);
+
+        if (status < 200 || status >= 300) {
+            if (message) *message = "HTTP " + std::to_string(status) + " from embedding endpoint";
+            return false;
+        }
+
+        const auto payload = json::parse(rsp);
+        if (payload.contains("data") && payload["data"].is_array() && !payload["data"].empty() &&
+            payload["data"][0].contains("embedding") && payload["data"][0]["embedding"].is_array()) {
+            const int dims = static_cast<int>(payload["data"][0]["embedding"].size());
+            if (message) *message = "Embedding connection OK (" + std::to_string(dims) + " dimensions).";
+            return true;
+        }
+        if (payload.contains("embedding") && payload["embedding"].is_array()) {
+            const int dims = static_cast<int>(payload["embedding"].size());
+            if (message) *message = "Embedding connection OK (" + std::to_string(dims) + " dimensions).";
+            return true;
+        }
+
+        if (message) *message = "Response did not contain an embedding vector.";
+        return false;
+    } catch (const std::exception& ex) {
+        if (message) *message = std::string("Embedding test error: ") + ex.what();
+        return false;
+    }
+}
+
 TestConnectionResult OpenAIClient::TestConnection(const ProviderConfig& provider, const ModelConfig& model) {
     TestConnectionResult result;
+    std::string detail;
+    SetTestDetailLog(&detail);
+    detail = "Provider Test Connection diagnostic log\r\n";
+    detail += "[" + CurrentTimestampUtc() + "] TestConnection called\r\n";
+    detail += "  provider=" + provider.name + " type=" + provider.provider_type + "\r\n";
+    detail += "  model=" + model.id + " (" + model.display_name + ") embedding=" + (model.supports_embedding ? "yes" : "no") + "\r\n";
+    auto cleanup = [&]() { result.details_log = detail; SetTestDetailLog(nullptr); };
     try {
-        if (NormalizeProviderType(provider.provider_type) == "ollama_local") {
-            // Embedding models use /api/embed which inherently validates model availability.
-            if (model.supports_embedding) {
+        if (model.supports_embedding) {
+            detail += "  supports_embedding=true, dispatching to embedding test path\r\n";
+            if (IsOllamaLocalProvider(provider)) {
+                detail += "  IsOllamaLocalProvider=true, calling TestOllamaEmbeddingConnection\r\n";
                 result.success = TestOllamaEmbeddingConnection(provider, model, &result.message);
-                return result;
+            } else {
+                detail += "  IsOllamaLocalProvider=false, calling TestOpenAICompatibleEmbeddingConnection\r\n";
+                result.success = TestOpenAICompatibleEmbeddingConnection(provider, model, &result.message);
             }
+            detail += "  result success=" + std::to_string(result.success) + " message=" + result.message + "\r\n";
+            cleanup();
+            return result;
+        }
 
+        if (NormalizeProviderType(provider.provider_type) == "ollama_local") {
+            detail += "  ollama_local non-embedding path\r\n";
             if (!IsOllamaModelAvailable(provider, model, &result.message)) {
+                detail += "  model not available: " + result.message + "\r\n";
                 result.success = false;
+                cleanup();
                 return result;
             }
 
@@ -637,29 +750,37 @@ TestConnectionResult OpenAIClient::TestConnection(const ProviderConfig& provider
             request.temperature = 0.0;
             request.max_tokens = 8;
             request.messages.push_back(MessageRecord{"user", "Reply with the single word pong.", CurrentTimestampUtc()});
+            detail += "  sending ping to Ollama /api/chat\r\n";
             const ChatExecutionResult response = RunOllamaLocalHttpChat(request, [](const std::string&) {}, {}, {});
             result.success = response.success;
             result.message = response.success ? response.full_text : response.error;
+            detail += "  ping result success=" + std::to_string(result.success) + " message=" + result.message + "\r\n";
+            cleanup();
             return result;
         }
 
+        detail += "  standard OpenAI-compatible non-embedding path\r\n";
         ChatRequestOptions request;
         request.provider = provider;
         request.model = model;
         request.temperature = 0.0;
         request.max_tokens = 8;
         request.messages.push_back(MessageRecord{"user", "Reply with the single word pong.", CurrentTimestampUtc()});
-
+        detail += "  sending ping\r\n";
         const ChatExecutionResult response = RunRequest(request, false, [](const std::string&) {});
         result.success = response.success;
         result.message = response.success ? response.full_text : response.error;
+        detail += "  ping result success=" + std::to_string(result.success) + " message=" + result.message + "\r\n";
     } catch (const std::exception& ex) {
         result.success = false;
         result.message = ex.what();
+        detail += "  EXCEPTION: " + std::string(ex.what()) + "\r\n";
     } catch (...) {
         result.success = false;
         result.message = "Unexpected error while testing the connection.";
+        detail += "  EXCEPTION: unexpected\r\n";
     }
+    cleanup();
     return result;
 }
 

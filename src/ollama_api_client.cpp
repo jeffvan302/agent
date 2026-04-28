@@ -20,6 +20,18 @@
 
 using json = nlohmann::json;
 
+// Thread-local detail log for provider connection test diagnostics.
+namespace tl_detail {
+thread_local std::string* t_test_detail_log = nullptr;
+}
+void SetTestDetailLog(std::string* log) { tl_detail::t_test_detail_log = log; }
+std::string* GetTestDetailLog() { return tl_detail::t_test_detail_log; }
+
+void AppendDetail(const std::string& msg) {
+    auto* ptr = GetTestDetailLog();
+    if (ptr) { *ptr += "[" + CurrentTimestampUtc() + "] " + msg + "\r\n"; }
+}
+
 namespace {
 
 static std::string LowerAscii(std::string value) {
@@ -211,47 +223,62 @@ bool PostOllamaApiChat(const std::string& base_url, const json& body, bool strea
     url += "/api/chat";
 
     std::string body_str = body.dump();
+    AppendDetail("PostOllamaApiChat: POST " + url);
+    AppendDetail("  body: " + body_str);
+    AppendDetail("  stream=" + std::to_string(stream));
 
     URL_COMPONENTSW comp{};
     comp.dwStructSize = sizeof(comp);
     std::wstring wurl = Utf8ToWide(url);
     wchar_t host_buf[2048] = {};
+    wchar_t path_buf[4096] = {};
     comp.lpszHostName = host_buf;
     comp.dwHostNameLength = std::size(host_buf);
+    comp.lpszUrlPath = path_buf;
+    comp.dwUrlPathLength = std::size(path_buf);
     if (!WinHttpCrackUrl(wurl.c_str(), static_cast<DWORD>(wurl.size()), 0, &comp)) {
         if (error) *error = "Invalid Ollama base URL: " + url;
+        AppendDetail("  FAIL: WinHttpCrackUrl");
         return false;
     }
     std::wstring host(host_buf, comp.dwHostNameLength);
     INTERNET_PORT port = comp.nPort;
     std::wstring path = comp.dwUrlPathLength > 0 ? std::wstring(comp.lpszUrlPath, comp.dwUrlPathLength) : L"/api/chat";
     bool secure = comp.nScheme == INTERNET_SCHEME_HTTPS;
+    AppendDetail("  parsed host=" + WideToUtf8(host) + " port=" + std::to_string(port) + " path=" + WideToUtf8(path));
 
     UniqueHandle session(WinHttpOpen(L"AgentOllama/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
-    if (!session) { if (error) *error = FormatWinHttpError("WinHttpOpen failed", GetLastError()); return false; }
+    if (!session) { if (error) *error = FormatWinHttpError("WinHttpOpen failed", GetLastError()); AppendDetail("  FAIL: WinHttpOpen"); return false; }
     UniqueHandle conn(WinHttpConnect(session.get(), host.c_str(), port, 0));
-    if (!conn) { if (error) *error = FormatWinHttpError("WinHttpConnect failed", GetLastError()); return false; }
+    if (!conn) { if (error) *error = FormatWinHttpError("WinHttpConnect failed", GetLastError()); AppendDetail("  FAIL: WinHttpConnect"); return false; }
     UniqueHandle req(WinHttpOpenRequest(conn.get(), L"POST", path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, secure ? WINHTTP_FLAG_SECURE : 0));
-    if (!req) { if (error) *error = FormatWinHttpError("WinHttpOpenRequest failed", GetLastError()); return false; }
+    if (!req) { if (error) *error = FormatWinHttpError("WinHttpOpenRequest failed", GetLastError()); AppendDetail("  FAIL: WinHttpOpenRequest"); return false; }
     SetLongTimeouts(req.get());
+    AppendDetail("  request created, sending...");
 
     std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
     if (!WinHttpSendRequest(req.get(), headers.c_str(), static_cast<DWORD>(headers.size()), const_cast<char*>(body_str.data()), static_cast<DWORD>(body_str.size()), static_cast<DWORD>(body_str.size()), 0)) {
-        if (error) *error = FormatWinHttpError("WinHttpSendRequest failed", GetLastError());
+        DWORD err = GetLastError();
+        if (error) *error = FormatWinHttpError("WinHttpSendRequest failed", err);
+        AppendDetail("  FAIL: WinHttpSendRequest error=" + std::to_string(err));
         return false;
     }
     if (!WinHttpReceiveResponse(req.get(), nullptr)) {
-        if (error) *error = FormatWinHttpError("WinHttpReceiveResponse failed", GetLastError());
+        DWORD err = GetLastError();
+        if (error) *error = FormatWinHttpError("WinHttpReceiveResponse failed", err);
+        AppendDetail("  FAIL: WinHttpReceiveResponse error=" + std::to_string(err));
         return false;
     }
 
     DWORD status = 0, len = sizeof(status);
     WinHttpQueryHeaders(req.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &len, WINHTTP_NO_HEADER_INDEX);
+    AppendDetail("  HTTP status=" + std::to_string(status));
     if (status < 200 || status >= 300) {
         std::string err_body = ReadEntireResponse(req.get());
         std::string detail;
         try { detail = json::parse(err_body).value("error", err_body); } catch (...) { detail = err_body; }
         if (error) *error = "Ollama API error " + std::to_string(status) + ": " + detail;
+        AppendDetail("  FAIL: " + *error);
         return false;
     }
 
@@ -312,38 +339,49 @@ bool PostOllamaApiChat(const std::string& base_url, const json& body, bool strea
 bool GetOllamaApi(const std::string& url, std::string* out_body, std::string* error) {
     std::string u = url;
     if (!u.empty() && u.back() == '/') u.pop_back();
+    AppendDetail("GetOllamaApi: GET " + u);
 
     URL_COMPONENTSW comp{};
     comp.dwStructSize = sizeof(comp);
     std::wstring wurl = Utf8ToWide(u);
     wchar_t host_buf[2048] = {};
+    wchar_t path_buf[4096] = {};
     comp.lpszHostName = host_buf;
     comp.dwHostNameLength = std::size(host_buf);
+    comp.lpszUrlPath = path_buf;
+    comp.dwUrlPathLength = std::size(path_buf);
     if (!WinHttpCrackUrl(wurl.c_str(), static_cast<DWORD>(wurl.size()), 0, &comp)) {
         if (error) *error = "Invalid Ollama URL: " + u;
+        AppendDetail("  FAIL: WinHttpCrackUrl");
         return false;
     }
     std::wstring host(host_buf, comp.dwHostNameLength);
     INTERNET_PORT port = comp.nPort;
     std::wstring path = comp.dwUrlPathLength > 0 ? std::wstring(comp.lpszUrlPath, comp.dwUrlPathLength) : L"/";
     bool secure = comp.nScheme == INTERNET_SCHEME_HTTPS;
+    AppendDetail("  parsed host=" + WideToUtf8(host) + " port=" + std::to_string(port) + " path=" + WideToUtf8(path));
 
     UniqueHandle session(WinHttpOpen(L"AgentOllama/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
-    if (!session) { if (error) *error = FormatWinHttpError("WinHttpOpen failed", GetLastError()); return false; }
+    if (!session) { if (error) *error = FormatWinHttpError("WinHttpOpen failed", GetLastError()); AppendDetail("  FAIL: WinHttpOpen"); return false; }
     UniqueHandle conn(WinHttpConnect(session.get(), host.c_str(), port, 0));
-    if (!conn) { if (error) *error = FormatWinHttpError("WinHttpConnect failed", GetLastError()); return false; }
+    if (!conn) { if (error) *error = FormatWinHttpError("WinHttpConnect failed", GetLastError()); AppendDetail("  FAIL: WinHttpConnect"); return false; }
     UniqueHandle req(WinHttpOpenRequest(conn.get(), L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, secure ? WINHTTP_FLAG_SECURE : 0));
-    if (!req) { if (error) *error = FormatWinHttpError("WinHttpOpenRequest failed", GetLastError()); return false; }
+    if (!req) { if (error) *error = FormatWinHttpError("WinHttpOpenRequest failed", GetLastError()); AppendDetail("  FAIL: WinHttpOpenRequest"); return false; }
     WinHttpSetTimeouts(req.get(), 5000, 5000, 10000, 10000);
+    AppendDetail("  sending GET request...");
     if (!WinHttpSendRequest(req.get(), nullptr, 0, nullptr, 0, 0, 0) || !WinHttpReceiveResponse(req.get(), nullptr)) {
-        if (error) *error = FormatWinHttpError("GET request failed", GetLastError());
+        DWORD err = GetLastError();
+        if (error) *error = FormatWinHttpError("GET request failed", err);
+        AppendDetail("  FAIL: WinHttpSendRequest/ReceiveResponse error=" + std::to_string(err));
         return false;
     }
     DWORD status = 0, len = sizeof(status);
     WinHttpQueryHeaders(req.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &len, WINHTTP_NO_HEADER_INDEX);
     std::string body = ReadEntireResponse(req.get());
+    AppendDetail("  HTTP status=" + std::to_string(status) + " body length=" + std::to_string(body.size()));
     if (status < 200 || status >= 300) {
         if (error) *error = "Ollama GET error " + std::to_string(status) + ": " + body;
+        AppendDetail("  FAIL: non-success status " + std::to_string(status));
         return false;
     }
     if (out_body) *out_body = body;
@@ -355,13 +393,17 @@ bool GetOllamaApi(const std::string& url, std::string* out_body, std::string* er
 bool PostOllamaApi(const std::string& url, const json& body, std::string* out_response, std::string* error) {
     std::string u = url;
     if (!u.empty() && u.back() == '/') u.pop_back();
+    AppendDetail("PostOllamaApi: POST " + u);
 
     URL_COMPONENTSW comp{};
     comp.dwStructSize = sizeof(comp);
     std::wstring wurl = Utf8ToWide(u);
     wchar_t host_buf[2048] = {};
+    wchar_t path_buf[4096] = {};
     comp.lpszHostName = host_buf;
     comp.dwHostNameLength = std::size(host_buf);
+    comp.lpszUrlPath = path_buf;
+    comp.dwUrlPathLength = std::size(path_buf);
     if (!WinHttpCrackUrl(wurl.c_str(), static_cast<DWORD>(wurl.size()), 0, &comp)) {
         if (error) *error = "Invalid Ollama URL: " + u;
         return false;
@@ -452,6 +494,129 @@ bool TryOllamaEmbeddingEndpoint(const std::string& base_url,
     }
 }
 
+// Sends a POST to an embedding endpoint using DEFAULT_PROXY (same as proven RAG path)
+// and validates the JSON response contains a vector embedding.
+static bool PostAndCheckEmbedding(const std::string& url, const json& body, int* dimensions_out, std::string* error) {
+    std::string body_str = body.dump();
+    AppendDetail("  PostAndCheckEmbedding: POST " + url);
+    AppendDetail("    body: " + body_str);
+
+    URL_COMPONENTSW comp{};
+    comp.dwStructSize = sizeof(comp);
+    std::wstring wurl = Utf8ToWide(url);
+    wchar_t host_buf[2048] = {};
+    wchar_t path_buf[4096] = {};
+    comp.lpszHostName = host_buf;
+    comp.dwHostNameLength = static_cast<DWORD>(std::size(host_buf));
+    comp.lpszUrlPath = path_buf;
+    comp.dwUrlPathLength = static_cast<DWORD>(std::size(path_buf));
+    if (!WinHttpCrackUrl(wurl.c_str(), static_cast<DWORD>(wurl.size()), 0, &comp)) {
+        if (error) *error = "Invalid URL: " + url;
+        AppendDetail("  FAIL: WinHttpCrackUrl failed for " + url);
+        return false;
+    }
+    std::wstring host(host_buf, comp.dwHostNameLength);
+    INTERNET_PORT port = comp.nPort;
+    std::wstring path = comp.dwUrlPathLength > 0 ? std::wstring(comp.lpszUrlPath, comp.dwUrlPathLength) : L"/";
+    bool secure = comp.nScheme == INTERNET_SCHEME_HTTPS;
+    AppendDetail("    parsed host=" + WideToUtf8(host) + " port=" + std::to_string(port) + " path=" + WideToUtf8(path));
+
+    UniqueHandle session(WinHttpOpen(L"AgentOllamaEmbedTest/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+    if (!session) { if (error) *error = "WinHttpOpen failed"; AppendDetail("  FAIL: WinHttpOpen"); return false; }
+    UniqueHandle conn(WinHttpConnect(session.get(), host.c_str(), port, 0));
+    if (!conn) { if (error) *error = "WinHttpConnect failed to " + WideToUtf8(host) + ":" + std::to_string(port); AppendDetail("  FAIL: WinHttpConnect"); return false; }
+    UniqueHandle req(WinHttpOpenRequest(conn.get(), L"POST", path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, secure ? WINHTTP_FLAG_SECURE : 0));
+    if (!req) { if (error) *error = "WinHttpOpenRequest failed"; AppendDetail("  FAIL: WinHttpOpenRequest"); return false; }
+    WinHttpSetTimeouts(req.get(), 10000, 10000, 30000, 180000);
+    AppendDetail("    session/request created, sending...");
+
+    std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
+    if (!WinHttpSendRequest(req.get(), headers.c_str(), static_cast<DWORD>(headers.size()),
+            const_cast<char*>(body_str.data()), static_cast<DWORD>(body_str.size()),
+            static_cast<DWORD>(body_str.size()), 0)) {
+        DWORD err = GetLastError();
+        if (error) *error = "POST request send failed to " + url + " (WinHTTP " + std::to_string(err) + ")";
+        AppendDetail("  FAIL: WinHttpSendRequest error=" + std::to_string(err));
+        return false;
+    }
+    if (!WinHttpReceiveResponse(req.get(), nullptr)) {
+        DWORD err = GetLastError();
+        if (error) *error = "POST response receive failed from " + url + " (WinHTTP " + std::to_string(err) + ")";
+        AppendDetail("  FAIL: WinHttpReceiveResponse error=" + std::to_string(err));
+        return false;
+    }
+    DWORD status = 0, len = sizeof(status);
+    WinHttpQueryHeaders(req.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &len, WINHTTP_NO_HEADER_INDEX);
+    std::string rsp = ReadEntireResponse(req.get());
+    AppendDetail("    HTTP status=" + std::to_string(status) + " body length=" + std::to_string(rsp.size()));
+    if (status < 200 || status >= 300) {
+        if (error) *error = "HTTP " + std::to_string(status) + " from " + url + ": " + rsp.substr(0, 300);
+        AppendDetail("  FAIL: non-success HTTP status " + std::to_string(status));
+        return false;
+    }
+
+    try {
+        const auto payload = json::parse(rsp);
+        AppendDetail("    JSON parsed successfully");
+        if (payload.contains("embeddings") && payload["embeddings"].is_array() && !payload["embeddings"].empty()) {
+            const auto& first = payload["embeddings"][0];
+            if (first.is_array() && !first.empty()) {
+                if (dimensions_out) *dimensions_out = static_cast<int>(first.size());
+                AppendDetail("    found embeddings[" + std::to_string(first.size()) + "]");
+                return true;
+            }
+        }
+        if (payload.contains("embedding") && payload["embedding"].is_array() && !payload["embedding"].empty()) {
+            if (dimensions_out) *dimensions_out = static_cast<int>(payload["embedding"].size());
+            AppendDetail("    found embedding[" + std::to_string(payload["embedding"].size()) + "]");
+            return true;
+        }
+        if (payload.contains("data") && payload["data"].is_array() && !payload["data"].empty()) {
+            const auto& first = payload["data"][0];
+            if (first.contains("embedding") && first["embedding"].is_array() && !first["embedding"].empty()) {
+                if (dimensions_out) *dimensions_out = static_cast<int>(first["embedding"].size());
+                AppendDetail("    found data[0].embedding[" + std::to_string(first["embedding"].size()) + "]");
+                return true;
+            }
+        }
+        AppendDetail("    FAIL: no embedding vector in response");
+        if (error) *error = "Response from " + url + " did not contain a valid embedding vector.";
+        return false;
+    } catch (const std::exception& ex) {
+        AppendDetail(std::string("    FAIL: JSON parse error - ") + ex.what());
+        if (error) *error = "Non-JSON response from " + url + ": " + ex.what();
+        return false;
+    }
+}
+
+static bool ProbeOllamaEmbedding(const std::string& base_url, const std::string& model_id, int* dimensions, std::string* error) {
+    AppendDetail("  ProbeOllamaEmbedding: base_url=" + base_url);
+    json body1;
+    body1["model"] = model_id;
+    body1["input"] = json::array({"Diagnostic connection test."});
+    std::string u = base_url;
+    while (!u.empty() && u.back() == '/') u.pop_back();
+    {
+        std::string endpoint = u + "/api/embed";
+        AppendDetail("  Trying /api/embed at " + endpoint);
+        std::string local_error;
+        if (PostAndCheckEmbedding(endpoint, body1, dimensions, &local_error)) { AppendDetail("  Success via /api/embed"); return true; }
+        AppendDetail("  /api/embed failed: " + local_error);
+    }
+    {
+        json body2;
+        body2["model"] = model_id;
+        body2["prompt"] = "Diagnostic connection test.";
+        std::string endpoint = u + "/api/embeddings";
+        AppendDetail("  Trying /api/embeddings at " + endpoint);
+        std::string local_error;
+        if (PostAndCheckEmbedding(endpoint, body2, dimensions, &local_error)) { AppendDetail("  Success via /api/embeddings"); return true; }
+        AppendDetail("  /api/embeddings failed: " + local_error);
+    }
+    AppendDetail("  All endpoints failed for " + base_url);
+    return false;
+}
+
 /* ── Helper to normalize tool call arguments ─────────────────────── */
 
 struct ToolArgsNorm {
@@ -515,102 +680,96 @@ void StopAllOllamaLocalServers() {
 static bool IsOllamaLocalProvider(const ProviderConfig& provider);
 
 bool IsOllamaModelAvailable(const ProviderConfig& provider, const ModelConfig& model, std::string* error) {
-    if (!IsOllamaLocalProvider(provider)) { if (error) *error = "Not an Ollama local provider."; return false; }
-    if (!EnsureOllamaLocalServer(provider, error)) return false;
-    // Ollama Cloud models are not pulled locally, so they are absent from /api/tags.
-    if (IsOllamaCloudModelId(model.id)) return true;
+    AppendDetail("IsOllamaModelAvailable START");
+    AppendDetail("  provider=" + provider.name + " model=" + model.id);
+    if (!IsOllamaLocalProvider(provider)) { if (error) *error = "Not an Ollama local provider."; AppendDetail("  FAIL: not Ollama local"); return false; }
+    if (!EnsureOllamaLocalServer(provider, error)) { AppendDetail("  FAIL: EnsureOllamaLocalServer failed: " + (error ? *error : "")); return false; }
+    if (IsOllamaCloudModelId(model.id)) { AppendDetail("  cloud model id, skipping availability check"); return true; }
     std::string body;
-    if (!GetOllamaApi(OllamaLocalBaseUrl(provider) + "/api/tags", &body, error)) return false;
+    std::string tags_url = OllamaLocalBaseUrl(provider) + "/api/tags";
+    AppendDetail("  GET " + tags_url);
+    if (!GetOllamaApi(tags_url, &body, error)) {
+        AppendDetail("  FAIL: GET /api/tags failed: " + (error ? *error : ""));
+        return false;
+    }
+    AppendDetail("  /api/tags response body length=" + std::to_string(body.size()));
     try {
         auto j = json::parse(body);
+        AppendDetail("  parsed JSON, models count=" + (j.contains("models") && j["models"].is_array() ? std::to_string(j["models"].size()) : "0"));
         if (j.contains("models") && j["models"].is_array()) {
             for (const auto& m : j["models"]) {
                 std::string name = m.value("name", "");
-                if (name == model.id) return true;
-                if (!name.empty() && name.find(model.id) == 0) return true;
+                AppendDetail("    found model: " + name);
+                if (name == model.id) { AppendDetail("  MATCH: exact match"); return true; }
+                if (!name.empty() && name.find(model.id) == 0) { AppendDetail("  MATCH: prefix match"); return true; }
             }
         }
-    } catch (...) {}
+    } catch (...) {
+        AppendDetail("  FAIL: JSON parse error on /api/tags response");
+    }
     if (error) *error = "Model '" + model.id + "' is not available. Pull it first via the model editor.";
+    AppendDetail("  FAIL: model not found in /api/tags");
     return false;
 }
 
 bool TestOllamaEmbeddingConnection(const ProviderConfig& provider, const ModelConfig& model, std::string* message) {
+    AppendDetail("TestOllamaEmbeddingConnection START");
+    AppendDetail("  provider name=" + provider.name + " type=" + provider.provider_type);
+    AppendDetail("  model id=" + model.id + " display=" + model.display_name);
     if (!IsOllamaLocalProvider(provider)) {
+        AppendDetail("  FAIL: not an Ollama local provider");
         if (message) *message = "Not an Ollama local provider.";
         return false;
     }
-    if (!EnsureOllamaLocalServer(provider, message)) {
-        return false;
-    }
     if (IsOllamaCloudModelId(model.id)) {
+        AppendDetail("  FAIL: cloud model id");
         if (message) *message = "Cannot test embedding connections for Ollama Cloud models locally.";
         return false;
     }
-    ReportOllamaLocalActivity(provider, model);
 
-    const std::string base_url = OllamaLocalBaseUrl(provider);
-
-    // Try modern /api/embed endpoint first
-    {
-        json body;
-        body["model"] = model.id;
-        body["input"] = json::array({"Diagnostic connection test."});
-
-        std::string embed_url = base_url;
-        if (!embed_url.empty() && embed_url.back() == '/') embed_url.pop_back();
-        embed_url += "/api/embed";
-
-        std::string response_text;
-        std::string first_error;
-        if (PostOllamaApi(embed_url, body, &response_text, &first_error)) {
-            try {
-                auto j = json::parse(response_text);
-                if (j.contains("embeddings") && j["embeddings"].is_array() && !j["embeddings"].empty()) {
-                    const auto& first = j["embeddings"][0];
-                    if (first.is_array()) {
-                        const int dims = static_cast<int>(first.size());
-                        if (message) *message = "Embedding connection OK (" + std::to_string(dims) + " dimensions).";
-                        return true;
-                    }
-                }
-            } catch (...) {
-                // Fall through to legacy endpoint
-            }
-        }
-        // If we reach here, /api/embed either failed or returned unexpected data.
-        // Continue to legacy fallback so a 405 doesn't block the user.
+    AppendDetail("  ollama_local_port=" + std::to_string(provider.ollama_local_port));
+    std::string ensure_error;
+    if (EnsureOllamaLocalServer(provider, &ensure_error)) {
+        ReportOllamaLocalActivity(provider, model);
+        AppendDetail("  Managed Ollama server ensured: " + OllamaLocalBaseUrl(provider));
+    } else {
+        AppendDetail("  Managed Ollama server NOT running (will probe externally): " + ensure_error);
     }
 
-    // Fallback to legacy /api/embeddings endpoint
-    {
-        json body;
-        body["model"] = model.id;
-        body["prompt"] = "Diagnostic connection test.";
+    const int port = provider.ollama_local_port > 0 ? provider.ollama_local_port : 12434;
+    std::vector<std::string> candidates;
+    auto add_base = [&](std::string url) {
+        url = Trim(url);
+        while (!url.empty() && url.back() == '/') url.pop_back();
+        if (!url.empty() && std::find(candidates.begin(), candidates.end(), url) == candidates.end())
+            candidates.push_back(std::move(url));
+    };
+    add_base("http://127.0.0.1:" + std::to_string(port));
+    add_base("http://localhost:" + std::to_string(port));
+    add_base("http://127.0.0.1:11434");
+    add_base("http://localhost:11434");
 
-        std::string legacy_url = base_url;
-        if (!legacy_url.empty() && legacy_url.back() == '/') legacy_url.pop_back();
-        legacy_url += "/api/embeddings";
+    AppendDetail("  Candidate base URLs:");
+    for (const auto& c : candidates) AppendDetail("    " + c);
 
-        std::string response_text;
-        if (!PostOllamaApi(legacy_url, body, &response_text, message)) {
-            return false;
-        }
-
-        try {
-            auto j = json::parse(response_text);
-            if (!j.contains("embedding") || !j["embedding"].is_array()) {
-                if (message) *message = "Legacy embedding endpoint did not return a valid embedding.";
-                return false;
-            }
-            const int dims = static_cast<int>(j["embedding"].size());
-            if (message) *message = "Embedding connection OK (" + std::to_string(dims) + " dimensions).";
+    std::string last_error;
+    for (const auto& base_url : candidates) {
+        AppendDetail("  Probing " + base_url + "...");
+        int dims = 0;
+        std::string probe_error;
+        if (ProbeOllamaEmbedding(base_url, model.id, &dims, &probe_error)) {
+            std::string ok_msg = "Embedding connection OK at " + base_url + " (" + std::to_string(dims) + " dimensions).";
+            AppendDetail("  " + ok_msg);
+            if (message) *message = ok_msg;
             return true;
-        } catch (const std::exception& ex) {
-            if (message) *message = std::string("Legacy embedding endpoint returned non-JSON: ") + ex.what();
-            return false;
         }
+        last_error = probe_error;
+        AppendDetail("  Failed: " + probe_error);
     }
+
+    AppendDetail("  All candidates exhausted.");
+    if (message) *message = "Embedding test failed on all endpoints. Last error: " + last_error;
+    return false;
 }
 
 bool PullOllamaModel(const ProviderConfig& provider, const std::string& model_id, const std::function<void(const std::string&)>& on_status, std::string* error) {

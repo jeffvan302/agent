@@ -3,3 +3,4 @@ providers.json
 data/
 logs/
 .json
+.obj

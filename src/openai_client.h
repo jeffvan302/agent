@@ -38,6 +38,7 @@ struct ChatToolCall {
 struct TestConnectionResult {
     bool success = false;
     std::string message;
+    std::string details_log;
 };
 
 struct ProviderQueueStatus {

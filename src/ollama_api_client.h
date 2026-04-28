@@ -4,6 +4,11 @@
 #include <functional>
 #include <vector>
 
+// Thread-local detail log for provider connection test diagnostics.
+void SetTestDetailLog(std::string* log);
+std::string* GetTestDetailLog();
+void AppendDetail(const std::string& msg);
+
 struct ProviderConfig;
 struct ModelConfig;
 struct ChatRequestOptions;
