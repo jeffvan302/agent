@@ -1458,25 +1458,24 @@ void McpManager::SaveConfigs(const std::vector<McpServerConfig>& configs) {
     std::vector<std::shared_ptr<Connection>> disconnect_list;
     {
         std::scoped_lock lock(impl_->mutex);
+        std::vector<std::string> erase_keys;
         for (const auto& [connection_key, connection] : impl_->connections) {
-            (void)connection_key;
             const auto it = std::find_if(configs.begin(), configs.end(), [&](const McpServerConfig& config) { return config.id == connection->server_id(); });
             if (it == configs.end()) {
                 disconnect_list.push_back(connection);
+                erase_keys.push_back(connection_key);
                 continue;
             }
 
             const auto existing = std::find_if(configs_.begin(), configs_.end(), [&](const McpServerConfig& config) { return config.id == connection->server_id(); });
             if (existing == configs_.end() || !EquivalentConfig(*existing, *it)) {
                 disconnect_list.push_back(connection);
+                erase_keys.push_back(connection_key);
             }
         }
 
-        for (const auto& connection : disconnect_list) {
-            const auto config_it = std::find_if(configs_.begin(), configs_.end(), [&](const McpServerConfig& config) { return config.id == connection->server_id(); });
-            if (config_it != configs_.end()) {
-                impl_->connections.erase(BuildConnectionKey(*config_it, connection->project_id()));
-            }
+        for (const auto& key : erase_keys) {
+            impl_->connections.erase(key);
         }
     }
 

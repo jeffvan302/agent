@@ -70,6 +70,17 @@ std::string ChatRequestLogger::FormatBlock(const std::string& label, const std::
     return s;
 }
 
+std::string ChatRequestLogger::FormatSections(
+    const std::string& label_prefix,
+    const std::vector<std::pair<std::string, std::string>>& sections) {
+    std::string s;
+    for (const auto& section : sections) {
+        if (section.second.empty()) continue;
+        s += FormatBlock(label_prefix + ": " + section.first, section.second);
+    }
+    return s;
+}
+
 std::string ChatRequestLogger::FormatMessages(const std::vector<MessageRecord>& msgs) {
     std::string s;
     s.reserve(msgs.size() * 256);
@@ -94,4 +105,32 @@ std::string ChatRequestLogger::FormatErrorResponse(const std::string& error) {
 
 std::string ChatRequestLogger::FormatSuccessResponse(const std::string& assistant_text) {
     return "=== Model Response ===\n" + assistant_text + "\n";
+}
+
+std::string ChatRequestLogger::FormatCompressionBlock(
+    const std::string& trigger_reason,
+    size_t before_messages,
+    size_t after_messages,
+    size_t compressed_through,
+    const std::string& compressed_text,
+    const std::string& config_name) {
+    std::string s = "=== Context Window Compression ===\n";
+    s += "Trigger: " + trigger_reason + "\n";
+    s += "Config:  " + config_name + "\n";
+    s += "Messages before:   " + std::to_string(before_messages) + "\n";
+    s += "Messages after:    " + std::to_string(after_messages) + "\n";
+    s += "Compressed through index: " + std::to_string(compressed_through) + "\n\n";
+
+    std::string truncated = compressed_text;
+    constexpr size_t kPreviewLimit = 2048;
+    if (truncated.size() > kPreviewLimit) {
+        truncated.resize(kPreviewLimit);
+        truncated += "\n... (truncated, see chat compression history for full block) ...\n";
+    }
+    if (truncated.empty()) {
+        s += "No compressed context was generated (nothing to compress or config produced empty result).\n";
+    } else {
+        s += "--- Compressed Context (preview) ---\n" + truncated + "\n--- End Compressed Context ---\n";
+    }
+    return s;
 }

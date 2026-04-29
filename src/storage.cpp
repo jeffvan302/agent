@@ -1823,6 +1823,10 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     }
     j["enabled_agentic_mode_ids"] = am_arr;
     j["enable_chat_logging"] = settings.enable_chat_logging;
+    j["allow_manual_context_compression"] = settings.allow_manual_context_compression;
+    j["enable_web_debugging"] = settings.enable_web_debugging;
+    j["built_in_powershell_enabled"] = settings.built_in_powershell_enabled;
+    j["built_in_powershell_working_directory"] = settings.built_in_powershell_working_directory;
 
     return j;
 }
@@ -1885,6 +1889,14 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     }
 
     settings.enable_chat_logging = j.value("enable_chat_logging", false);
+    settings.allow_manual_context_compression = j.value("allow_manual_context_compression", false);
+    settings.enable_web_debugging = j.value("enable_web_debugging", false);
+    settings.built_in_powershell_enabled = j.value("built_in_powershell_enabled", false);
+    settings.built_in_powershell_working_directory = j.value(
+        "built_in_powershell_working_directory", "$ProjectFolder$");
+    if (Trim(settings.built_in_powershell_working_directory).empty()) {
+        settings.built_in_powershell_working_directory = "$ProjectFolder$";
+    }
 
     return settings;
 }

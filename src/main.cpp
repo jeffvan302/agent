@@ -25,6 +25,7 @@
 #include "web_user_store.h"
 #include "web_config_dialog.h"
 #include "admin_config_dialog.h"
+#include "built_in_tools.h"
 #include "storage.h"
 #include "util.h"
 #include "variable_resolver.h"
@@ -45,6 +46,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <windowsx.h>
 
@@ -155,7 +157,7 @@ std::vector<MessageRecord> ModelVisibleMessages(const std::vector<MessageRecord>
     std::vector<MessageRecord> filtered;
     filtered.reserve(messages.size());
     for (const auto& message : messages) {
-        if (message.role == "file") {
+        if (message.role == "file" || message.role == "compression") {
             continue;
         }
         filtered.push_back(message);
@@ -3479,6 +3481,10 @@ void MainWindow::EditProjectSettings() {
     // Project variables
     options.initial_project_variables = project_settings.project_variables;
     options.enable_chat_logging = project_settings.enable_chat_logging;
+    options.allow_manual_context_compression = project_settings.allow_manual_context_compression;
+    options.enable_web_debugging = project_settings.enable_web_debugging;
+    options.built_in_powershell_enabled = project_settings.built_in_powershell_enabled;
+    options.built_in_powershell_working_directory = project_settings.built_in_powershell_working_directory;
 
     // Pre-seed ProjectFolder from MCP global binding values if not already set.
     for (const auto& gv : mcp_manager_.global_variables()) {
@@ -3520,6 +3526,10 @@ void MainWindow::EditProjectSettings() {
     saved_settings.selected_agentic_mode_id = result->selected_agentic_mode_id;
     saved_settings.enabled_agentic_mode_ids = result->enabled_agentic_mode_ids;
     saved_settings.enable_chat_logging = result->enable_chat_logging;
+    saved_settings.allow_manual_context_compression = result->allow_manual_context_compression;
+    saved_settings.enable_web_debugging = result->enable_web_debugging;
+    saved_settings.built_in_powershell_enabled = result->built_in_powershell_enabled;
+    saved_settings.built_in_powershell_working_directory = result->built_in_powershell_working_directory;
     storage_.SaveProjectSettings(active_project_id_, saved_settings);
     storage_.SaveProjectCompressionSettings(active_project_id_, ProjectCompressionSettings{
         !result->selected_compression_config_id.empty(),
@@ -4206,6 +4216,13 @@ void MainWindow::SendCurrentMessage() {
 
     request.messages = std::move(request_history);
     request.messages.push_back(user_message);
+    std::vector<std::pair<std::string, std::string>> system_prompt_sections;
+    if (!compressed_context.empty()) {
+        system_prompt_sections.push_back({"Compressed Context", compressed_context});
+    }
+    if (!Trim(chat->system_prompt).empty()) {
+        system_prompt_sections.push_back({"Base Chat System Prompt", chat->system_prompt});
+    }
     if (!compressed_context.empty()) {
         if (!request.system_prompt.empty()) {
             request.system_prompt = compressed_context + "\n\n" + request.system_prompt;
@@ -4224,6 +4241,7 @@ void MainWindow::SendCurrentMessage() {
             }
             request.system_prompt += "Project Instructions:\n";
             request.system_prompt += project_instructions;
+            system_prompt_sections.push_back({"Project Instructions", project_instructions});
         }
         // Inject selected agentic mode instructions after project instructions
         if (!proj_settings.selected_agentic_mode_id.empty()) {
@@ -4231,13 +4249,14 @@ void MainWindow::SendCurrentMessage() {
             const auto it = std::find_if(all_modes.begin(), all_modes.end(),
                 [&](const AgenticModeConfig& m) { return m.id == proj_settings.selected_agentic_mode_id; });
             if (it != all_modes.end()) {
-                std::string mode_instructions = Trim(it->instructions);
+                std::string mode_instructions = Trim(NormalizeNewlinesToLf(it->instructions));
                 if (!mode_instructions.empty()) {
                     if (!request.system_prompt.empty()) {
                         request.system_prompt += "\n\n";
                     }
                     request.system_prompt += "Agentic Mode Instructions (" + it->name + "):\n";
                     request.system_prompt += mode_instructions;
+                    system_prompt_sections.push_back({"Agentic Mode: " + it->name, mode_instructions});
                 }
             }
         }
@@ -4249,6 +4268,7 @@ void MainWindow::SendCurrentMessage() {
             request.system_prompt += "\n\n";
         }
         request.system_prompt += mcp_project_context;
+        system_prompt_sections.push_back({"MCP Project Context", mcp_project_context});
     }
 
     const std::string rag_context = rag_tools::BuildRagProjectContext(&rag_service_, active_project_id_);
@@ -4257,6 +4277,7 @@ void MainWindow::SendCurrentMessage() {
             request.system_prompt += "\n\n";
         }
         request.system_prompt += rag_context;
+        system_prompt_sections.push_back({"RAG Project Context", rag_context});
     }
 
     // Lazy-load per-chat working set from disk if not already in memory.
@@ -4280,6 +4301,7 @@ void MainWindow::SendCurrentMessage() {
             request.system_prompt += "\n\n";
         }
         request.system_prompt += working_set_context;
+        system_prompt_sections.push_back({"RAG Working Set Context", working_set_context});
     }
 
     if (selected_compression_config) {
@@ -4305,7 +4327,8 @@ void MainWindow::SendCurrentMessage() {
     if (logging) {
         log_header = ChatRequestLogger::FormatHeader(ts, project_id, chat_id);
         log_header += ChatRequestLogger::FormatProvider(*selected_provider, *selected_model);
-        log_header += ChatRequestLogger::FormatBlock("System Prompt", request.system_prompt);
+        log_header += ChatRequestLogger::FormatBlock("System Prompt (Full)", request.system_prompt);
+        log_header += ChatRequestLogger::FormatSections("System Prompt", system_prompt_sections);
         log_header += ChatRequestLogger::FormatBlock("Request Messages", ChatRequestLogger::FormatMessages(request.messages));
     }
     // ── End logging setup ───────────────────────────────────────────
@@ -4422,11 +4445,15 @@ void MainWindow::SendCurrentMessage() {
 
         model_tool_definitions.push_back(std::move(def));
     }
+    const auto built_in_tool_definitions = built_in_tools::BuildDefinitions(project_settings_for_tools);
+    std::vector<ChatToolDefinition> extra_tool_definitions = rag_tool_definitions;
+    extra_tool_definitions.insert(extra_tool_definitions.end(), model_tool_definitions.begin(), model_tool_definitions.end());
+    extra_tool_definitions.insert(extra_tool_definitions.end(), built_in_tool_definitions.begin(), built_in_tool_definitions.end());
 
     const bool include_tools = request.model.supports_tools &&
-        (!exposed_tools.empty() || !rag_tool_definitions.empty() || !model_tool_definitions.empty());
+        (!exposed_tools.empty() || !extra_tool_definitions.empty());
 
-    if (!CheckContextWindow(hwnd_, request, exposed_tools, rag_tool_definitions, include_tools)) {
+    if (!CheckContextWindow(hwnd_, request, exposed_tools, extra_tool_definitions, include_tools)) {
         return;
     }
 
@@ -4507,12 +4534,12 @@ void MainWindow::SendCurrentMessage() {
         return;
     }
 
-    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, model_tool_definitions, model_tools, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
+    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
         constexpr int kMaxToolRounds = 8;
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
         std::vector<ChatToolDefinition> tool_definitions;
-        tool_definitions.reserve(exposed_tools.size() + rag_tool_definitions.size() + model_tool_definitions.size());
+        tool_definitions.reserve(exposed_tools.size() + rag_tool_definitions.size() + model_tool_definitions.size() + built_in_tool_definitions.size());
         std::unordered_map<std::string, McpExposedTool> tool_lookup;
         for (const auto& exposed : exposed_tools) {
             ChatToolDefinition definition;
@@ -4529,6 +4556,7 @@ void MainWindow::SendCurrentMessage() {
         }
         tool_definitions.insert(tool_definitions.end(), rag_tool_definitions.begin(), rag_tool_definitions.end());
         tool_definitions.insert(tool_definitions.end(), model_tool_definitions.begin(), model_tool_definitions.end());
+        tool_definitions.insert(tool_definitions.end(), built_in_tool_definitions.begin(), built_in_tool_definitions.end());
 
         std::vector<MessageRecord> working_messages = request.messages;
         std::string error;
@@ -4650,6 +4678,12 @@ void MainWindow::SendCurrentMessage() {
                                 &rag_tool_routes,
                                 working_set_additions.get(),
                                 project_variables);
+                        } else if (built_in_tools::IsBuiltInToolName(pending[pi].tool_call.name)) {
+                            pending[pi].result = built_in_tools::CallTool(
+                                pending[pi].tool_call.name,
+                                pending[pi].tool_call.arguments_json,
+                                project_settings_for_tools,
+                                project_variables);
                         } else {
                             pending[pi].result = mcp_manager->CallExposedTool(
                                 project_id,
@@ -4676,6 +4710,12 @@ void MainWindow::SendCurrentMessage() {
                                 &rag_tool_routes,
                                 working_set_additions.get(),
                                 project_variables);
+                        } else if (built_in_tools::IsBuiltInToolName(p.tool_call.name)) {
+                            p.result = built_in_tools::CallTool(
+                                p.tool_call.name,
+                                p.tool_call.arguments_json,
+                                project_settings_for_tools,
+                                project_variables);
                         } else {
                             p.result = mcp_manager->CallExposedTool(
                                 project_id,
@@ -4698,6 +4738,8 @@ void MainWindow::SendCurrentMessage() {
                         trace_payload->entry.title = rag_tools::TraceTitleForRagTool(p.tool_call.name, rag_tool_routes);
                     } else if (IsModelToolAlias(p.tool_call.name)) {
                         trace_payload->entry.title = "Agent / " + p.tool_call.name;
+                    } else if (built_in_tools::IsBuiltInToolName(p.tool_call.name)) {
+                        trace_payload->entry.title = "Built-in / PowerShell";
                     } else {
                         trace_payload->entry.title = p.tool_call.name;
                     }

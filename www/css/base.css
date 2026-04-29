@@ -173,6 +173,7 @@ html, body {
 .message-row.user { align-self: flex-end; align-items: flex-end; }
 .message-row.model { align-self: flex-start; align-items: flex-start; }
 .message-row.file { align-self: stretch; align-items: stretch; max-width: 920px; }
+.message-row.web-debug { align-self: stretch; align-items: stretch; max-width: 920px; }
 .message-role-label {
   font-size: 11px;
   font-weight: 600;
@@ -368,9 +369,17 @@ html, body {
   border-radius: 50%;
 }
 .compression-status-icon.status-live {
-  border: 2px solid var(--color-accent-primary);
-  border-top-color: transparent;
-  animation: compression-spin 0.8s linear infinite;
+  width: 10px;
+  height: 10px;
+  border: none;
+  background-color: #8da1b9;
+  border-radius: 50%;
+  animation: compression-pulse 1.2s ease-in-out infinite;
+}
+@keyframes compression-pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+  100% { opacity: 1; transform: scale(1); }
 }
 .compression-status-icon.status-done {
   display: inline-flex;
@@ -626,6 +635,42 @@ html, body {
   color: var(--color-text-error);
 }
 
+.web-debug-bubble {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px dashed var(--color-border-main);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-tool-call);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-small);
+}
+.web-debug-title {
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+}
+.web-debug-section + .web-debug-section { margin-top: 8px; }
+.web-debug-section summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--color-accent-primary);
+  user-select: none;
+}
+.web-debug-section pre {
+  margin-top: 6px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--color-bg-main);
+  border: 1px solid var(--color-border-main);
+  border-radius: 6px;
+  padding: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* ── File upload timeline rows ────────────────────────────────────────── */
 .file-upload-card {
   --file-upload-active: var(--color-accent-primary);
@@ -802,7 +847,14 @@ html, body {
 #compose-top {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   min-height: 22px;
+}
+#compose-top-left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 #compose-bottom {
   display: flex;
@@ -829,6 +881,26 @@ html, body {
 .agentic-mode-active.disabled {
   color: var(--color-text-secondary);
   background: transparent;
+  cursor: default;
+}
+#debug-btn {
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-button);
+  background: var(--color-bg-input);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+#debug-btn.active {
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+  background: rgba(0,150,255,0.08);
+}
+#debug-btn:disabled {
+  opacity: 0.45;
   cursor: default;
 }
 #attach-btn {

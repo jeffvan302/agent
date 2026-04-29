@@ -103,6 +103,15 @@ enum ControlId : int {
     kAgenticModesList      = 6465,
 
     kChatLoggingCheck = 6466,
+    kManualContextCompressionCheck = 6467,
+    kWebDebuggingCheck = 6468,
+    kInternalToolsHeader = 6469,
+    kInternalToolsList = 6470,
+    kInternalToolSettingsPanel = 6471,
+    kInternalPowerShellEnabled = 6472,
+    kInternalPowerShellWorkingDirLabel = 6473,
+    kInternalPowerShellWorkingDirEdit = 6474,
+    kInternalPowerShellRiskLabel = 6475,
 
     // Footer
     kCheckContextButton = 6461,
@@ -645,6 +654,29 @@ private:
         // Context window section
         context_window_label_ = CreateWindowExW(0, L"STATIC", L"Context Window Compression:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextWindowLabel), nullptr, nullptr);
         context_window_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextWindowCombo), nullptr, nullptr);
+        manual_context_compression_check_ = CreateWindowExW(0, L"BUTTON", L"Allow manual context window compression",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kManualContextCompressionCheck), nullptr, nullptr);
+
+        internal_tools_header_ = CreateWindowExW(0, L"STATIC", L"Built-in Tools:", WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalToolsHeader), nullptr, nullptr);
+        internal_tools_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalToolsList), nullptr, nullptr);
+        internal_tool_settings_panel_ = CreateWindowExW(0, L"BUTTON", L"Tool Settings", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalToolSettingsPanel), nullptr, nullptr);
+        internal_powershell_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable PowerShell command execution",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalPowerShellEnabled), nullptr, nullptr);
+        internal_powershell_workdir_label_ = CreateWindowExW(0, L"STATIC", L"Default folder:", WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalPowerShellWorkingDirLabel), nullptr, nullptr);
+        internal_powershell_workdir_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"$ProjectFolder$",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalPowerShellWorkingDirEdit), nullptr, nullptr);
+        internal_powershell_risk_label_ = CreateWindowExW(0, L"STATIC",
+            L"Risk: this allows the model to run local PowerShell commands for this project.",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalPowerShellRiskLabel), nullptr, nullptr);
 
         // RAG services section
         rag_services_header_ = CreateWindowExW(0, L"STATIC", L"RAG Services:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagServicesHeader), nullptr, nullptr);
@@ -698,6 +730,9 @@ private:
         chat_logging_check_ = CreateWindowExW(0, L"BUTTON", L"Enable detailed chat logging",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kChatLoggingCheck), nullptr, nullptr);
+        web_debugging_check_ = CreateWindowExW(0, L"BUTTON", L"Enable Web Debugging",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kWebDebuggingCheck), nullptr, nullptr);
 
         instructions_label_ = CreateWindowExW(0, L"STATIC", L"Project Instructions:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstructionsLabel), nullptr, nullptr);
         import_instructions_button_ = CreateWindowExW(0, L"BUTTON", L"Import Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImportInstructions), nullptr, nullptr);
@@ -727,7 +762,10 @@ private:
             model_tools_header_, model_tools_list_,
             variables_header_,
             model_label_, model_combo_,
-            context_window_label_, context_window_combo_,
+            context_window_label_, context_window_combo_, manual_context_compression_check_,
+            internal_tools_header_, internal_tools_list_, internal_tool_settings_panel_,
+            internal_powershell_enabled_check_, internal_powershell_workdir_label_,
+            internal_powershell_workdir_edit_, internal_powershell_risk_label_,
             rag_services_header_, rag_services_list_, rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_check_,
             rag_priority_label_, rag_priority_edit_, rag_max_chunks_label_, rag_max_chunks_edit_,
@@ -737,7 +775,8 @@ private:
             proj_vars_header_, proj_vars_list_, proj_vars_add_btn_, proj_vars_remove_btn_,
             proj_vars_name_label_, proj_vars_name_edit_, proj_vars_value_label_, proj_vars_value_edit_,
             proj_vars_description_label_, proj_vars_description_edit_, proj_vars_inject_check_,
-            agentic_mode_label_, agentic_mode_combo_, agentic_modes_list_label_, agentic_modes_list_, chat_logging_check_,
+            agentic_mode_label_, agentic_mode_combo_, agentic_modes_list_label_, agentic_modes_list_,
+            chat_logging_check_, manual_context_compression_check_, web_debugging_check_,
             instructions_label_, import_instructions_button_, instructions_edit_,
             check_context_button_, save_button_, cancel_button_
         };
@@ -810,6 +849,22 @@ private:
         if (options_.enable_chat_logging) {
             CheckDlgButton(hwnd_, kChatLoggingCheck, BST_CHECKED);
         }
+        if (options_.allow_manual_context_compression) {
+            CheckDlgButton(hwnd_, kManualContextCompressionCheck, BST_CHECKED);
+        }
+        if (options_.enable_web_debugging) {
+            CheckDlgButton(hwnd_, kWebDebuggingCheck, BST_CHECKED);
+        }
+        internal_powershell_enabled_ = options_.built_in_powershell_enabled;
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(internal_powershell_enabled_ ? L"[✓] " : L"[ ] ") + L"PowerShell command execution").c_str());
+        ListBox_SetCurSel(internal_tools_list_, 0);
+        CheckDlgButton(hwnd_, kInternalPowerShellEnabled,
+            internal_powershell_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+        const std::string workdir = Trim(options_.built_in_powershell_working_directory).empty()
+            ? std::string("$ProjectFolder$")
+            : options_.built_in_powershell_working_directory;
+        SetWindowTextW(internal_powershell_workdir_edit_, Utf8ToWide(workdir).c_str());
     }
 
     void LayoutControls(int width, int height) {
@@ -867,9 +922,29 @@ private:
         MoveWindow(context_window_label_, right_x, y, right_width, label_height, TRUE);
         y += label_height + gutter;
         MoveWindow(context_window_combo_, right_x, y, right_width, Scale(hwnd_, 200), TRUE);
+        y += Scale(hwnd_, 28) + gutter;
+        const int context_third = (right_width - gutter * 2) / 3;
+        MoveWindow(manual_context_compression_check_, right_x, y, context_third, Scale(hwnd_, 20), TRUE);
+        MoveWindow(chat_logging_check_, right_x + context_third + gutter, y, context_third, Scale(hwnd_, 20), TRUE);
+        MoveWindow(web_debugging_check_, right_x + (context_third + gutter) * 2, y, context_third, Scale(hwnd_, 20), TRUE);
+
+        y += Scale(hwnd_, 26) + gutter;
+        MoveWindow(internal_tools_header_, right_x, y, right_width, label_height, TRUE);
+        y += label_height + gutter;
+        const int internal_list_w = std::max(Scale(hwnd_, 180), (right_width - gutter) / 2);
+        const int internal_settings_x = right_x + internal_list_w + gutter;
+        const int internal_settings_w = right_width - internal_list_w - gutter;
+        const int internal_h = Scale(hwnd_, 92);
+        MoveWindow(internal_tools_list_, right_x, y, internal_list_w, internal_h, TRUE);
+        MoveWindow(internal_tool_settings_panel_, internal_settings_x, y, internal_settings_w, internal_h, TRUE);
+        const int panel_pad = Scale(hwnd_, 10);
+        MoveWindow(internal_powershell_enabled_check_, internal_settings_x + panel_pad, y + Scale(hwnd_, 18), internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(internal_powershell_workdir_label_, internal_settings_x + panel_pad, y + Scale(hwnd_, 43), Scale(hwnd_, 90), label_height, TRUE);
+        MoveWindow(internal_powershell_workdir_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 90), y + Scale(hwnd_, 40), internal_settings_w - panel_pad * 2 - Scale(hwnd_, 90), Scale(hwnd_, 22), TRUE);
+        MoveWindow(internal_powershell_risk_label_, internal_settings_x + panel_pad, y + Scale(hwnd_, 66), internal_settings_w - panel_pad * 2, label_height, TRUE);
 
         // RAG services section
-        y += Scale(hwnd_, 28) + gutter * 2;
+        y += internal_h + gutter * 2;
         MoveWindow(rag_services_header_, right_x, y, right_width, label_height, TRUE);
         y += label_height + gutter;
         const int rag_list_height = Scale(hwnd_, 100);
@@ -956,8 +1031,7 @@ private:
         MoveWindow(agentic_modes_list_label_, right_x + am_half + gutter, am_top,       am_half, am_label_h, TRUE);
         MoveWindow(agentic_modes_list_,       right_x + am_half + gutter, am_top + am_label_h + gutter,
                                               am_half,              am_control_h, TRUE);
-        MoveWindow(chat_logging_check_, right_x, am_top + am_label_h + gutter + Scale(hwnd_, 200) + gutter, am_half, Scale(hwnd_, 20), TRUE);
-        y = am_top + am_label_h + gutter + Scale(hwnd_, 200) + gutter + Scale(hwnd_, 20) + gutter;
+        y = am_top + am_label_h + gutter + Scale(hwnd_, 200) + gutter;
 
         const int import_width = Scale(hwnd_, 130);
         MoveWindow(instructions_label_, right_x, y + Scale(hwnd_, 5), right_width - import_width - gutter, label_height, TRUE);
@@ -1013,6 +1087,28 @@ private:
         case kContextWindowCombo:
             if (notification_code == CBN_SELCHANGE) {
                 OnCompressionConfigChanged();
+            }
+            break;
+        case kInternalToolsList:
+            if (notification_code == LBN_SELCHANGE && !toggling_internal_tool_) {
+                toggling_internal_tool_ = true;
+                internal_powershell_enabled_ = !internal_powershell_enabled_;
+                ListBox_DeleteString(internal_tools_list_, 0);
+                ListBox_InsertString(internal_tools_list_, 0,
+                    (std::wstring(internal_powershell_enabled_ ? L"[✓] " : L"[ ] ") + L"PowerShell command execution").c_str());
+                ListBox_SetCurSel(internal_tools_list_, 0);
+                CheckDlgButton(hwnd_, kInternalPowerShellEnabled,
+                    internal_powershell_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+                toggling_internal_tool_ = false;
+            }
+            break;
+        case kInternalPowerShellEnabled:
+            if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
+                internal_powershell_enabled_ = (IsDlgButtonChecked(hwnd_, kInternalPowerShellEnabled) == BST_CHECKED);
+                ListBox_DeleteString(internal_tools_list_, 0);
+                ListBox_InsertString(internal_tools_list_, 0,
+                    (std::wstring(internal_powershell_enabled_ ? L"[✓] " : L"[ ] ") + L"PowerShell command execution").c_str());
+                ListBox_SetCurSel(internal_tools_list_, 0);
             }
             break;
         case kRagServicesList:
@@ -1826,6 +1922,13 @@ private:
         result.selected_agentic_mode_id = std::move(selected_agentic_mode_id);
         result.enabled_agentic_mode_ids = std::move(enabled_agentic_mode_ids);
         result.enable_chat_logging = (IsDlgButtonChecked(hwnd_, kChatLoggingCheck) == BST_CHECKED);
+        result.allow_manual_context_compression = (IsDlgButtonChecked(hwnd_, kManualContextCompressionCheck) == BST_CHECKED);
+        result.enable_web_debugging = (IsDlgButtonChecked(hwnd_, kWebDebuggingCheck) == BST_CHECKED);
+        result.built_in_powershell_enabled = internal_powershell_enabled_;
+        result.built_in_powershell_working_directory = Trim(WideToUtf8(GetWindowTextString(internal_powershell_workdir_edit_)));
+        if (result.built_in_powershell_working_directory.empty()) {
+            result.built_in_powershell_working_directory = "$ProjectFolder$";
+        }
         return result;
     }
 
@@ -2063,7 +2166,7 @@ private:
                 [&](const AgenticModeConfig& m) { return m.id == settings.selected_agentic_mode_id; });
             if (it != options_.agentic_modes.end()) {
                 const std::string mode_instructions =
-                    variable_resolver::ExpandTemplate(it->instructions, resolved_values);
+                    variable_resolver::ExpandTemplate(NormalizeNewlinesToLf(it->instructions), resolved_values);
                 if (!Trim(mode_instructions).empty()) {
                     if (!context.empty()) context += "\n\n";
                     context += "Agentic Mode Instructions (" + it->name + "):\n";
@@ -2342,6 +2445,17 @@ private:
     HWND agentic_modes_list_label_ = nullptr;
     HWND agentic_modes_list_ = nullptr;
     HWND chat_logging_check_ = nullptr;
+    HWND manual_context_compression_check_ = nullptr;
+    HWND web_debugging_check_ = nullptr;
+    HWND internal_tools_header_ = nullptr;
+    HWND internal_tools_list_ = nullptr;
+    HWND internal_tool_settings_panel_ = nullptr;
+    HWND internal_powershell_enabled_check_ = nullptr;
+    HWND internal_powershell_workdir_label_ = nullptr;
+    HWND internal_powershell_workdir_edit_ = nullptr;
+    HWND internal_powershell_risk_label_ = nullptr;
+    bool internal_powershell_enabled_ = false;
+    bool toggling_internal_tool_ = false;
     std::vector<bool> agentic_mode_enabled_;
     bool toggling_agentic_mode_ = false;
 

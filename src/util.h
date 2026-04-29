@@ -12,6 +12,22 @@ std::string WideToUtf8(const std::wstring& value);
 std::string Trim(const std::string& value);
 std::wstring TrimWide(const std::wstring& value);
 
+inline std::string NormalizeNewlinesToLf(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == '\r') {
+            if (i + 1 < value.size() && value[i + 1] == '\n') {
+                continue;
+            }
+            out.push_back('\n');
+        } else {
+            out.push_back(value[i]);
+        }
+    }
+    return out;
+}
+
 std::string MakeId(const std::string& prefix);
 std::string CurrentTimestampUtc();
 

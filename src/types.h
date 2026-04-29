@@ -640,4 +640,8 @@ struct ProjectSettings {
     std::string selected_agentic_mode_id;       // ID of the default agentic mode for this project
     std::vector<std::string> enabled_agentic_mode_ids; // IDs of agentic modes enabled for this project
     bool enable_chat_logging = false;             // Enable detailed per-chat/request logging for this project
+    bool allow_manual_context_compression = false; // Allow manual context window compression from web UI
+    bool enable_web_debugging = false;             // Allow prompt/context debugging bubbles in the web UI
+    bool built_in_powershell_enabled = false;      // Enable high-risk built-in PowerShell execution tool
+    std::string built_in_powershell_working_directory = "$ProjectFolder$";
 };

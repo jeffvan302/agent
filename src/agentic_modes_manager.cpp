@@ -41,6 +41,21 @@ static std::string MakeId() {
     return "mode_" + std::to_string(GetTickCount64());
 }
 
+static std::wstring TextForMultilineEdit(const std::string& value) {
+    const std::string normalized = NormalizeNewlinesToLf(value);
+    std::wstring wide = Utf8ToWide(normalized);
+    std::wstring out;
+    out.reserve(wide.size() + 16);
+    for (wchar_t ch : wide) {
+        if (ch == L'\n') {
+            out += L"\r\n";
+        } else if (ch != L'\r') {
+            out.push_back(ch);
+        }
+    }
+    return out;
+}
+
 class AgenticModesManager {
 public:
     AgenticModesManager(HWND owner, AppStorage* storage)
@@ -161,9 +176,9 @@ private:
             WS_CHILD | WS_VISIBLE | SS_NOPREFIX,
             0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstructionsLabel), nullptr, nullptr);
 
-        instructions_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, MSFTEDIT_CLASS, nullptr,
-            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP |
-            ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_WANTRETURN,
+        instructions_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP |
+            ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
             0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstructionsEdit), nullptr, nullptr);
 
         import_button_ = CreateWindowExW(0, L"BUTTON", L"Import",
@@ -182,7 +197,6 @@ private:
             SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
         }
         SendMessageW(instructions_edit_, WM_SETFONT, reinterpret_cast<WPARAM>(mono_font_), TRUE);
-        SendMessageW(instructions_edit_, EM_SETBKGNDCOLOR, 0, GetSysColor(COLOR_WINDOW));
 
         tab_order_ = {mode_list_, add_mode_button_, delete_mode_button_,
                       name_edit_, instructions_edit_, import_button_, close_button_};
@@ -193,7 +207,7 @@ private:
             loaded_index_ = 0;
             suppress_autosave_ = true;
             SetWindowTextW(name_edit_, Utf8ToWide(modes_[0].name).c_str());
-            SetWindowTextW(instructions_edit_, Utf8ToWide(modes_[0].instructions).c_str());
+            SetWindowTextW(instructions_edit_, TextForMultilineEdit(modes_[0].instructions).c_str());
             EnableWindow(name_edit_, TRUE);
             EnableWindow(instructions_edit_, TRUE);
             EnableWindow(import_button_, TRUE);
@@ -325,7 +339,7 @@ private:
         if (loaded_index_ < 0 || loaded_index_ >= static_cast<int>(modes_.size())) return;
         suppress_autosave_ = true;
         SetWindowTextW(name_edit_, Utf8ToWide(modes_[loaded_index_].name).c_str());
-        SetWindowTextW(instructions_edit_, Utf8ToWide(modes_[loaded_index_].instructions).c_str());
+        SetWindowTextW(instructions_edit_, TextForMultilineEdit(modes_[loaded_index_].instructions).c_str());
         EnableWindow(name_edit_,    TRUE);
         EnableWindow(instructions_edit_, TRUE);
         EnableWindow(import_button_, TRUE);
@@ -340,7 +354,7 @@ private:
     void FlushLoadedMode() {
         if (loaded_index_ < 0 || loaded_index_ >= static_cast<int>(modes_.size())) return;
         std::string new_name = WideToUtf8(TrimWide(GetWindowTextString(name_edit_)));
-        std::string new_instructions = WideToUtf8(GetWindowTextString(instructions_edit_));
+        std::string new_instructions = NormalizeNewlinesToLf(WideToUtf8(GetWindowTextString(instructions_edit_)));
         if (modes_[loaded_index_].name == new_name &&
             modes_[loaded_index_].instructions == new_instructions) return;
         modes_[loaded_index_].name            = std::move(new_name);
@@ -384,7 +398,7 @@ private:
                 static_cast<unsigned char>(content[2]) == 0xbf) {
                 content.erase(0, 3);
             }
-            SetWindowTextW(instructions_edit_, Utf8ToWide(content).c_str());
+            SetWindowTextW(instructions_edit_, TextForMultilineEdit(content).c_str());
             SaveLoadedMode();
         } catch (...) {}
     }

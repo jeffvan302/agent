@@ -46,6 +46,9 @@ let state = {
   projectAgenticModes:       [],
   projectDefaultAgenticModeId: '',
   projectEnabledAgenticModeIds: [],
+  projectAllowManualCompress: false,
+  projectEnableWebDebugging: false,
+  webDebuggingActive: false,
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -61,6 +64,8 @@ const headerUser   = $('header-username');
 const headerAccountBtn = $('header-account-btn');
 const agenticModeLabel = $('agentic-mode-label');
 let   agenticModePicker = null;
+const compressBtn      = $('compress-btn');
+const debugBtn         = $('debug-btn');
 const attachBtn    = $('attach-btn');
 const fileInput    = $('file-input');
 const attachList   = $('attach-list');
@@ -539,6 +544,9 @@ function renderMessages(messages) {
     return;
   }
   for (const msg of messages) {
+    if (msg && msg.role === 'web_debug' && !state.webDebuggingActive) {
+      continue;
+    }
     if (msg &&
         msg.role === 'assistant' &&
         Array.isArray(msg.ui_trace) &&
@@ -822,6 +830,10 @@ function normalizeCompressionRecord(content) {
   return {
     text: record.text || 'Context window compressed.',
     status: record.status === 'live' ? 'live' : 'done',
+    before_messages: record.before_messages,
+    after_messages: record.after_messages,
+    compressed_through: record.compressed_through,
+    created_at: record.created_at,
   };
 }
 
@@ -837,36 +849,56 @@ function createCompressionRow(content) {
   lbl.setAttribute('aria-hidden', 'true');
 
   const bubble = document.createElement('div');
-  bubble.className = 'compression-status-bubble';
+  bubble.className = 'compression-status-bubble status-' + record.status;
 
+  // Icon
   const icon = document.createElement('span');
-  icon.className = 'compression-status-icon';
+  icon.className = 'compression-status-icon status-' + record.status;
+  if (record.status === 'done') icon.textContent = '\u2713';
   bubble.appendChild(icon);
+
+  // Text column
+  const col = document.createElement('div');
+  col.style.display = 'flex';
+  col.style.flexDirection = 'column';
+  col.style.gap = '2px';
 
   const text = document.createElement('span');
   text.className = 'compression-status-text';
-  bubble.appendChild(text);
+  text.textContent = record.text;
+  col.appendChild(text);
 
-  row.appendChild(lbl);
-  row.appendChild(bubble);
-
-  function render(nextRecord) {
-    record = normalizeCompressionRecord(nextRecord);
-    bubble.className = 'compression-status-bubble status-' + record.status;
-    icon.className = 'compression-status-icon status-' + record.status;
-    icon.textContent = record.status === 'done' ? '\u2713' : '';
-    text.textContent = record.text;
+  // Metadata line (only if present)
+  if (record.before_messages !== undefined || record.created_at) {
+    const meta = document.createElement('span');
+    meta.style.cssText = 'font-size:11px;color:var(--color-text-muted);';
+    const parts = [];
+    if (typeof record.before_messages === 'number' && typeof record.after_messages === 'number') {
+      parts.push(record.before_messages + ' \u2192 ' + record.after_messages + ' messages');
+    }
+    if (record.created_at) {
+      parts.push(new Date(record.created_at).toLocaleString());
+    }
+    meta.textContent = parts.join('  \u00B7  ');
+    col.appendChild(meta);
   }
 
-  render(record);
+  bubble.appendChild(col);
+  row.appendChild(lbl);
+  row.appendChild(bubble);
 
   return {
     row,
     update(nextRecord) {
-      render(Object.assign({}, record, nextRecord || {}));
+      const r = normalizeCompressionRecord(Object.assign({}, record, nextRecord || {}));
+      record = r;
+      bubble.className = 'compression-status-bubble status-' + r.status;
+      icon.className = 'compression-status-icon status-' + r.status;
+      icon.textContent = r.status === 'done' ? '\u2713' : '';
+      text.textContent = r.text;
     },
     finalize(finalText) {
-      render({
+      this.update({
         text: finalText || record.text || 'Context window compressed.',
         status: 'done',
       });
@@ -1254,11 +1286,71 @@ function createToolUsageRow(content) {
   };
 }
 
+function parseWebDebugRecord(content) {
+  if (!content) return {};
+  if (typeof content === 'object') return content;
+  try {
+    return JSON.parse(content);
+  } catch (_) {
+    return { system_prompt: String(content || '') };
+  }
+}
+
+function createDebugSection(title, text) {
+  const details = document.createElement('details');
+  details.className = 'web-debug-section';
+  details.open = title === 'System Prompt';
+
+  const summary = document.createElement('summary');
+  summary.textContent = title;
+  details.appendChild(summary);
+
+  const pre = document.createElement('pre');
+  pre.textContent = text && String(text).trim() ? String(text) : '(empty)';
+  details.appendChild(pre);
+  return details;
+}
+
+function formatDebugMessages(messages) {
+  if (!Array.isArray(messages) || !messages.length) return '(none)';
+  return messages.map((msg, idx) => {
+    const role = msg && msg.role ? msg.role : 'message';
+    const content = msg && msg.content ? msg.content : '';
+    return `#${idx + 1} [${role}]\n${content}`;
+  }).join('\n\n---\n\n');
+}
+
+function buildWebDebugRow(content) {
+  const record = parseWebDebugRecord(content);
+  const row = document.createElement('div');
+  row.className = 'message-row web-debug';
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = 'Debug';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'web-debug-bubble';
+
+  const title = document.createElement('div');
+  title.className = 'web-debug-title';
+  title.textContent = 'Prompt sent to model';
+  bubble.appendChild(title);
+  bubble.appendChild(createDebugSection('System Prompt', record.system_prompt || ''));
+  bubble.appendChild(createDebugSection('User Prompt', record.user_prompt || ''));
+  bubble.appendChild(createDebugSection('Context Messages', formatDebugMessages(record.request_messages)));
+
+  row.appendChild(lbl);
+  row.appendChild(bubble);
+  return row;
+}
+
 function buildMessageRow(role, content) {
   if (role === 'file') return buildFileUploadRow(content);
   if (role === 'context') return buildContextUsageRow(content);
   if (role === 'compression') return buildCompressionRow(content);
   if (role === 'tool_usage') return createToolUsageRow(content).row;
+  if (role === 'web_debug') return buildWebDebugRow(content);
 
   const row = document.createElement('div');
   row.className = 'message-row ' + (role === 'user' ? 'user' : role === 'error' ? 'error' : 'model');
@@ -1554,12 +1646,19 @@ async function loadProjectAgenticModes(projectId) {
     state.projectAgenticModes = [];
     state.projectDefaultAgenticModeId = '';
     state.projectEnabledAgenticModeIds = [];
+    state.projectEnableWebDebugging = false;
+    setWebDebuggingActive(false);
     return;
   }
   const data = await resp.json();
   state.projectDefaultAgenticModeId = data.default_id || '';
   state.projectEnabledAgenticModeIds = data.enabled_ids || [];
   state.projectAgenticModes = data.modes || [];
+  state.projectAllowManualCompress = data.allow_manual_context_compression || false;
+  state.projectEnableWebDebugging = data.enable_web_debugging || false;
+  if (!state.projectEnableWebDebugging) {
+    setWebDebuggingActive(false);
+  }
 
   // Load chat-level override from chat metadata (not available via API yet)
   for (const chat of (state.chats[projectId] || [])) {
@@ -1573,6 +1672,69 @@ async function loadProjectAgenticModes(projectId) {
 function currentAgenticModeId() {
   if (state.selectedChatAgenticModeId != null) return state.selectedChatAgenticModeId || '';
   return state.projectDefaultAgenticModeId || '';
+}
+
+function removeWebDebugBubbles() {
+  state.messages = state.messages.filter(msg => !(msg && msg.role === 'web_debug'));
+  document.querySelectorAll('.message-row.web-debug').forEach(row => row.remove());
+}
+
+function isWebDebuggingEnabled() {
+  return !!(state.projectEnableWebDebugging && state.webDebuggingActive);
+}
+
+function renderDebugButton() {
+  if (!debugBtn) return;
+  if (!state.projectEnableWebDebugging || !state.selectedChatId) {
+    debugBtn.style.display = 'none';
+    debugBtn.disabled = true;
+    debugBtn.textContent = 'Enable debugging';
+    debugBtn.classList.remove('active');
+    return;
+  }
+  debugBtn.style.display = '';
+  debugBtn.disabled = false;
+  debugBtn.textContent = state.webDebuggingActive ? 'Disable debugging' : 'Enable debugging';
+  debugBtn.classList.toggle('active', state.webDebuggingActive);
+}
+
+function setWebDebuggingActive(active) {
+  state.webDebuggingActive = !!(active && state.projectEnableWebDebugging);
+  if (!state.webDebuggingActive) {
+    removeWebDebugBubbles();
+  }
+  renderDebugButton();
+}
+
+function findLastUserRow() {
+  const rows = Array.from(messagesEl.querySelectorAll('.message-row.user'));
+  return rows.length ? rows[rows.length - 1] : null;
+}
+
+function insertWebDebugMessage(record) {
+  if (!isWebDebuggingEnabled()) return;
+  const msg = {
+    role: 'web_debug',
+    content: JSON.stringify(record || {}),
+    created_at: '',
+  };
+  let insertAt = state.messages.length;
+  for (let i = state.messages.length - 1; i >= 0; --i) {
+    if (state.messages[i] && state.messages[i].role === 'user') {
+      insertAt = i;
+      break;
+    }
+  }
+  state.messages.splice(insertAt, 0, msg);
+
+  const row = buildMessageRow('web_debug', msg.content);
+  const userRow = findLastUserRow();
+  if (userRow && userRow.parentNode === messagesEl) {
+    messagesEl.insertBefore(row, userRow);
+  } else {
+    messagesEl.appendChild(row);
+  }
+  messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
 function renderAgenticModeLabel() {
@@ -1609,6 +1771,11 @@ function renderAgenticModeLabel() {
     agenticModeLabel.style.pointerEvents = 'none';
     agenticModeLabel.title = '';
   }
+  // Compress button visibility
+  if (compressBtn) {
+    compressBtn.style.display = state.projectAllowManualCompress ? 'inline' : 'none';
+  }
+  renderDebugButton();
 }
 
 function openAgenticModePicker() {
@@ -1681,6 +1848,61 @@ function openAgenticModePicker() {
 
 if (agenticModeLabel) {
   agenticModeLabel.addEventListener('click', openAgenticModePicker);
+}
+
+if (compressBtn) {
+  compressBtn.addEventListener('click', async () => {
+    if (!state.selectedChatId || state.sending) return;
+    const ok = confirm(
+      'Compressing the context window will summarize older messages into a compressed block.\n' +
+      'This action cannot be undone.\n\nDo you want to continue?'
+    );
+    if (!ok) return;
+    compressBtn.style.pointerEvents = 'none';
+    compressBtn.style.opacity = '0.5';
+
+    const status = createCompressionRow({ text: 'Compressing context...', status: 'live' });
+    messagesEl.appendChild(status.row);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    try {
+      const resp = await api('POST', `/api/chats/${state.selectedChatId}/compress`);
+      if (resp && resp.ok) {
+        const data = await resp.json();
+        status.finalize(data.message || 'Context compressed.');
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        // Reload messages so the newly persisted compression record appears
+        await loadMessages(state.selectedProjectId, state.selectedChatId);
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        status.finalize(data.message || 'Compression failed.');
+        const icon = status.row.querySelector('.compression-status-icon');
+        if (icon) {
+          icon.textContent = '!';
+          icon.style.borderColor = 'var(--color-accent-danger)';
+          icon.style.color = 'var(--color-accent-danger)';
+        }
+      }
+    } catch (e) {
+      console.error('Compression failed', e);
+      status.finalize('Compression failed.');
+      const icon = status.row.querySelector('.compression-status-icon');
+      if (icon) {
+        icon.textContent = '!';
+        icon.style.borderColor = 'var(--color-accent-danger)';
+        icon.style.color = 'var(--color-accent-danger)';
+      }
+    } finally {
+      compressBtn.style.pointerEvents = '';
+      compressBtn.style.opacity = '';
+    }
+  });
+}
+
+if (debugBtn) {
+  debugBtn.addEventListener('click', () => {
+    setWebDebuggingActive(!state.webDebuggingActive);
+  });
 }
 
 async function loadMessages(projectId, chatId) {
@@ -1966,7 +2188,12 @@ async function sendMessage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ content, attachments: uploadedFiles, selected_agentic_mode_id: state.selectedChatAgenticModeId || '' }),
+      body: JSON.stringify({
+        content,
+        attachments: uploadedFiles,
+        selected_agentic_mode_id: state.selectedChatAgenticModeId || '',
+        web_debug: isWebDebuggingEnabled(),
+      }),
       signal: abortCtrl.signal,
     });
 
@@ -1986,6 +2213,12 @@ async function sendMessage() {
     const streamState = await readSSEStream(resp, ev => {
       if (ev.delta !== undefined) {
         assistantTurn.appendTextDelta(ev.delta);
+      } else if (ev.web_debug) {
+        insertWebDebugMessage({
+          system_prompt: ev.system_prompt || '',
+          user_prompt: ev.user_prompt || '',
+          request_messages: ev.request_messages || [],
+        });
       } else if (ev.queue_state !== undefined) {
         const record = {
           state: ev.queue_state,

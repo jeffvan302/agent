@@ -217,6 +217,7 @@ private:
     // Agentic modes
     void HandleGetProjectAgenticModes(const void* req, void* res);
     void HandleSetChatAgenticMode   (const void* req, void* res);
+    void HandleCompressChat          (const void* req, void* res); // POST /api/chats/:id/compress
 
     // ── Static file serving ───────────────────────────────────────────────
     void HandleStaticOrPage(const void* req, void* res);
@@ -258,7 +259,9 @@ private:
                             const std::function<void(const std::string&, const std::string&)>& on_status = {},
                             const std::function<void(const ProviderQueueStatus&)>& on_queue_status = {},
                             const std::function<void(const std::string&, const std::string&)>& on_activity_status = {},
-                            const std::function<void(const std::string&, const std::string&, const std::string&, const std::string&, const std::string&)>& on_tool_status = {});
+                            const std::function<void(const std::string&, const std::string&, const std::string&, const std::string&, const std::string&)>& on_tool_status = {},
+                            bool web_debug_requested = false,
+                            const std::function<void(const std::string&, const std::string&, const std::vector<MessageRecord>&)>& on_prompt_debug = {});
                             // on_delta returns false to abort early
 
     // Build a PATCH /api/chats/:id rename handler

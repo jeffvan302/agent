@@ -1,10 +1,12 @@
-// AUTO-GENERATED — do not edit by hand.
+﻿// AUTO-GENERATED — do not edit by hand.
 // Including the header first gives const variables external linkage.
 #include "web_assets_default.h"
 
 namespace DefaultWebAssets {
 
-const char kIndexHtml[] = R"ASSET(<!DOCTYPE html>
+const char kIndexHtml[] =
+R"ASSET(
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -54,11 +56,20 @@ const char kIndexHtml[] = R"ASSET(<!DOCTYPE html>
         <div id="attach-list"></div>
       </div>
       <div id="compose">
-        <button id="attach-btn" title="Attach file" disabled>📎</button>
-        <input id="file-input" type="file" multiple style="display:none">
-        <textarea id="message-input" placeholder="Type a message…"
-                  rows="1" disabled></textarea>
-        <button id="send-btn" disabled>Send</button>
+        <div id="compose-top">
+          <div id="compose-top-left">
+            <span id="agentic-mode-label" class="agentic-mode-none">Mode: None</span>
+            <span id="compress-btn" title="Compress context window" style="display:none; margin-left:8px; cursor:pointer; font-size:var(--font-size-small); color:var(--color-accent-primary); user-select:none;">Compress</span>
+          </div>
+          <button id="debug-btn" type="button" style="display:none">Enable debugging</button>
+        </div>
+        <div id="compose-bottom">
+          <button id="attach-btn" title="Attach file" disabled>&#128206;</button>
+          <input id="file-input" type="file" multiple style="display:none">
+          <textarea id="message-input" placeholder="Type a message…"
+                    rows="1" disabled></textarea>
+          <button id="send-btn" disabled>Send</button>
+        </div>
       </div>
     </main>
   </div>
@@ -69,7 +80,7 @@ const char kIndexHtml[] = R"ASSET(<!DOCTYPE html>
   <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
     <div class="app-modal-header">
       <h2 id="account-modal-title">Account</h2>
-      <button type="button" class="app-modal-close" id="account-close-btn" aria-label="Close">&times;</button>
+      <button type="button" class="app-modal-close" id="account-close-btn" aria-label="Close">×</button>
     </div>
     <form id="account-form" class="account-form">
       <div class="form-group">
@@ -120,7 +131,9 @@ const char kIndexHtml[] = R"ASSET(<!DOCTYPE html>
 </html>
 )ASSET";
 
-const char kLoginHtml[] = R"ASSET(<!DOCTYPE html>
+const char kLoginHtml[] =
+R"ASSET(
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -160,7 +173,9 @@ const char kLoginHtml[] = R"ASSET(<!DOCTYPE html>
 </html>
 )ASSET";
 
-const char kChangePasswordHtml[] = R"ASSET(<!DOCTYPE html>
+const char kChangePasswordHtml[] =
+R"ASSET(
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -200,184 +215,13 @@ const char kChangePasswordHtml[] = R"ASSET(<!DOCTYPE html>
   </div>
 
   <script src="/js/change-password.js"></script>
-  <script>
-    // Check if this is a forced reset (no current password needed) by peeking
-    // at the URL param or the login redirect.  The server indicates forced reset
-    // via the /login response body; we store it in sessionStorage for one page hop.
-    const forced = sessionStorage.getItem('force_password_reset') === 'true';
-    if (forced) {
-      document.getElementById('current-group').style.display = 'none';
-      document.getElementById('subtitle').textContent =
-        'Please set a new password before continuing.';
-      sessionStorage.removeItem('force_password_reset');
-    }
-
-    document.getElementById('cp-form').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      const btn     = document.getElementById('cp-btn');
-      const errEl   = document.getElementById('cp-error');
-      const current = document.getElementById('current-password').value;
-      const newPw   = document.getElementById('new-password').value;
-      const confirm = document.getElementById('confirm-password').value;
-
-      errEl.style.display = 'none';
-
-      if (newPw.length < 10) {
-        errEl.textContent   = 'Password must be at least 10 characters.';
-        errEl.style.display = 'block';
-        return;
-      }
-      if (newPw !== confirm) {
-        errEl.textContent   = 'Passwords do not match.';
-        errEl.style.display = 'block';
-        return;
-      }
-
-      btn.disabled    = true;
-      btn.textContent = 'Updating…';
-
-      try {
-        const body = { new_password: newPw };
-        if (!forced) body.current_password = current;
-
-        const resp = await fetch('/api/change-password', {
-          method:      'POST',
-          headers:     { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body:        JSON.stringify(body),
-        });
-        const data = await resp.json();
-        if (resp.ok) {
-          window.location.href = '/';
-        } else {
-          errEl.textContent   = data.error || 'Failed to update password.';
-          errEl.style.display = 'block';
-          btn.disabled        = false;
-          btn.textContent     = 'Update Password';
-        }
-      } catch (err) {
-        errEl.textContent   = 'Network error — please try again.';
-        errEl.style.display = 'block';
-        btn.disabled        = false;
-        btn.textContent     = 'Update Password';
-      }
-    });
-  </script>
 </body>
 </html>
 )ASSET";
 
-const char kLoginJs[] = R"ASSET('use strict';
-
-document.getElementById('login-form').addEventListener('submit', async function(e) {
-  e.preventDefault();
-
-  const btn = document.getElementById('login-btn');
-  const errEl = document.getElementById('login-error');
-  const username = document.getElementById('username').value.trim();
-  const password = document.getElementById('password').value;
-  const rememberMe = !!document.getElementById('remember-me')?.checked;
-
-  btn.disabled = true;
-  btn.textContent = 'Signing in...';
-  errEl.style.display = 'none';
-
-  try {
-    const resp = await fetch('/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password, remember_me: rememberMe }),
-    });
-    const data = await resp.json();
-
-    if (resp.ok) {
-      if (data.force_password_reset) {
-        sessionStorage.setItem('force_password_reset', 'true');
-        window.location.href = '/change-password';
-      } else {
-        window.location.href = '/';
-      }
-    } else {
-      errEl.textContent = data.error || 'Login failed.';
-      errEl.style.display = 'block';
-      btn.disabled = false;
-      btn.textContent = 'Sign In';
-    }
-  } catch (err) {
-    errEl.textContent = 'Network error - is the server running?';
-    errEl.style.display = 'block';
-    btn.disabled = false;
-    btn.textContent = 'Sign In';
-  }
-});
-)ASSET";
-
-const char kChangePasswordJs[] = R"ASSET('use strict';
-
-let forced = sessionStorage.getItem('force_password_reset') === 'true';
-if (forced) {
-  document.getElementById('current-group').style.display = 'none';
-  document.getElementById('subtitle').textContent =
-    'Please set a new password before continuing.';
-  sessionStorage.removeItem('force_password_reset');
-}
-
-document.getElementById('cp-form').addEventListener('submit', async function(e) {
-  e.preventDefault();
-
-  const btn = document.getElementById('cp-btn');
-  const errEl = document.getElementById('cp-error');
-  const current = document.getElementById('current-password').value;
-  const newPw = document.getElementById('new-password').value;
-  const confirm = document.getElementById('confirm-password').value;
-
-  errEl.style.display = 'none';
-
-  if (newPw.length < 10) {
-    errEl.textContent = 'Password must be at least 10 characters.';
-    errEl.style.display = 'block';
-    return;
-  }
-  if (newPw !== confirm) {
-    errEl.textContent = 'Passwords do not match.';
-    errEl.style.display = 'block';
-    return;
-  }
-
-  btn.disabled = true;
-  btn.textContent = 'Updating...';
-
-  try {
-    const body = { new_password: newPw };
-    if (!forced) body.current_password = current;
-
-    const resp = await fetch('/api/change-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
-
-    if (resp.ok) {
-      window.location.href = '/';
-    } else {
-      errEl.textContent = data.error || 'Failed to update password.';
-      errEl.style.display = 'block';
-      btn.disabled = false;
-      btn.textContent = 'Update Password';
-    }
-  } catch (err) {
-    errEl.textContent = 'Network error - please try again.';
-    errEl.style.display = 'block';
-    btn.disabled = false;
-    btn.textContent = 'Update Password';
-  }
-});
-)ASSET";
-
 const char kBaseCss[] =
-    R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
+R"ASSET(
+/* ─────────────────────────────────────────────────────────────────────────
    base.css — Structural layout only.
    All colours, fonts, and radii are CSS custom properties defined by the
    active theme's style.css.  This file contains NO hardcoded values.
@@ -438,95 +282,6 @@ html, body {
   color: var(--color-text-sidebar-active);
 }
 #header-user a { color: var(--color-text-sidebar); text-decoration: underline; cursor: pointer; }
-
-.app-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-.app-modal[hidden] {
-  display: none;
-}
-.app-modal-backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-}
-.app-modal-panel {
-  position: relative;
-  width: min(100%, 520px);
-  max-height: calc(100vh - 48px);
-  overflow-y: auto;
-  background: var(--color-bg-main);
-  border: 1px solid var(--color-border-main);
-  border-radius: var(--radius-card);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.22);
-  padding: 20px;
-}
-.app-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.app-modal-header h2 {
-  font-size: 18px;
-  font-weight: 600;
-}
-.app-modal-close {
-  border: none;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: 24px;
-  line-height: 1;
-  cursor: pointer;
-}
-.account-form .form-group {
-  margin-bottom: 14px;
-}
-.account-form-divider {
-  margin: 18px 0 12px;
-  font-size: var(--font-size-small);
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  text-transform: uppercase;
-}
-.account-form-help {
-  font-size: var(--font-size-small);
-  color: var(--color-text-secondary);
-  margin-top: 4px;
-  margin-bottom: 14px;
-}
-.app-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 16px;
-}
-.app-modal-actions .login-btn {
-  width: auto;
-  margin: 0;
-  padding: 10px 16px;
-}
-.secondary-btn {
-  background: transparent;
-  color: var(--color-text-secondary);
-  border: 1px solid var(--color-border-input);
-  border-radius: var(--radius-button);
-  padding: 10px 16px;
-  cursor: pointer;
-}
-#account-error {
-  display: none;
-  color: var(--color-text-error);
-  font-size: var(--font-size-small);
-  margin-top: 8px;
-}
 
 /* ── Body row (sidebar + main) ────────────────────────────────────────── */
 #body-row {
@@ -641,6 +396,7 @@ html, body {
 .message-row.user { align-self: flex-end; align-items: flex-end; }
 .message-row.model { align-self: flex-start; align-items: flex-start; }
 .message-row.file { align-self: stretch; align-items: stretch; max-width: 920px; }
+.message-row.web-debug { align-self: stretch; align-items: stretch; max-width: 920px; }
 .message-role-label {
   font-size: 11px;
   font-weight: 600;
@@ -753,8 +509,7 @@ html, body {
   overflow-x: auto;
   margin: 0.75em 0;
   padding: 10px;
-)ASSET"
-    R"ASSET(  border: 1px solid var(--color-border-main);
+  border: 1px solid var(--color-border-main);
   border-radius: var(--radius-card);
   background: var(--color-bg-main);
 }
@@ -837,9 +592,17 @@ html, body {
   border-radius: 50%;
 }
 .compression-status-icon.status-live {
-  border: 2px solid var(--color-accent-primary);
-  border-top-color: transparent;
-  animation: compression-spin 0.8s linear infinite;
+  width: 10px;
+  height: 10px;
+  border: none;
+  background-color: #8da1b9;
+  border-radius: 50%;
+  animation: compression-pulse 1.2s ease-in-out infinite;
+}
+@keyframes compression-pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+  100% { opacity: 1; transform: scale(1); }
 }
 .compression-status-icon.status-done {
   display: inline-flex;
@@ -880,7 +643,9 @@ html, body {
   line-height: 1.35;
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
-.provider-queue-status-icon {
+.pro)ASSET"
+R"ASSET(
+vider-queue-status-icon {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
@@ -1095,6 +860,42 @@ html, body {
   color: var(--color-text-error);
 }
 
+.web-debug-bubble {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px dashed var(--color-border-main);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-tool-call);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-small);
+}
+.web-debug-title {
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+}
+.web-debug-section + .web-debug-section { margin-top: 8px; }
+.web-debug-section summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--color-accent-primary);
+  user-select: none;
+}
+.web-debug-section pre {
+  margin-top: 6px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--color-bg-main);
+  border: 1px solid var(--color-border-main);
+  border-radius: 6px;
+  padding: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* ── File upload timeline rows ────────────────────────────────────────── */
 .file-upload-card {
   --file-upload-active: var(--color-accent-primary);
@@ -1260,13 +1061,74 @@ html, body {
 
 /* ── Compose bar ──────────────────────────────────────────────────────── */
 #compose {
-  padding: 12px 20px 16px;
+  padding: 4px 20px 16px;
   border-top: 1px solid var(--color-border-main);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  background: var(--color-bg-main);
+}
+#compose-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 22px;
+}
+#compose-top-left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+#compose-bottom {
   display: flex;
   gap: 10px;
   align-items: flex-end;
-  flex-shrink: 0;
-  background: var(--color-bg-main);
+}
+#agentic-mode-label {
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 8px;
+  border-radius: var(--radius-button);
+  line-height: 1.3;
+}
+.agentic-mode-none {
+  color: var(--color-accent-danger);
+  background: rgba(220,53,69,0.08);
+}
+.agentic-mode-active {
+  color: var(--)ASSET"
+R"ASSET(
+color-accent-primary);
+  background: rgba(0,150,255,0.08);
+}
+.agentic-mode-active.disabled {
+  color: var(--color-text-secondary);
+  background: transparent;
+  cursor: default;
+}
+#debug-btn {
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-button);
+  background: var(--color-bg-input);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+#debug-btn.active {
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+  background: rgba(0,150,255,0.08);
+}
+#debug-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 #attach-btn {
   flex-shrink: 0;
@@ -1292,7 +1154,6 @@ html, body {
   color: var(--color-text-primary);
   resize: none;
   min-height: 44px;
-  max-height: 160px;
   line-height: 1.5;
   transition: border-color 0.15s;
   outline: none;
@@ -1357,8 +1218,7 @@ html, body {
 .form-group { margin-bottom: 16px; }
 .form-group label {
   display: block;
-)ASSET"
-    R"ASSET(  font-size: var(--font-size-small);
+  font-size: var(--font-size-small);
   font-weight: 500;
   color: var(--color-text-secondary);
   margin-bottom: 5px;
@@ -1389,6 +1249,103 @@ html, body {
   width: auto;
   margin: 0;
 }
+.app-modal[hidden] { display: none; }
+.app-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.app-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+}
+.app-modal-panel {
+  position: relative;
+  width: min(100%, 460px);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  background: var(--color-bg-main);
+  border: 1px solid var(--color-border-main);
+  border-radius: var(--radius-card);
+  box-shadow: 0 18px 48px rgba(0,0,0,0.2);
+  padding: 18px;
+}
+.app-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.app-modal-header h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.app-modal-close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.account-form .form-group {
+  margin-bottom: 14px;
+}
+.account-form-divider {
+  margin: 18px 0 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border-main);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-small);
+  font-weight: 600;
+}
+.account-form-help {
+  margin-top: -2px;
+  margin-bottom: 14px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-small);
+}
+.app-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+.app-modal-actions .login-btn {
+  width: auto;
+  margin-top: 0;
+  padding: 10px 14px;
+}
+.secondary-btn {
+  border: 1px solid var(--color-border-main);
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-button);
+  padding: 10px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+.secondary-btn:hover {
+  background: var(--color-bg-sidebar-hover);
+}
+#account-error {
+  margin-top: 14px;
+  padding: 9px 12px;
+  background: #fef2f2;
+  border-radius: var(--radius-input);
+  color: var(--color-text-error);
+  font-size: var(--font-size-small);
+  display: none;
+}
 .login-btn {
   width: 100%;
   padding: 10px;
@@ -1411,11 +1368,124 @@ html, body {
   font-size: var(--font-size-small);
   display: none;
 }
+)ASSET";
 
+const char kLoginJs[] =
+R"ASSET(
+'use strict';
+
+document.getElementById('login-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+
+  const btn = document.getElementById('login-btn');
+  const errEl = document.getElementById('login-error');
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  const rememberMe = !!document.getElementById('remember-me')?.checked;
+
+  btn.disabled = true;
+  btn.textContent = 'Signing in...';
+  errEl.style.display = 'none';
+
+  try {
+    const resp = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, remember_me: rememberMe }),
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      if (data.force_password_reset) {
+        sessionStorage.setItem('force_password_reset', 'true');
+        window.location.href = '/change-password';
+      } else {
+        window.location.href = '/';
+      }
+    } else {
+      errEl.textContent = data.error || 'Login failed.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    }
+  } catch (err) {
+    errEl.textContent = 'Network error - is the server running?';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+});
+)ASSET";
+
+const char kChangePasswordJs[] =
+R"ASSET(
+'use strict';
+
+let forced = sessionStorage.getItem('force_password_reset') === 'true';
+if (forced) {
+  document.getElementById('current-group').style.display = 'none';
+  document.getElementById('subtitle').textContent =
+    'Please set a new password before continuing.';
+  sessionStorage.removeItem('force_password_reset');
+}
+
+document.getElementById('cp-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+
+  const btn = document.getElementById('cp-btn');
+  const errEl = document.getElementById('cp-error');
+  const current = document.getElementById('current-password').value;
+  const newPw = document.getElementById('new-password').value;
+  const confirm = document.getElementById('confirm-password').value;
+
+  errEl.style.display = 'none';
+
+  if (newPw.length < 10) {
+    errEl.textContent = 'Password must be at least 10 characters.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (newPw !== confirm) {
+    errEl.textContent = 'Passwords do not match.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Updating...';
+
+  try {
+    const body = { new_password: newPw };
+    if (!forced) body.current_password = current;
+
+    const resp = await fetch('/api/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      window.location.href = '/';
+    } else {
+      errEl.textContent = data.error || 'Failed to update password.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Update Password';
+    }
+  } catch (err) {
+    errEl.textContent = 'Network error - please try again.';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Update Password';
+  }
+});
 )ASSET";
 
 const char kAppJs[] =
-    R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
+R"ASSET(
+/* ─────────────────────────────────────────────────────────────────────────
    app.js — Web chat application
    Vanilla JS, no framework.  Uses Server-Sent Events for streaming responses.
    ───────────────────────────────────────────────────────────────────────── */
@@ -1459,6 +1529,13 @@ let state = {
   displayName:       '',
   email:             '',
   pendingFiles:      [],     // File objects queued for upload before send
+  selectedChatAgenticModeId: null,
+  projectAgenticModes:       [],
+  projectDefaultAgenticModeId: '',
+  projectEnabledAgenticModeIds: [],
+  projectAllowManualCompress: false,
+  projectEnableWebDebugging: false,
+  webDebuggingActive: false,
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -1472,6 +1549,10 @@ const messageInput = $('message-input');
 const sendBtn      = $('send-btn');
 const headerUser   = $('header-username');
 const headerAccountBtn = $('header-account-btn');
+const agenticModeLabel = $('agentic-mode-label');
+let   agenticModePicker = null;
+const compressBtn      = $('compress-btn');
+const debugBtn         = $('debug-btn');
 const attachBtn    = $('attach-btn');
 const fileInput    = $('file-input');
 const attachList   = $('attach-list');
@@ -1580,6 +1661,31 @@ async function saveAccountSettings(e) {
   }
 }
 
+if (headerAccountBtn) {
+  headerAccountBtn.addEventListener('click', openAccountModal);
+}
+if (accountCloseBtn) {
+  accountCloseBtn.addEventListener('click', closeAccountModal);
+}
+if (accountCancelBtn) {
+  accountCancelBtn.addEventListener('click', closeAccountModal);
+}
+if (accountForm) {
+  accountForm.addEventListener('submit', saveAccountSettings);
+}
+if (accountModal) {
+  accountModal.addEventListener('click', e => {
+    if (e.target && e.target.dataset && e.target.dataset.closeAccountModal === 'true') {
+      closeAccountModal();
+    }
+  });
+}
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && accountModal && !accountModal.hidden) {
+    closeAccountModal();
+  }
+});
+
 // ── Markdown rendering ────────────────────────────────────────────────────
 function renderMarkdown(text, options = {}) {
   const extracted = extractThinkingBlocks(text || '', !!options.streaming);
@@ -1635,8 +1741,7 @@ function replacePlaceholder(html, placeholder, replacement) {
   return html.replace(new RegExp(escaped, 'g'), replacement);
 }
 
-)ASSET"
-    R"ASSET(function postProcessMessageBubble(bubble, options = {}) {
+function postProcessMessageBubble(bubble, options = {}) {
   const renderDiagrams = options.renderDiagrams !== false;
   if (renderDiagrams) {
     renderMermaidBlocks(bubble);
@@ -1732,7 +1837,9 @@ function renderVegaBlocks(container) {
 
     let spec;
     try {
-      spec = JSON.parse(source);
+      spec )ASSET"
+R"ASSET(
+= JSON.parse(source);
       if (spec && typeof spec === 'object' && spec.spec !== undefined &&
           (spec.type === 'vega-lite' || spec.type === 'vega' || spec.type === 'vegalite')) {
         spec = spec.spec;
@@ -1833,6 +1940,7 @@ function renderCytoscapeBlocks(container) {
       }
       return next;
     }) : [];
+
     try {
       const cy = cytoscape({
         container: graphHost,
@@ -1869,7 +1977,7 @@ function renderSvgBlocks(container) {
     pre.replaceWith(host);
 
     if (!/^<svg[\s>]/i.test(source)) {
-      showDiagramError(host, 'SVG', new Error('SVG blocks must start with <svg>.') , source);
+      showDiagramError(host, 'SVG', new Error('SVG blocks must start with <svg>.'), source);
       return;
     }
 
@@ -1918,14 +2026,16 @@ function showDiagramError(host, kind, err, source) {
 }
 
 // ── Message rendering ─────────────────────────────────────────────────────
-)ASSET"
-    R"ASSET(function renderMessages(messages) {
+function renderMessages(messages) {
   messagesEl.innerHTML = '';
   if (messages.length === 0) {
     messagesEl.appendChild(emptyState);
     return;
   }
   for (const msg of messages) {
+    if (msg && msg.role === 'web_debug' && !state.webDebuggingActive) {
+      continue;
+    }
     if (msg &&
         msg.role === 'assistant' &&
         Array.isArray(msg.ui_trace) &&
@@ -1940,8 +2050,7 @@ function showDiagramError(host, kind, err, source) {
 
 const INGESTIBLE_UPLOAD_EXTS = new Set([
   'pdf', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tif', 'tiff',
-)ASSET"
-    R"ASSET(  'doc', 'docx', 'docm', 'xls', 'xlsx', 'xlsm', 'ppt', 'pptx', 'pptm'
+  'doc', 'docx', 'docm', 'xls', 'xlsx', 'xlsm', 'ppt', 'pptx', 'pptm'
 ]);
 
 function fileExtension(name) {
@@ -2093,7 +2202,9 @@ function createFileUploadRow(input, initialStatus) {
   body.appendChild(links);
   body.appendChild(progress);
   card.appendChild(mark);
-  card.appendChild(body);
+  card.appendChild(b)ASSET"
+R"ASSET(
+ody);
   row.appendChild(lbl);
   row.appendChild(card);
 
@@ -2210,6 +2321,10 @@ function normalizeCompressionRecord(content) {
   return {
     text: record.text || 'Context window compressed.',
     status: record.status === 'live' ? 'live' : 'done',
+    before_messages: record.before_messages,
+    after_messages: record.after_messages,
+    compressed_through: record.compressed_through,
+    created_at: record.created_at,
   };
 }
 
@@ -2225,36 +2340,56 @@ function createCompressionRow(content) {
   lbl.setAttribute('aria-hidden', 'true');
 
   const bubble = document.createElement('div');
-  bubble.className = 'compression-status-bubble';
+  bubble.className = 'compression-status-bubble status-' + record.status;
 
+  // Icon
   const icon = document.createElement('span');
-  icon.className = 'compression-status-icon';
+  icon.className = 'compression-status-icon status-' + record.status;
+  if (record.status === 'done') icon.textContent = '\u2713';
   bubble.appendChild(icon);
+
+  // Text column
+  const col = document.createElement('div');
+  col.style.display = 'flex';
+  col.style.flexDirection = 'column';
+  col.style.gap = '2px';
 
   const text = document.createElement('span');
   text.className = 'compression-status-text';
-  bubble.appendChild(text);
+  text.textContent = record.text;
+  col.appendChild(text);
 
-  row.appendChild(lbl);
-  row.appendChild(bubble);
-
-  function render(nextRecord) {
-    record = normalizeCompressionRecord(nextRecord);
-    bubble.className = 'compression-status-bubble status-' + record.status;
-    icon.className = 'compression-status-icon status-' + record.status;
-    icon.textContent = record.status === 'done' ? '\u2713' : '';
-    text.textContent = record.text;
+  // Metadata line (only if present)
+  if (record.before_messages !== undefined || record.created_at) {
+    const meta = document.createElement('span');
+    meta.style.cssText = 'font-size:11px;color:var(--color-text-muted);';
+    const parts = [];
+    if (typeof record.before_messages === 'number' && typeof record.after_messages === 'number') {
+      parts.push(record.before_messages + ' \u2192 ' + record.after_messages + ' messages');
+    }
+    if (record.created_at) {
+      parts.push(new Date(record.created_at).toLocaleString());
+    }
+    meta.textContent = parts.join('  \u00B7  ');
+    col.appendChild(meta);
   }
 
-  render(record);
+  bubble.appendChild(col);
+  row.appendChild(lbl);
+  row.appendChild(bubble);
 
   return {
     row,
     update(nextRecord) {
-      render(Object.assign({}, record, nextRecord || {}));
+      const r = normalizeCompressionRecord(Object.assign({}, record, nextRecord || {}));
+      record = r;
+      bubble.className = 'compression-status-bubble status-' + r.status;
+      icon.className = 'compression-status-icon status-' + r.status;
+      icon.textContent = r.status === 'done' ? '\u2713' : '';
+      text.textContent = r.text;
     },
     finalize(finalText) {
-      render({
+      this.update({
         text: finalText || record.text || 'Context window compressed.',
         status: 'done',
       });
@@ -2442,11 +2577,12 @@ function normalizeAssistantTrace(trace, fallbackContent = '') {
   return normalized;
 }
 
-)ASSET"
-    R"ASSET(function prettyToolUsageText(value) {
+function prettyToolUsageText(value) {
   if (value == null) return '';
   if (typeof value === 'string') {
-    const trimmed = value.trim();
+    const trim)ASSET"
+R"ASSET(
+med = value.trim();
     if (!trimmed) return '';
     try {
       return JSON.stringify(JSON.parse(trimmed), null, 2);
@@ -2643,11 +2779,71 @@ function createToolUsageRow(content) {
   };
 }
 
+function parseWebDebugRecord(content) {
+  if (!content) return {};
+  if (typeof content === 'object') return content;
+  try {
+    return JSON.parse(content);
+  } catch (_) {
+    return { system_prompt: String(content || '') };
+  }
+}
+
+function createDebugSection(title, text) {
+  const details = document.createElement('details');
+  details.className = 'web-debug-section';
+  details.open = title === 'System Prompt';
+
+  const summary = document.createElement('summary');
+  summary.textContent = title;
+  details.appendChild(summary);
+
+  const pre = document.createElement('pre');
+  pre.textContent = text && String(text).trim() ? String(text) : '(empty)';
+  details.appendChild(pre);
+  return details;
+}
+
+function formatDebugMessages(messages) {
+  if (!Array.isArray(messages) || !messages.length) return '(none)';
+  return messages.map((msg, idx) => {
+    const role = msg && msg.role ? msg.role : 'message';
+    const content = msg && msg.content ? msg.content : '';
+    return `#${idx + 1} [${role}]\n${content}`;
+  }).join('\n\n---\n\n');
+}
+
+function buildWebDebugRow(content) {
+  const record = parseWebDebugRecord(content);
+  const row = document.createElement('div');
+  row.className = 'message-row web-debug';
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = 'Debug';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'web-debug-bubble';
+
+  const title = document.createElement('div');
+  title.className = 'web-debug-title';
+  title.textContent = 'Prompt sent to model';
+  bubble.appendChild(title);
+  bubble.appendChild(createDebugSection('System Prompt', record.system_prompt || ''));
+  bubble.appendChild(createDebugSection('User Prompt', record.user_prompt || ''));
+  bubble.appendChild(createDebugSection('Context Messages', formatDebugMessages(record.request_messages)));
+
+  row.appendChild(lbl);
+  row.appendChild(bubble);
+  return row;
+}
+
 function buildMessageRow(role, content) {
   if (role === 'file') return buildFileUploadRow(content);
   if (role === 'context') return buildContextUsageRow(content);
   if (role === 'compression') return buildCompressionRow(content);
   if (role === 'tool_usage') return createToolUsageRow(content).row;
+  if (role === 'web_debug') return buildWebDebugRow(content);
 
   const row = document.createElement('div');
   row.className = 'message-row ' + (role === 'user' ? 'user' : role === 'error' ? 'error' : 'model');
@@ -2674,8 +2870,7 @@ function buildMessageRow(role, content) {
   return row;
 }
 
-)ASSET"
-    R"ASSET(function createAssistantTurnRow(initialTrace = []) {
+function createAssistantTurnRow(initialTrace = []) {
   const row = document.createElement('div');
   row.className = 'message-row model';
   row.id = 'streaming-row';
@@ -2766,6 +2961,8 @@ function buildMessageRow(role, content) {
 
   function remove() {
     row.remove();
+)ASSET"
+R"ASSET(
   }
 
   render(true);
@@ -2923,6 +3120,7 @@ async function loadChats(projectId) {
 async function selectChat(projectId, chatId, chatName) {
   state.selectedProjectId = projectId;
   state.selectedChatId    = chatId;
+  state.selectedChatAgenticModeId = null;
   document.querySelectorAll('.chat-entry').forEach(el =>
     el.classList.toggle('active', el.dataset.chatId === chatId));
   chatTitle.textContent = stripUserSuffix(chatName);
@@ -2930,7 +3128,278 @@ async function selectChat(projectId, chatId, chatName) {
   sendBtn.disabled      = false;
   newChatBtn.disabled   = false;
   if (attachBtn) attachBtn.disabled = false;
-  await loadMessages(projectId, chatId);
+  await Promise.all([
+    loadMessages(projectId, chatId),
+    loadProjectAgenticModes(projectId),
+  ]);
+  renderAgenticModeLabel();
+}
+
+async function loadProjectAgenticModes(projectId) {
+  const resp = await api('GET', `/api/projects/${projectId}/agentic-modes`);
+  if (!resp || !resp.ok) {
+    state.projectAgenticModes = [];
+    state.projectDefaultAgenticModeId = '';
+    state.projectEnabledAgenticModeIds = [];
+    state.projectEnableWebDebugging = false;
+    setWebDebuggingActive(false);
+    return;
+  }
+  const data = await resp.json();
+  state.projectDefaultAgenticModeId = data.default_id || '';
+  state.projectEnabledAgenticModeIds = data.enabled_ids || [];
+  state.projectAgenticModes = data.modes || [];
+  state.projectAllowManualCompress = data.allow_manual_context_compression || false;
+  state.projectEnableWebDebugging = data.enable_web_debugging || false;
+  if (!state.projectEnableWebDebugging) {
+    setWebDebuggingActive(false);
+  }
+
+  // Load chat-level override from chat metadata (not available via API yet)
+  for (const chat of (state.chats[projectId] || [])) {
+    if (chat.id === state.selectedChatId) {
+      state.selectedChatAgenticModeId = chat.selected_agentic_mode_id || null;
+      break;
+    }
+  }
+}
+
+function currentAgenticModeId() {
+  if (state.selectedChatAgenticModeId != null) return state.selectedChatAgenticModeId || '';
+  return state.projectDefaultAgenticModeId || '';
+}
+
+function removeWebDebugBubbles() {
+  state.messages = state.messages.filter(msg => !(msg && msg.role === 'web_debug'));
+  document.querySelectorAll('.message-row.web-debug').forEach(row => row.remove());
+}
+
+function isWebDebuggingEnabled() {
+  return !!(state.projectEnableWebDebugging && state.webDebuggingActive);
+}
+
+function renderDebugButton() {
+  if (!debugBtn) return;
+  if (!state.projectEnableWebDebugging || !state.selectedChatId) {
+    debugBtn.style.display = 'none';
+    debugBtn.disabled = true;
+    debugBtn.textContent = 'Enable debugging';
+    debugBtn.classList.remove('active');
+    return;
+  }
+  debugBtn.style.display = '';
+  debugBtn.disabled = false;
+  debugBtn.textContent = state.webDebuggingActive ? 'Disable debugging' : 'Enable debugging';
+  debugBtn.classList.toggle('active', state.webDebuggingActive);
+}
+
+function setWebDebuggingActive(active) {
+  state.webDebuggingActive = !!(active && state.projectEnableWebDebugging);
+  if (!state.webDebuggingActive) {
+    removeWebDebugBubbles();
+  }
+  renderDebugButton();
+}
+
+function findLastUserRow() {
+  const rows = Array.from(messagesEl.querySelectorAll('.message-row.user'));
+  return rows.length ? rows[rows.length - 1] : null;
+}
+
+function insertWebDebugMessage(record) {
+  if (!isWebDebuggingEnabled()) return;
+  const msg = {
+    role: 'web_debug',
+    content: JSON.stringify(record || {}),
+    created_at: '',
+  };
+  let insertAt = state.messages.length;
+  for (let i = state.messages.length - 1; i >= 0; --i) {
+    if (state.messages[i] && state.messages[i].role === 'user') {
+      insertAt = i;
+      break;
+    }
+  }
+  state.messages.splice(insertAt, 0, msg);
+
+  const row = buildMessageRow('web_debug', msg.content);
+  const userRow = findLastUserRow();
+  if (userRow && userRow.parentNode === messagesEl) {
+    messagesEl.insertBefore(row, userRow);
+  } else {
+    messagesEl.appendChild(row);
+  }
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function renderAgenticModeLabel() {
+  if (!agenticModeLabel) return;
+  const activeId = currentAgenticModeId();
+  const available = state.projectAgenticModes.filter(m =>
+    state.projectEnabledAgenticModeIds.includes(m.id));
+
+  let labelText = 'None';
+  let hasChoices = available.length > 0;
+
+  if (activeId) {
+    const mode = state.projectAgenticModes.find(m => m.id === activeId);
+    if (mode) labelText = mode.name;
+  } else if (state.projectDefaultAgenticModeId) {
+    const mode = state.projectAgenticModes.find(m => m.id === state.projectDefaultAgenticModeId);
+    if (mode) labelText = mode.name;
+  }
+
+  agenticModeLabel.textContent = 'Mode: ' + labelText;
+  agenticModeLabel.className = activeId
+    ? (hasChoices ? 'agentic-mode-active' : 'agentic-mode-active disabled')
+    : 'agentic-mode-none';
+
+  // Clickable only if there are multiple enabled modes (or more than just the default)
+  const canSwitch = available.length > 1 ||
+    (available.length === 1 && activeId !== available[0].id) ||
+    (available.length === 0 && state.projectAgenticModes.length > 0);
+
+  if (canSwitch) {
+    agenticModeLabel.style.pointerEvents = '';
+    agenticModeLabel.title = 'Click to change agentic mode';
+  } else {
+    agenticModeLabel.style.pointerEvents = 'none';
+    agenticModeLabel.title = '';
+  }
+  // Compress button visibility
+  if (compressBtn) {
+    compressBtn.style.display = state.projectAllowManualCompress ? 'inline' : 'none';
+  }
+  renderDebugButton();
+}
+
+function openAgenticModePicker() {
+  if (agenticModePicker) { agenticModePicker.remove(); agenticModePicker = null; return; }
+
+  const available = state.projectAgenticModes.filter(m =>
+    state.projectEnabledAgenticModeIds.includes(m.id));
+  // Always include current default even if not enabled
+  const current = currentAgenticModeId();
+  const items = [];
+
+  // None option
+  items.push({ id: '', name: 'None' });
+
+  for (const m of available) {
+    items.push(m);
+  }
+  if (current && !items.some(i => i.id === current)) {
+    const m = state.projectAgenticModes.find(x => x.id === current);
+    if (m) items.push(m);
+  }
+
+  const menu = document.createElement('div');
+  menu.id = 'agentic-mode-picker';
+  menu.style.cssText = `
+    position:absolute; bottom:8px; left:20px; z-index:100;
+    background:var(--color-bg-main); border:1px solid var(--color-border-main);
+    border-radius:var(--radius-input); box-shadow:0 4px 12px rgba(0,0,0,0.15);
+    max-height:240px; overflow:auto; min-width:180px;
+  `;
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.style.cssText = `
+      padding:8px 12px; cursor:pointer;
+      color: var(--color-text-primary); font-size:var(--font-size-base);
+      border-bottom:1px solid var(--color-border-main);
+ )ASSET"
+R"ASSET(
+   `;
+    row.textContent = item.name || 'None';
+    if (item.id === current) {
+      row.style.fontWeight = '700';
+      row.style.color = 'var(--color-accent-primary)';
+    }
+    row.addEventListener('mouseenter', () => { row.style.background = 'var(--color-bg-sidebar-hover)'; });
+    row.addEventListener('mouseleave', () => { row.style.background = ''; });
+    row.addEventListener('click', async () => {
+      state.selectedChatAgenticModeId = item.id || '';
+      renderAgenticModeLabel();
+      // Persist per-chat override
+      if (state.selectedChatId) {
+        await api('POST', `/api/chats/${state.selectedChatId}/agentic-mode`, {
+          selected_agentic_mode_id: state.selectedChatAgenticModeId,
+        });
+      }
+      menu.remove(); agenticModePicker = null;
+    });
+    menu.appendChild(row);
+  }
+  document.body.appendChild(menu);
+  agenticModePicker = menu;
+
+  // Close on outside click
+  const close = e => {
+    if (!menu.contains(e.target) && e.target !== agenticModeLabel) {
+      menu.remove(); agenticModePicker = null;
+      document.removeEventListener('click', close);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
+
+if (agenticModeLabel) {
+  agenticModeLabel.addEventListener('click', openAgenticModePicker);
+}
+
+if (compressBtn) {
+  compressBtn.addEventListener('click', async () => {
+    if (!state.selectedChatId || state.sending) return;
+    const ok = confirm(
+      'Compressing the context window will summarize older messages into a compressed block.\n' +
+      'This action cannot be undone.\n\nDo you want to continue?'
+    );
+    if (!ok) return;
+    compressBtn.style.pointerEvents = 'none';
+    compressBtn.style.opacity = '0.5';
+
+    const status = createCompressionRow({ text: 'Compressing context...', status: 'live' });
+    messagesEl.appendChild(status.row);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    try {
+      const resp = await api('POST', `/api/chats/${state.selectedChatId}/compress`);
+      if (resp && resp.ok) {
+        const data = await resp.json();
+        status.finalize(data.message || 'Context compressed.');
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        // Reload messages so the newly persisted compression record appears
+        await loadMessages(state.selectedProjectId, state.selectedChatId);
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        status.finalize(data.message || 'Compression failed.');
+        const icon = status.row.querySelector('.compression-status-icon');
+        if (icon) {
+          icon.textContent = '!';
+          icon.style.borderColor = 'var(--color-accent-danger)';
+          icon.style.color = 'var(--color-accent-danger)';
+        }
+      }
+    } catch (e) {
+      console.error('Compression failed', e);
+      status.finalize('Compression failed.');
+      const icon = status.row.querySelector('.compression-status-icon');
+      if (icon) {
+        icon.textContent = '!';
+        icon.style.borderColor = 'var(--color-accent-danger)';
+        icon.style.color = 'var(--color-accent-danger)';
+      }
+    } finally {
+      compressBtn.style.pointerEvents = '';
+      compressBtn.style.opacity = '';
+    }
+  });
+}
+
+if (debugBtn) {
+  debugBtn.addEventListener('click', () => {
+    setWebDebuggingActive(!state.webDebuggingActive);
+  });
 }
 
 async function loadMessages(projectId, chatId) {
@@ -2972,8 +3441,7 @@ async function deleteChat(projectId, chatId) {
   if (listEl) renderChatItems(projectId, listEl);
 }
 
-)ASSET"
-    R"ASSET(// ── Chat rename ───────────────────────────────────────────────────────────
+// ── Chat rename ───────────────────────────────────────────────────────────
 async function renameChat(projectId, chatId, newName) {
   const resp = await api('PATCH', `/api/chats/${chatId}`, { name: newName });
   if (!resp || !resp.ok) return false;
@@ -3147,6 +3615,7 @@ async function uploadPendingFiles(chatId) {
       renderAttachList();
     }
   }
+
   renderAttachList();
   if (errors.length) {
     throw new Error(errors.join('; '));
@@ -3189,7 +3658,9 @@ async function sendMessage() {
 
   // Build display content (append uploaded file names if any)
   let displayContent = content;
-  if (uploadedFiles.length) {
+  if (uploa)ASSET"
+R"ASSET(
+dedFiles.length) {
     displayContent += '\n\n\uD83D\uDCCE ' + uploadedFiles.join(', ');
   }
 
@@ -3216,7 +3687,12 @@ async function sendMessage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ content, attachments: uploadedFiles }),
+      body: JSON.stringify({
+        content,
+        attachments: uploadedFiles,
+        selected_agentic_mode_id: state.selectedChatAgenticModeId || '',
+        web_debug: isWebDebuggingEnabled(),
+      }),
       signal: abortCtrl.signal,
     });
 
@@ -3236,6 +3712,12 @@ async function sendMessage() {
     const streamState = await readSSEStream(resp, ev => {
       if (ev.delta !== undefined) {
         assistantTurn.appendTextDelta(ev.delta);
+      } else if (ev.web_debug) {
+        insertWebDebugMessage({
+          system_prompt: ev.system_prompt || '',
+          user_prompt: ev.user_prompt || '',
+          request_messages: ev.request_messages || [],
+        });
       } else if (ev.queue_state !== undefined) {
         const record = {
           state: ev.queue_state,
@@ -3320,8 +3802,7 @@ async function sendMessage() {
       } else if (ev.error) {
         errorMsg = ev.error;
       }
-)ASSET"
-    R"ASSET(    }, abortCtrl.signal);
+    }, abortCtrl.signal);
 
     if (!errorMsg && !streamState.completed && !streamState.aborted) {
       errorMsg = 'The response stream ended before the server sent a completion event.';
@@ -3402,35 +3883,12 @@ messageInput.addEventListener('keydown', e => {
     sendMessage();
   }
 });
-if (headerAccountBtn) {
-  headerAccountBtn.addEventListener('click', openAccountModal);
-}
-if (accountCloseBtn) {
-  accountCloseBtn.addEventListener('click', closeAccountModal);
-}
-if (accountCancelBtn) {
-  accountCancelBtn.addEventListener('click', closeAccountModal);
-}
-if (accountForm) {
-  accountForm.addEventListener('submit', saveAccountSettings);
-}
-if (accountModal) {
-  accountModal.addEventListener('click', e => {
-    if (e.target && e.target.dataset && e.target.dataset.closeAccountModal === 'true') {
-      closeAccountModal();
-    }
-  });
-}
-window.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && accountModal && !accountModal.hidden) {
-    closeAccountModal();
-  }
-});
 
 // ── Textarea auto-resize ──────────────────────────────────────────────────
 function resizeTextarea() {
   messageInput.style.height = 'auto';
-  messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + 'px';
+  const maxH = Math.floor(window.innerHeight / 3);
+  messageInput.style.height = Math.min(messageInput.scrollHeight, maxH) + 'px';
 }
 messageInput.addEventListener('input', resizeTextarea);
 
@@ -3482,11 +3940,11 @@ async function init() {
 }
 
 init();
-
 )ASSET";
 
 const char kThemeDefaultCss[] =
-    R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
+R"ASSET(
+/* ─────────────────────────────────────────────────────────────────────────
    Default Light Theme — overrides CSS custom properties defined in base.css
    ───────────────────────────────────────────────────────────────────────── */
 :root {
@@ -3546,10 +4004,11 @@ const char kThemeDefaultCss[] =
   --radius-input:   6px;
   --radius-card:    8px;
 }
-
 )ASSET";
 
-const char kThemeDefaultJson[] = R"ASSET({
+const char kThemeDefaultJson[] =
+R"ASSET(
+{
   "name": "Default Light",
   "author": "Nardana Inc.",
   "version": "1.0",
@@ -3558,7 +4017,8 @@ const char kThemeDefaultJson[] = R"ASSET({
 )ASSET";
 
 const char kThemeDarkCss[] =
-    R"ASSET(/* ─────────────────────────────────────────────────────────────────────────
+R"ASSET(
+/* ─────────────────────────────────────────────────────────────────────────
    Dark Theme — overrides CSS custom properties for a dark UI
    ───────────────────────────────────────────────────────────────────────── */
 :root {
@@ -3618,10 +4078,11 @@ const char kThemeDarkCss[] =
   --radius-input:   4px;
   --radius-card:    6px;
 }
-
 )ASSET";
 
-const char kThemeDarkJson[] = R"ASSET({
+const char kThemeDarkJson[] =
+R"ASSET(
+{
   "name": "Dark",
   "author": "Nardana Inc.",
   "version": "1.0",

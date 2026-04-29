@@ -1,9 +1,11 @@
 {
+  "allow_manual_context_compression": true,
+  "built_in_powershell_enabled": true,
+  "built_in_powershell_working_directory": "$ProjectFolder$",
   "compression_configs": [],
   "enable_chat_logging": true,
+  "enable_web_debugging": true,
   "enabled_agentic_mode_ids": [
-    "mode_1135061031",
-    "mode_1141688484",
     "mode_1155308375",
     "mode_1155581546"
   ],
@@ -68,6 +70,6 @@
       "retrieval_priority": 10
     }
   ],
-  "selected_agentic_mode_id": "mode_1135061031",
+  "selected_agentic_mode_id": "",
   "selected_compression_config_id": "cc_1776744536752_9"
 }

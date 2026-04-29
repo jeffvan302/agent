@@ -28,6 +28,7 @@
 #include "web_assets_default.h"
 
 #include "artifact_memory_tool_bridge.h"
+#include "built_in_tools.h"
 #include "mcp_manager.h"
 #include "openai_client.h"
 #include "rag_tool_bridge.h"
@@ -48,6 +49,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #pragma comment(lib, "bcrypt.lib")
@@ -2149,22 +2151,25 @@ void WebServer::HandleLogin(const void* req_ptr, void* res_ptr) {
     const std::optional<int> max_age_seconds = remember_me
         ? std::optional<int>(kRememberMeLifetimeDays * 24 * 60 * 60)
         : std::nullopt;
+
     const std::string cookie = BuildSessionCookieHeader(
         config_, token, max_age_seconds);
     res->set_header("Set-Cookie", cookie);
 
-    if (form_post) {
-        SendRedirect(res, "/");
-        return;
-    }
-
     json resp = {
-        {"ok",                    true},
-        {"force_password_reset",  user_opt->force_password_reset},
-        {"display_name",          user_opt->display_name},
+        {"ok",           true},
+        {"display_name", user_opt->display_name},
     };
+    if (remember_me) {
+        resp["remember_me"] = true;
+    }
     SendJson(res_ptr, 200, resp.dump());
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// HandleCompressChat — POST /api/chats/:id/compress
+// (Full implementation further below to keep route handlers together)
+// ──────────────────────────────────────────────────────────────────────────────
 
 void WebServer::HandleLogout(const void* req_ptr, void* res_ptr) {
     const auto* req = static_cast<const httplib::Request*>(req_ptr);
@@ -2465,6 +2470,8 @@ void WebServer::HandleGetProjectAgenticModes(const void* req_ptr, void* res_ptr)
         {"default_id", proj_settings.selected_agentic_mode_id},
         {"enabled_ids", proj_settings.enabled_agentic_mode_ids},
         {"modes", modes_arr},
+        {"allow_manual_context_compression", proj_settings.allow_manual_context_compression},
+        {"enable_web_debugging", proj_settings.enable_web_debugging},
     };
     SendJson(res_ptr, 200, resp.dump());
 }
@@ -2499,6 +2506,106 @@ void WebServer::HandleSetChatAgenticMode(const void* req_ptr, void* res_ptr) {
         }
     }
     SendError(res_ptr, 404, "Chat not found");
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// HandleRenameChat — PATCH /api/chats/:id
+// Body: { "name": "new title" }
+// ──────────────────────────────────────────────────────────────────────────────
+void WebServer::HandleCompressChat(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string chat_id = req->path_params.at("id");
+
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    auto proj_settings = storage_->LoadProjectSettings(*project_id);
+    if (!proj_settings.allow_manual_context_compression) {
+        SendError(res_ptr, 403, "Manual context compression is not enabled for this project");
+        return;
+    }
+    if (proj_settings.selected_compression_config_id.empty()) {
+        SendError(res_ptr, 400, "No context window compression config selected");
+        return;
+    }
+
+    auto config = compression_service_.GetGlobalConfig(proj_settings.selected_compression_config_id);
+    if (!config) {
+        SendError(res_ptr, 400, "Compression config not found");
+        return;
+    }
+
+    auto messages = storage_->LoadMessages(*project_id, chat_id);
+    // Strip non-model-visible messages before compression
+    std::vector<MessageRecord> visible;
+    visible.reserve(messages.size());
+    for (const auto& m : messages) {
+        if (m.role == "user" || m.role == "assistant" || m.role == "system") {
+            visible.push_back(m);
+        }
+    }
+
+    auto model_caller = [&](const ChatRequestOptions& opts) -> std::optional<ChatCompletionResult> {
+        auto result = OpenAIClient::CreateSimpleCompletion(opts);
+        return result.success ? std::make_optional(result) : std::nullopt;
+    };
+
+    std::string compressed = compression_service_.CompressConversation(
+        visible, *project_id, chat_id, proj_settings.selected_compression_config_id,
+        model_caller, true, "manual");
+
+    if (compressed.empty()) {
+        SendJson(res_ptr, 200, R"({"ok":false,"message":"No compression needed / nothing to compress"})");
+        return;
+    }
+
+    const auto state_after = compression_service_.LoadChatState(*project_id, chat_id);
+    const size_t compressed_through = state_after.last_compression_message_index;
+    const size_t remaining = visible.size() > compressed_through
+        ? visible.size() - compressed_through
+        : 0;
+
+    // ── Chat log the compression event (if logging enabled) ────────────
+    ChatRequestLogger::MaybeInitialize(
+        runtime_paths_.data_root, *project_id, proj_settings.enable_chat_logging);
+    if (proj_settings.enable_chat_logging) {
+        ChatRequestLogger::Log(*project_id, true,
+            ChatRequestLogger::FormatCompressionBlock(
+                "manual",
+                visible.size(),
+                remaining,
+                compressed_through,
+                compressed,
+                config->name));
+    }
+
+    json record_payload = {
+        {"status", "done"},
+        {"message", "Context compressed successfully"},
+        {"before_messages", visible.size()},
+        {"after_messages", remaining},
+        {"compressed_through", compressed_through},
+    };
+
+    MessageRecord comp_msg;
+    comp_msg.role = "compression";
+    comp_msg.content = record_payload.dump();
+    comp_msg.created_at = NowIso();
+    messages.push_back(comp_msg);
+    storage_->SaveMessages(*project_id, chat_id, messages);
+    NotifyContentChanged();
+
+    json resp = {
+        {"ok", true},
+        {"message", "Context compressed successfully"},
+        {"before_messages", visible.size()},
+        {"after_messages", remaining},
+        {"compressed_through", compressed_through},
+    };
+    SendJson(res_ptr, 200, resp.dump());
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2844,7 +2951,7 @@ ModelVisibleMessages(const std::vector<MessageRecord>& messages) {
     std::vector<MessageRecord> filtered;
     filtered.reserve(messages.size());
     for (const auto& message : messages) {
-        if (message.role == "file") continue;
+        if (message.role == "file" || message.role == "compression") continue;
         filtered.push_back(message);
     }
     return filtered;
@@ -2854,6 +2961,12 @@ struct PreparedWebHistory {
     std::vector<MessageRecord> request_history;
     std::string compressed_context;
     std::optional<ContextCompressionConfig> selected_config;
+    std::optional<MessageRecord> compression_record;
+};
+
+struct BuiltWebSystemPrompt {
+    std::string full_prompt;
+    std::vector<std::pair<std::string, std::string>> sections;
 };
 
 void AppendPromptSection(std::string& prompt, const std::string& section) {
@@ -2867,6 +2980,7 @@ void AppendPromptSection(std::string& prompt, const std::string& section) {
 }
 
 PreparedWebHistory PrepareWebRequestHistory(
+    AppStorage* storage,
     ContextCompressionService* compression_service,
     const std::string& project_id,
     const std::string& chat_id,
@@ -2877,6 +2991,7 @@ PreparedWebHistory PrepareWebRequestHistory(
         on_status = {}) {
     PreparedWebHistory prepared;
     prepared.request_history = ModelVisibleMessages(stored_messages);
+    bool compression_generated = false;
 
     if (!compression_service ||
         project_settings.selected_compression_config_id.empty()) {
@@ -2912,6 +3027,7 @@ PreparedWebHistory PrepareWebRequestHistory(
                 false,
                 "automatic",
                 resolved_prompt_variables);
+        compression_generated = !prepared.compressed_context.empty();
         if (on_status) {
             on_status(
                 "compression_done",
@@ -2937,10 +3053,40 @@ PreparedWebHistory PrepareWebRequestHistory(
             prepared.request_history.begin() + first_uncompressed);
     }
 
+    if (storage && compression_generated && !prepared.compressed_context.empty() &&
+        compression_state.last_compression_message_index > 0) {
+        json payload = {
+            {"status", "done"},
+            {"message", "Context window compressed."},
+            {"before_messages", compression_messages.size()},
+            {"after_messages", prepared.request_history.size()},
+            {"compressed_through", compression_state.last_compression_message_index},
+        };
+        MessageRecord comp_msg;
+        comp_msg.role = "compression";
+        comp_msg.content = payload.dump();
+        comp_msg.created_at = NowIso();
+        prepared.compression_record = comp_msg;
+
+        // ── Chat log the automatic compression event ────────────────
+        ChatRequestLogger::MaybeInitialize(
+            storage->data_root(), project_id, project_settings.enable_chat_logging);
+        if (project_settings.enable_chat_logging && prepared.selected_config) {
+            ChatRequestLogger::Log(project_id, true,
+                ChatRequestLogger::FormatCompressionBlock(
+                    "automatic",
+                    compression_messages.size(),
+                    prepared.request_history.size(),
+                    compression_state.last_compression_message_index,
+                    prepared.compressed_context,
+                    prepared.selected_config->name));
+        }
+    }
+
     return prepared;
 }
 
-std::string BuildWebSystemPrompt(
+BuiltWebSystemPrompt BuildWebSystemPrompt(
     McpManager* mcp_manager,
     AppStorage* storage,
     RagService* rag_service,
@@ -2952,14 +3098,19 @@ std::string BuildWebSystemPrompt(
     const std::vector<ProjectMcpVariableValue>& resolved_prompt_variables,
     const std::string& compressed_context,
     const std::string& chat_selected_agentic_mode_id) {
-    std::string system_prompt = compressed_context;
+    BuiltWebSystemPrompt built;
+    built.full_prompt = compressed_context;
+    if (!compressed_context.empty()) {
+        built.sections.push_back({"Compressed Context", compressed_context});
+    }
 
     const std::string instructions = variable_resolver::ExpandTemplate(
         project_settings.project_instructions,
         resolved_prompt_variables);
     if (!instructions.empty()) {
         AppendPromptSection(
-            system_prompt, "Project Instructions:\n" + instructions);
+            built.full_prompt, "Project Instructions:\n" + instructions);
+        built.sections.push_back({"Project Instructions", instructions});
     }
 
     // Inject selected agentic mode instructions (per-chat override wins)
@@ -2972,10 +3123,11 @@ std::string BuildWebSystemPrompt(
             [&](const AgenticModeConfig& m) { return m.id == mode_id; });
         if (it != all_modes.end()) {
             const std::string mode_instructions = variable_resolver::ExpandTemplate(
-                Trim(it->instructions), resolved_prompt_variables);
+                Trim(NormalizeNewlinesToLf(it->instructions)), resolved_prompt_variables);
             if (!mode_instructions.empty()) {
-                AppendPromptSection(system_prompt,
+                AppendPromptSection(built.full_prompt,
                     "Agentic Mode Instructions (" + it->name + "):\n" + mode_instructions);
+                built.sections.push_back({"Agentic Mode: " + it->name, mode_instructions});
             }
         }
     }
@@ -2983,24 +3135,31 @@ std::string BuildWebSystemPrompt(
     if (mcp_manager) {
         EnsureProjectMcpConnections(
             mcp_manager, project_id, runtime_variables);
-        AppendPromptSection(
-            system_prompt,
-            BuildMcpProjectContext(
-                mcp_manager, storage, project_id, runtime_variables));
+        const std::string mcp_project_context = BuildMcpProjectContext(
+            mcp_manager, storage, project_id, runtime_variables);
+        AppendPromptSection(built.full_prompt, mcp_project_context);
+        if (!mcp_project_context.empty()) {
+            built.sections.push_back({"MCP Project Context", mcp_project_context});
+        }
     }
 
     if (rag_service) {
-        AppendPromptSection(
-            system_prompt,
-            rag_tools::BuildRagProjectContext(rag_service, project_id));
+        const std::string rag_context =
+            rag_tools::BuildRagProjectContext(rag_service, project_id);
+        AppendPromptSection(built.full_prompt, rag_context);
+        if (!rag_context.empty()) {
+            built.sections.push_back({"RAG Project Context", rag_context});
+        }
     }
 
-    AppendPromptSection(
-        system_prompt,
-        BuildWebFormattingContext(
-            BuildServerAddress(config), project_id, chat_id));
+    const std::string formatting_context = BuildWebFormattingContext(
+        BuildServerAddress(config), project_id, chat_id);
+    AppendPromptSection(built.full_prompt, formatting_context);
+    if (!formatting_context.empty()) {
+        built.sections.push_back({"Web Formatting Context", formatting_context});
+    }
 
-    return system_prompt;
+    return built;
 }
 
 void MaybeScheduleCompression(
@@ -3094,13 +3253,14 @@ WebServer::CallModel(const std::string& project_id,
     // Load existing message history and prepare any compressed request view.
     const auto stored_messages = storage_->LoadMessages(project_id, chat_id);
     const auto prepared_history = PrepareWebRequestHistory(
+        storage_,
         &compression_service_,
         project_id,
         chat_id,
         proj_settings,
         stored_messages,
         resolved_prompt_variables);
-    const std::string system_prompt = BuildWebSystemPrompt(
+    const auto built_system_prompt = BuildWebSystemPrompt(
         mcp_manager_,
         storage_,
         rag_service_,
@@ -3112,8 +3272,12 @@ WebServer::CallModel(const std::string& project_id,
         resolved_prompt_variables,
         prepared_history.compressed_context,
         chat_selected_agentic_mode_id);
+    const std::string& system_prompt = built_system_prompt.full_prompt;
 
     auto messages = stored_messages;
+    if (prepared_history.compression_record) {
+        messages.push_back(*prepared_history.compression_record);
+    }
 
     // Append the new user message (with any attached file content injected).
     MessageRecord user_msg;
@@ -3141,7 +3305,8 @@ WebServer::CallModel(const std::string& project_id,
     if (logging) {
         log_block = ChatRequestLogger::FormatHeader(ts, project_id, chat_id, username);
         log_block += ChatRequestLogger::FormatProvider(selected_provider, selected_model);
-        log_block += ChatRequestLogger::FormatBlock("System Prompt", system_prompt);
+        log_block += ChatRequestLogger::FormatBlock("System Prompt (Full)", system_prompt);
+        log_block += ChatRequestLogger::FormatSections("System Prompt", built_system_prompt.sections);
         log_block += ChatRequestLogger::FormatBlock("Request Messages", ChatRequestLogger::FormatMessages(opts.messages));
     }
 
@@ -3159,6 +3324,9 @@ WebServer::CallModel(const std::string& project_id,
             chat_id,
             resolved_prompt_variables)
         : artifact_memory_tools::ArtifactMemoryToolSet{};
+    const auto built_in_tool_definitions = selected_model.supports_tools
+        ? built_in_tools::BuildDefinitions(proj_settings)
+        : std::vector<ChatToolDefinition>{};
     tool_definitions.insert(
         tool_definitions.end(),
         rag_tool_set.definitions.begin(),
@@ -3167,6 +3335,10 @@ WebServer::CallModel(const std::string& project_id,
         tool_definitions.end(),
         artifact_tool_set.definitions.begin(),
         artifact_tool_set.definitions.end());
+    tool_definitions.insert(
+        tool_definitions.end(),
+        built_in_tool_definitions.begin(),
+        built_in_tool_definitions.end());
 
     MaybeScheduleCompression(
         &compression_service_,
@@ -3220,6 +3392,12 @@ WebServer::CallModel(const std::string& project_id,
                             tool_call.arguments_json,
                             &rag_tool_set.routes,
                             nullptr,
+                            resolved_prompt_variables);
+                    } else if (built_in_tools::IsBuiltInToolName(tool_call.name)) {
+                        tool_result = built_in_tools::CallTool(
+                            tool_call.name,
+                            tool_call.arguments_json,
+                            proj_settings,
                             resolved_prompt_variables);
                     } else if (mcp_manager_) {
                         tool_result = mcp_manager_->CallExposedTool(
@@ -3384,7 +3562,9 @@ std::string WebServer::StreamModel(const std::string& project_id,
                                    const std::function<void(const std::string&, const std::string&)>& on_status,
                                    const std::function<void(const ProviderQueueStatus&)>& on_queue_status,
                                    const std::function<void(const std::string&, const std::string&)>& on_activity_status,
-                                   const std::function<void(const std::string&, const std::string&, const std::string&, const std::string&, const std::string&)>& on_tool_status)
+                                    const std::function<void(const std::string&, const std::string&, const std::string&, const std::string&, const std::string&)>& on_tool_status,
+                                    bool web_debug_requested,
+                                    const std::function<void(const std::string&, const std::string&, const std::vector<MessageRecord>&)>& on_prompt_debug)
 {
     // Load providers
     const auto providers = storage_->LoadProviders();
@@ -3441,6 +3621,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
     if (chat_info2) chat_selected_agentic_mode_id = chat_info2->selected_agentic_mode_id;
 
     const auto prepared_history = PrepareWebRequestHistory(
+        storage_,
         &compression_service_,
         project_id,
         chat_id,
@@ -3448,7 +3629,14 @@ std::string WebServer::StreamModel(const std::string& project_id,
         stored_messages,
         resolved_prompt_variables,
         on_status);
-    const std::string system_prompt = BuildWebSystemPrompt(
+    if (prepared_history.compression_record) {
+        messages = stored_messages;
+        messages.push_back(*prepared_history.compression_record);
+        messages.push_back(user_msg);
+        storage_->SaveMessages(project_id, chat_id, messages);
+        NotifyContentChanged();
+    }
+    const auto built_system_prompt = BuildWebSystemPrompt(
         mcp_manager_,
         storage_,
         rag_service_,
@@ -3460,6 +3648,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
         resolved_prompt_variables,
         prepared_history.compressed_context,
         chat_selected_agentic_mode_id);
+    const std::string& system_prompt = built_system_prompt.full_prompt;
 
     // Build request (streaming = true)
     ChatRequestOptions opts;
@@ -3471,6 +3660,10 @@ std::string WebServer::StreamModel(const std::string& project_id,
     opts.messages      = prepared_history.request_history;
     opts.messages.push_back(user_msg);
 
+    if (web_debug_requested && proj_settings.enable_web_debugging && on_prompt_debug) {
+        on_prompt_debug(opts.system_prompt, user_msg.content, opts.messages);
+    }
+
     // ── Chat logging setup (StreamModel) ─────────────────────────────
     ChatRequestLogger::MaybeInitialize(
         runtime_paths_.data_root, project_id, proj_settings.enable_chat_logging);
@@ -3480,7 +3673,8 @@ std::string WebServer::StreamModel(const std::string& project_id,
     if (logging) {
         log_header = ChatRequestLogger::FormatHeader(ts, project_id, chat_id, username);
         log_header += ChatRequestLogger::FormatProvider(selected_provider, selected_model);
-        log_header += ChatRequestLogger::FormatBlock("System Prompt", system_prompt);
+        log_header += ChatRequestLogger::FormatBlock("System Prompt (Full)", system_prompt);
+        log_header += ChatRequestLogger::FormatSections("System Prompt", built_system_prompt.sections);
         log_header += ChatRequestLogger::FormatBlock("Request Messages", ChatRequestLogger::FormatMessages(opts.messages));
     }
     // ── End logging setup ──────────────────────────────────────────
@@ -3499,6 +3693,9 @@ std::string WebServer::StreamModel(const std::string& project_id,
             chat_id,
             resolved_prompt_variables)
         : artifact_memory_tools::ArtifactMemoryToolSet{};
+    const auto built_in_tool_definitions = selected_model.supports_tools
+        ? built_in_tools::BuildDefinitions(proj_settings)
+        : std::vector<ChatToolDefinition>{};
     tool_definitions.insert(
         tool_definitions.end(),
         rag_tool_set.definitions.begin(),
@@ -3507,6 +3704,10 @@ std::string WebServer::StreamModel(const std::string& project_id,
         tool_definitions.end(),
         artifact_tool_set.definitions.begin(),
         artifact_tool_set.definitions.end());
+    tool_definitions.insert(
+        tool_definitions.end(),
+        built_in_tool_definitions.begin(),
+        built_in_tool_definitions.end());
 
     MaybeScheduleCompression(
         &compression_service_,
@@ -3521,6 +3722,10 @@ std::string WebServer::StreamModel(const std::string& project_id,
             extra_tool_definitions.end(),
             artifact_tool_set.definitions.begin(),
             artifact_tool_set.definitions.end());
+        extra_tool_definitions.insert(
+            extra_tool_definitions.end(),
+            built_in_tool_definitions.begin(),
+            built_in_tool_definitions.end());
         const size_t estimated_input_tokens = EstimateRequestInputTokens(
             opts,
             exposed_tools,
@@ -3625,6 +3830,12 @@ std::string WebServer::StreamModel(const std::string& project_id,
                             tool_call.arguments_json,
                             &rag_tool_set.routes,
                             nullptr,
+                            resolved_prompt_variables);
+                    } else if (built_in_tools::IsBuiltInToolName(tool_call.name)) {
+                        tool_result = built_in_tools::CallTool(
+                            tool_call.name,
+                            tool_call.arguments_json,
+                            proj_settings,
                             resolved_prompt_variables);
                     } else if (mcp_manager_) {
                         tool_result = mcp_manager_->CallExposedTool(
@@ -3812,6 +4023,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
     }
     const std::string content = body_j.value("content", "");
     if (content.empty()) { SendError(res_ptr, 400, "Message content required"); return; }
+    const bool web_debug_requested = body_j.value("web_debug", false);
 
     // Rate-limit check
     const std::string ip = GetRemoteAddr(req_ptr);
@@ -3851,7 +4063,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
 
     // ── Producer thread — runs the model, enqueues SSE events ─────────────────
     std::thread producer([this, pipe, proj_id, chat_id, content, sess_user,
-                          encode_sse, attachments]() {
+                          encode_sse, attachments, web_debug_requested]() {
         const std::string err = StreamModel(
             proj_id, chat_id, content, sess_user,
             [&](const std::string& delta) -> bool {
@@ -3933,6 +4145,30 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                         {"tool_arguments", tool_arguments},
                         {"tool_result", tool_result},
                         {"tool_status", tool_status},
+                    };
+                    pipe->pending += encode_sse(ev.dump());
+                }
+                pipe->cv.notify_one();
+            },
+            web_debug_requested,
+            [&](const std::string& system_prompt,
+                const std::string& user_prompt,
+                const std::vector<MessageRecord>& request_messages) {
+                json messages_json = json::array();
+                for (const auto& message : request_messages) {
+                    messages_json.push_back({
+                        {"role", message.role},
+                        {"content", message.content},
+                    });
+                }
+                {
+                    std::lock_guard<std::mutex> lk(pipe->mtx);
+                    if (pipe->abort) return;
+                    json ev = {
+                        {"web_debug", true},
+                        {"system_prompt", system_prompt},
+                        {"user_prompt", user_prompt},
+                        {"request_messages", messages_json},
                     };
                     pipe->pending += encode_sse(ev.dump());
                 }
@@ -4441,8 +4677,12 @@ void WebServer::RegisterRoutes() {
         HandleSetChatAgenticMode(&req, &res);
     });
 
+    srv.Post(R"(/api/chats/([^/]+)/compress)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleCompressChat(&req, &res);
+    });
+
     srv.Get(R"(/data/([^/]+)/([^/]+)/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
-        const_cast<httplib::Request&>(req).path_params["project_id"] = req.matches[1].str();
         const_cast<httplib::Request&>(req).path_params["chat_id"] = req.matches[2].str();
         const_cast<httplib::Request&>(req).path_params["file_path"] = req.matches[3].str();
         HandleProjectDataDownload(&req, &res);

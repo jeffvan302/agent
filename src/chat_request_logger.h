@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 // ── ChatRequestLogger ─────────────────────────────────────────────────────────
@@ -46,6 +47,10 @@ public:
     static std::string FormatBlock(const std::string& label,
                                    const std::string& body);
 
+    static std::string FormatSections(
+        const std::string& label_prefix,
+        const std::vector<std::pair<std::string, std::string>>& sections);
+
     static std::string FormatMessages(const std::vector<MessageRecord>& msgs);
 
     static std::string FormatProvider(const ProviderConfig& p, const ModelConfig& m);
@@ -53,4 +58,12 @@ public:
     static std::string FormatErrorResponse(const std::string& error);
 
     static std::string FormatSuccessResponse(const std::string& assistant_text);
+
+    static std::string FormatCompressionBlock(
+        const std::string& trigger_reason,
+        size_t before_messages,
+        size_t after_messages,
+        size_t compressed_through,
+        const std::string& compressed_text,
+        const std::string& config_name);
 };

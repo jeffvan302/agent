@@ -49,7 +49,11 @@
       </div>
       <div id="compose">
         <div id="compose-top">
-          <span id="agentic-mode-label" class="agentic-mode-none">Mode: None</span>
+          <div id="compose-top-left">
+            <span id="agentic-mode-label" class="agentic-mode-none">Mode: None</span>
+            <span id="compress-btn" title="Compress context window" style="display:none; margin-left:8px; cursor:pointer; font-size:var(--font-size-small); color:var(--color-accent-primary); user-select:none;">Compress</span>
+          </div>
+          <button id="debug-btn" type="button" style="display:none">Enable debugging</button>
         </div>
         <div id="compose-bottom">
           <button id="attach-btn" title="Attach file" disabled>&#128206;</button>
