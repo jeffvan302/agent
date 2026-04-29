@@ -1407,7 +1407,7 @@ void McpServerManagerWindow::RemoveServer() {
         return;
     }
 
-    const auto& snapshot = snapshots_[static_cast<size_t>(index)];
+    const auto snapshot = snapshots_[static_cast<size_t>(index)];
     const std::wstring prompt = L"Remove MCP server \"" + Utf8ToWide(snapshot.config.name) + L"\"?";
     if (MessageBoxW(hwnd_, prompt.c_str(), L"Confirm Removal", MB_YESNO | MB_ICONWARNING) != IDYES) {
         return;

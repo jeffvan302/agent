@@ -35,8 +35,10 @@ struct ProjectSettingsOptions {
     bool enable_chat_logging = false;                    // current chat logging setting
     bool allow_manual_context_compression = false;       // allow manual compression from web UI
     bool enable_web_debugging = false;                   // allow prompt debugging in web UI
+    bool serve_web_links_inline = false;                  // serve web file links inline instead of forced downloads
     bool built_in_powershell_enabled = false;
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
+    int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 
 struct ProjectSettingsResult {
@@ -55,8 +57,10 @@ struct ProjectSettingsResult {
     bool enable_chat_logging = false;             // whether detailed chat logging is enabled
     bool allow_manual_context_compression = false; // allow manual compression from web UI
     bool enable_web_debugging = false;             // allow prompt debugging in web UI
+    bool serve_web_links_inline = false;            // serve web file links inline instead of forced downloads
     bool built_in_powershell_enabled = false;
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
+    int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 
 std::optional<ProjectSettingsResult> ShowProjectSettingsDialog(HWND owner, const ProjectSettingsOptions& options);

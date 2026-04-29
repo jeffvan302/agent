@@ -1815,8 +1815,31 @@ WebServer::RequireAuth(const void* req_ptr, void* res_ptr) {
 bool WebServer::UserCanAccessProject(const Session& session,
                                      const std::string& project_id) const {
     const auto accessible = user_store_->GetProjectIdsForUser(session.user_id);
-    return std::find(accessible.begin(), accessible.end(), project_id) !=
-           accessible.end();
+    if (std::find(accessible.begin(), accessible.end(), project_id) != accessible.end()) {
+        return true;
+    }
+
+    const auto bindings = user_store_->GetBindings();
+    const bool has_explicit_binding = std::any_of(
+        bindings.begin(),
+        bindings.end(),
+        [&](const WebProjectBinding& binding) { return binding.project_id == project_id; });
+    if (has_explicit_binding) {
+        return false;
+    }
+
+    // Preserve access to legacy projects that already contain this user's chats
+    // but predate explicit web project bindings.
+    for (const auto& project : storage_->LoadProjects()) {
+        if (project.info.id != project_id) {
+            continue;
+        }
+        return std::any_of(
+            project.chats.begin(),
+            project.chats.end(),
+            [&](const ChatInfo& chat) { return ChatBelongsToSessionUser(chat, session); });
+    }
+    return false;
 }
 
 bool WebServer::ChatBelongsToSessionUser(const ChatInfo& chat,
@@ -1963,6 +1986,7 @@ bool WebServer::ServeFile(const fs::path& abs_path, void* res_ptr) {
 
 bool WebServer::ServeDownloadFile(const fs::path& abs_path,
                                   const std::string& download_name,
+                                  bool serve_inline,
                                   void* res_ptr) {
     auto* res = static_cast<httplib::Response*>(res_ptr);
     std::error_code ec;
@@ -1981,7 +2005,8 @@ bool WebServer::ServeDownloadFile(const fs::path& abs_path,
     res->status = 200;
     res->set_header("Cache-Control", "no-store");
     res->set_header("Content-Disposition",
-                    "attachment; filename=\"" + safe_name + "\"");
+                    std::string(serve_inline ? "inline" : "attachment") +
+                    "; filename=\"" + safe_name + "\"");
     res->set_content_provider(
         static_cast<size_t>(file_size),
         MimeType(ext),
@@ -2339,12 +2364,11 @@ void WebServer::HandleGetProjects(const void* req_ptr, void* res_ptr) {
     auto session = RequireAuth(req_ptr, res_ptr);
     if (!session) return;
 
-    const auto accessible = user_store_->GetProjectIdsForUser(session->user_id);
     const auto all_projects = storage_->LoadProjects();
 
     json arr = json::array();
     for (const auto& proj : all_projects) {
-        if (std::find(accessible.begin(), accessible.end(), proj.info.id) != accessible.end()) {
+        if (UserCanAccessProject(*session, proj.info.id)) {
             arr.push_back({{"id", proj.info.id}, {"name", proj.info.name}});
         }
     }
@@ -2359,8 +2383,7 @@ void WebServer::HandleGetChats(const void* req_ptr, void* res_ptr) {
     const std::string project_id = req->path_params.at("id");
 
     // Verify access
-    const auto accessible = user_store_->GetProjectIdsForUser(session->user_id);
-    if (std::find(accessible.begin(), accessible.end(), project_id) == accessible.end()) {
+    if (!UserCanAccessProject(*session, project_id)) {
         SendError(res_ptr, 403, "Access denied"); return;
     }
 
@@ -2389,8 +2412,7 @@ void WebServer::HandleCreateChat(const void* req_ptr, void* res_ptr) {
     const auto* req = static_cast<const httplib::Request*>(req_ptr);
     const std::string project_id = req->path_params.at("id");
 
-    const auto accessible = user_store_->GetProjectIdsForUser(session->user_id);
-    if (std::find(accessible.begin(), accessible.end(), project_id) == accessible.end()) {
+    if (!UserCanAccessProject(*session, project_id)) {
         SendError(res_ptr, 403, "Access denied"); return;
     }
 
@@ -3294,6 +3316,7 @@ WebServer::CallModel(const std::string& project_id,
     opts.system_prompt = system_prompt;
     opts.temperature  = 0.2;
     opts.max_tokens   = 1024;
+    opts.model_timeout_seconds = proj_settings.model_timeout_seconds;
     opts.messages     = prepared_history.request_history;
     opts.messages.push_back(user_msg);
 
@@ -4411,7 +4434,22 @@ void WebServer::HandleProjectDataDownload(const void* req_ptr, void* res_ptr) {
         storage_, user_store_, project_id, chat_id, session->username, project_settings);
     const auto resolved_values = BuildResolvedProjectVariables(
         mcp_manager_, storage_, project_id, runtime_variables);
-    const auto definitions = BuildProjectFolderVariableDefinitions(mcp_manager_, project_id);
+    auto definitions = BuildProjectFolderVariableDefinitions(mcp_manager_, project_id);
+    const auto add_folder_definition_if_missing = [&](const std::string& name) {
+        if (!variable_resolver::FindValue(resolved_values, name)) return;
+        const std::string key = variable_resolver::ToLookupKey(name);
+        const bool exists = std::find_if(definitions.begin(), definitions.end(),
+            [&](const McpServerVariable& definition) {
+                return variable_resolver::ToLookupKey(definition.name) == key;
+            }) != definitions.end();
+        if (exists) return;
+
+        McpServerVariable definition;
+        definition.name = name;
+        definition.kind = McpVariableKind::Folder;
+        definitions.push_back(std::move(definition));
+    };
+    add_folder_definition_if_missing("ProjectFolder");
 
     std::vector<fs::path> roots;
     for (const auto& definition : definitions) {
@@ -4476,7 +4514,8 @@ void WebServer::HandleProjectDataDownload(const void* req_ptr, void* res_ptr) {
     }
 
     const std::string download_name = WideToUtf8(matched_file->filename().wstring());
-    if (!ServeDownloadFile(*matched_file, download_name, res_ptr)) {
+    if (!ServeDownloadFile(*matched_file, download_name,
+                           project_settings.serve_web_links_inline, res_ptr)) {
         SendError(res_ptr, 500, "Could not read file");
         return;
     }
@@ -4504,6 +4543,8 @@ void WebServer::HandleRagDocumentDownload(const void* req_ptr, void* res_ptr) {
         SendError(res_ptr, 403, "Access denied");
         return;
     }
+
+    const auto project_settings = storage_->LoadProjectSettings(project_id);
 
     const auto libraries = rag_tools::GetProjectRagToolLibraries(rag_service_, project_id);
     const auto* library = rag_tools::FindRagToolLibrary(libraries, rag_id);
@@ -4556,7 +4597,8 @@ void WebServer::HandleRagDocumentDownload(const void* req_ptr, void* res_ptr) {
         download_name += WideToUtf8(source_path.extension().wstring());
     }
 
-    if (!ServeDownloadFile(source_path, download_name, res_ptr)) {
+    if (!ServeDownloadFile(source_path, download_name,
+                           project_settings.serve_web_links_inline, res_ptr)) {
         SendError(res_ptr, 500, "Could not read RAG document file");
         return;
     }
@@ -4683,6 +4725,7 @@ void WebServer::RegisterRoutes() {
     });
 
     srv.Get(R"(/data/([^/]+)/([^/]+)/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["project_id"] = req.matches[1].str();
         const_cast<httplib::Request&>(req).path_params["chat_id"] = req.matches[2].str();
         const_cast<httplib::Request&>(req).path_params["file_path"] = req.matches[3].str();
         HandleProjectDataDownload(&req, &res);
@@ -5039,19 +5082,20 @@ static bool GenerateSelfSignedCert(const fs::path& cert_path, const fs::path& ke
 
 // ──────────────────────────────────────────────────────────────────────────────
 // ResolveTlsCertAndKey
-// Determines the certificate and private-key PEM paths to use based on
-// config_.tls_mode.  Generates a self-signed cert when requested and not yet
+// Determines the certificate and private-key PEM paths to use based on the
+// supplied TLS config. Generates a self-signed cert when requested and not yet
 // present.  Returns false if TLS cannot be configured.
 // ──────────────────────────────────────────────────────────────────────────────
-bool WebServer::ResolveTlsCertAndKey(std::string& out_cert,
+bool WebServer::ResolveTlsCertAndKey(const WebServerConfig& config,
+                                      std::string& out_cert,
                                       std::string& out_key) const
 {
-    if (config_.tls_mode.empty()) return false;
+    if (config.tls_mode.empty()) return false;
 
-    if (config_.tls_mode == "self_signed") {
+    if (config.tls_mode == "self_signed") {
         const fs::path cert_dir  = TlsCertsDir();
-        const fs::path cert_path = cert_dir / "cert.pem";
-        const fs::path key_path  = cert_dir / "key.pem";
+        const fs::path cert_path = cert_dir / "server.crt";
+        const fs::path key_path  = cert_dir / "server.key";
 
         if (!fs::exists(cert_path) || !fs::exists(key_path)) {
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
@@ -5071,22 +5115,28 @@ bool WebServer::ResolveTlsCertAndKey(std::string& out_cert,
         return true;
     }
 
-    if (config_.tls_mode == "pem") {
-        if (!fs::exists(config_.tls_cert_file) ||
-            !fs::exists(config_.tls_key_file)) {
+    if (config.tls_mode == "pem") {
+        if (!fs::exists(config.tls_cert_file) ||
+            !fs::exists(config.tls_key_file)) {
             Logger::Error("WebServer",
                 "tls_mode=pem: cert or key file not found.");
             return false;
         }
-        out_cert = config_.tls_cert_file;
-        out_key  = config_.tls_key_file;
+        out_cert = config.tls_cert_file;
+        out_key  = config.tls_key_file;
         return true;
     }
 
     // "pfx" / unknown modes
     Logger::Error("WebServer",
-        "Unsupported tls_mode: " + config_.tls_mode);
+        "Unsupported tls_mode: " + config.tls_mode);
     return false;
+}
+
+bool WebServer::ResolveTlsCertAndKey(std::string& out_cert,
+                                      std::string& out_key) const
+{
+    return ResolveTlsCertAndKey(config_, out_cert, out_key);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -5095,9 +5145,14 @@ bool WebServer::ResolveTlsCertAndKey(std::string& out_cert,
 // ──────────────────────────────────────────────────────────────────────────────
 int WebServer::GetCertExpiryDays() const
 {
+    return GetCertExpiryDays(config_);
+}
+
+int WebServer::GetCertExpiryDays(const WebServerConfig& config) const
+{
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     std::string cert_path, key_path;
-    if (!ResolveTlsCertAndKey(cert_path, key_path)) return -1;
+    if (!ResolveTlsCertAndKey(config, cert_path, key_path)) return -1;
 
     FILE* f = nullptr;
     if (_wfopen_s(&f, fs::path(cert_path).wstring().c_str(), L"r") != 0 || !f)

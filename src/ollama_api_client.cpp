@@ -527,7 +527,7 @@ static bool PostAndCheckEmbedding(const std::string& url, const json& body, int*
     if (!conn) { if (error) *error = "WinHttpConnect failed to " + WideToUtf8(host) + ":" + std::to_string(port); AppendDetail("  FAIL: WinHttpConnect"); return false; }
     UniqueHandle req(WinHttpOpenRequest(conn.get(), L"POST", path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, secure ? WINHTTP_FLAG_SECURE : 0));
     if (!req) { if (error) *error = "WinHttpOpenRequest failed"; AppendDetail("  FAIL: WinHttpOpenRequest"); return false; }
-    WinHttpSetTimeouts(req.get(), 10000, 10000, 30000, 180000);
+    WinHttpSetTimeouts(req.get(), 0, 0, 0, 0);
     AppendDetail("    session/request created, sending...");
 
     std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";

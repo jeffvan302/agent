@@ -26,8 +26,16 @@
 
 namespace {
 constexpr wchar_t kProjectSettingsClassName[] = L"AgentProjectSettingsWindow";
+constexpr wchar_t kProjectSettingsScrollPanelClassName[] = L"AgentProjectSettingsScrollPanel";
+constexpr wchar_t kProjectSettingsScrollContentClassName[] = L"AgentProjectSettingsScrollContent";
+constexpr int kScrollPanelColorIndex = COLOR_WINDOW;
+
 constexpr wchar_t kContextPreviewClassName[] = L"AgentContextPreviewWindow";
 constexpr int kContextPreviewTextBoxId = 9001;
+
+HBRUSH SettingsScrollBrush() {
+    return GetSysColorBrush(kScrollPanelColorIndex);
+}
 
 enum ControlId : int {
     // Left panel - MCP servers
@@ -43,6 +51,8 @@ enum ControlId : int {
     // Right panel top - model selection
     kModelLabel = 6415,
     kModelCombo = 6416,
+    kModelTimeoutLabel = 6417,
+    kModelTimeoutEdit = 6418,
 
     // Right panel - context window
     kContextWindowLabel = 6410,
@@ -105,6 +115,7 @@ enum ControlId : int {
     kChatLoggingCheck = 6466,
     kManualContextCompressionCheck = 6467,
     kWebDebuggingCheck = 6468,
+    kInlineWebLinksCheck = 6476,
     kInternalToolsHeader = 6469,
     kInternalToolsList = 6470,
     kInternalToolSettingsPanel = 6471,
@@ -112,6 +123,9 @@ enum ControlId : int {
     kInternalPowerShellWorkingDirLabel = 6473,
     kInternalPowerShellWorkingDirEdit = 6474,
     kInternalPowerShellRiskLabel = 6475,
+
+    // Right panel scrollable host
+    kSettingsScrollPanel = 6480,
 
     // Footer
     kCheckContextButton = 6461,
@@ -447,6 +461,8 @@ public:
     static std::optional<ProjectSettingsResult> Show(HWND owner, const ProjectSettingsOptions& options) {
         HINSTANCE instance = reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr));
         RegisterWindowClass(instance);
+        RegisterScrollPanelClass(instance);
+        RegisterScrollContentClass(instance);
 
         auto* dialog = new ProjectSettingsDialog(owner, options);
         const DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE | WS_THICKFRAME;
@@ -590,6 +606,128 @@ private:
         registered = true;
     }
 
+    static void RegisterScrollPanelClass(HINSTANCE instance) {
+        static bool registered = false;
+        if (registered) return;
+
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.hInstance = instance;
+        wc.lpfnWndProc = &ProjectSettingsDialog::ScrollPanelProc;
+        wc.lpszClassName = kProjectSettingsScrollPanelClassName;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = SettingsScrollBrush();
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        RegisterClassExW(&wc);
+        registered = true;
+    }
+
+    static void RegisterScrollContentClass(HINSTANCE instance) {
+        static bool registered = false;
+        if (registered) return;
+
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.hInstance = instance;
+        wc.lpfnWndProc = DefWindowProcW;
+        wc.lpszClassName = kProjectSettingsScrollContentClassName;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = SettingsScrollBrush();
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        RegisterClassExW(&wc);
+        registered = true;
+    }
+
+    static LRESULT CALLBACK ScrollPanelProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        auto* self = reinterpret_cast<ProjectSettingsDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+            self = reinterpret_cast<ProjectSettingsDialog*>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        }
+        if (!self) return DefWindowProcW(hwnd, message, w_param, l_param);
+        return self->HandleScrollPanelMessage(hwnd, message, w_param, l_param);
+    }
+
+    LRESULT HandleScrollPanelMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        switch (message) {
+        case WM_ERASEBKGND: {
+            RECT rect{};
+            GetClientRect(hwnd, &rect);
+            FillRect(reinterpret_cast<HDC>(w_param), &rect, SettingsScrollBrush());
+            return 1;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(hwnd, &paint);
+            FillRect(dc, &paint.rcPaint, SettingsScrollBrush());
+            EndPaint(hwnd, &paint);
+            return 0;
+        }
+        case WM_VSCROLL: {
+            SCROLLINFO info{};
+            info.cbSize = sizeof(info);
+            info.fMask = SIF_ALL;
+            GetScrollInfo(hwnd, SB_VERT, &info);
+            int new_offset = scroll_offset_;
+            switch (LOWORD(w_param)) {
+            case SB_TOP: new_offset = info.nMin; break;
+            case SB_BOTTOM: new_offset = info.nMax; break;
+            case SB_LINEUP: new_offset -= Scale(hwnd_, 28); break;
+            case SB_LINEDOWN: new_offset += Scale(hwnd_, 28); break;
+            case SB_PAGEUP: new_offset -= static_cast<int>(info.nPage); break;
+            case SB_PAGEDOWN: new_offset += static_cast<int>(info.nPage); break;
+            case SB_THUMBPOSITION:
+            case SB_THUMBTRACK: new_offset = HIWORD(w_param); break;
+            default: break;
+            }
+            SetScrollOffset(new_offset);
+            return 0;
+        }
+        case WM_MOUSEWHEEL: {
+            const int delta = GET_WHEEL_DELTA_WPARAM(w_param);
+            SetScrollOffset(scroll_offset_ - MulDiv(delta, Scale(hwnd_, 36), WHEEL_DELTA));
+            return 0;
+        }
+        default:
+            return DefWindowProcW(hwnd, message, w_param, l_param);
+        }
+    }
+
+    void SetScrollOffset(int new_offset) {
+        if (!scroll_panel_ || !scroll_content_host_) return;
+        int max_offset = std::max(0, scroll_content_height_ - scroll_viewport_height_);
+        new_offset = std::clamp(new_offset, 0, max_offset);
+        if (new_offset == scroll_offset_) return;
+        scroll_offset_ = new_offset;
+        UpdateScrollContentHostBounds();
+        UpdateScrollInfo();
+    }
+
+    void UpdateScrollInfo() {
+        if (!scroll_panel_) return;
+        SCROLLINFO info{};
+        info.cbSize = sizeof(info);
+        info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+        info.nMin = 0;
+        info.nMax = std::max(0, scroll_content_height_ - 1);
+        info.nPage = std::max(1, scroll_viewport_height_);
+        info.nPos = scroll_offset_;
+        SetScrollInfo(scroll_panel_, SB_VERT, &info, TRUE);
+    }
+
+    void UpdateScrollContentHostBounds() {
+        if (!scroll_content_host_) return;
+        SetWindowPos(
+            scroll_content_host_,
+            nullptr,
+            0,
+            -scroll_offset_,
+            scroll_content_width_,
+            std::max(scroll_content_height_, scroll_viewport_height_),
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    }
+
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
         auto* self = reinterpret_cast<ProjectSettingsDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
@@ -647,95 +785,121 @@ private:
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
             0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelToolsList), nullptr, nullptr);
 
-        // Model selection section
-        model_label_ = CreateWindowExW(0, L"STATIC", L"AI Model:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelLabel), nullptr, nullptr);
-        model_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelCombo), nullptr, nullptr);
+        // Right panel scroll host
+        scroll_panel_ = CreateWindowExW(
+            WS_EX_CONTROLPARENT | WS_EX_COMPOSITED,
+            kProjectSettingsScrollPanelClassName,
+            nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WS_CLIPCHILDREN,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kSettingsScrollPanel), nullptr, this);
+        scroll_backdrop_ = CreateWindowExW(
+            0,
+            L"STATIC",
+            nullptr,
+            WS_CHILD | WS_VISIBLE | SS_WHITERECT,
+            0, 0, 0, 0, scroll_panel_, nullptr, nullptr, nullptr);
+        scroll_content_host_ = CreateWindowExW(
+            WS_EX_CONTROLPARENT,
+            kProjectSettingsScrollContentClassName,
+            nullptr,
+            WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+            0, 0, 0, 0, scroll_panel_, nullptr, nullptr, nullptr);
+
+    // Model selection section
+    model_label_ = CreateWindowExW(0, L"STATIC", L"AI Model:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kModelLabel), nullptr, nullptr);
+    model_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kModelCombo), nullptr, nullptr);
+
+    model_timeout_label_ = CreateWindowExW(0, L"STATIC", L"Model timeout (seconds, 0 = infinite):", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kModelTimeoutLabel), nullptr, nullptr);
+    model_timeout_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kModelTimeoutEdit), nullptr, nullptr);
 
         // Context window section
-        context_window_label_ = CreateWindowExW(0, L"STATIC", L"Context Window Compression:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextWindowLabel), nullptr, nullptr);
-        context_window_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextWindowCombo), nullptr, nullptr);
+        context_window_label_ = CreateWindowExW(0, L"STATIC", L"Context Window Compression:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kContextWindowLabel), nullptr, nullptr);
+        context_window_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kContextWindowCombo), nullptr, nullptr);
         manual_context_compression_check_ = CreateWindowExW(0, L"BUTTON", L"Allow manual context window compression",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kManualContextCompressionCheck), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kManualContextCompressionCheck), nullptr, nullptr);
 
         internal_tools_header_ = CreateWindowExW(0, L"STATIC", L"Built-in Tools:", WS_CHILD | WS_VISIBLE,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalToolsHeader), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalToolsHeader), nullptr, nullptr);
         internal_tools_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalToolsList), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalToolsList), nullptr, nullptr);
         internal_tool_settings_panel_ = CreateWindowExW(0, L"BUTTON", L"Tool Settings", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalToolSettingsPanel), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalToolSettingsPanel), nullptr, nullptr);
         internal_powershell_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable PowerShell command execution",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalPowerShellEnabled), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalPowerShellEnabled), nullptr, nullptr);
         internal_powershell_workdir_label_ = CreateWindowExW(0, L"STATIC", L"Default folder:", WS_CHILD | WS_VISIBLE,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalPowerShellWorkingDirLabel), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalPowerShellWorkingDirLabel), nullptr, nullptr);
         internal_powershell_workdir_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"$ProjectFolder$",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalPowerShellWorkingDirEdit), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalPowerShellWorkingDirEdit), nullptr, nullptr);
         internal_powershell_risk_label_ = CreateWindowExW(0, L"STATIC",
             L"Risk: this allows the model to run local PowerShell commands for this project.",
             WS_CHILD | WS_VISIBLE,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInternalPowerShellRiskLabel), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalPowerShellRiskLabel), nullptr, nullptr);
 
         // RAG services section
-        rag_services_header_ = CreateWindowExW(0, L"STATIC", L"RAG Services:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagServicesHeader), nullptr, nullptr);
+        rag_services_header_ = CreateWindowExW(0, L"STATIC", L"RAG Services:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagServicesHeader), nullptr, nullptr);
         rag_services_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagServicesList), nullptr, nullptr);
-        rag_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enabled", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagEnabledCheck), nullptr, nullptr);
-        rag_read_check_ = CreateWindowExW(0, L"BUTTON", L"Read", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagReadCheck), nullptr, nullptr);
-        rag_write_check_ = CreateWindowExW(0, L"BUTTON", L"Write", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagWriteCheck), nullptr, nullptr);
-        rag_tool_check_ = CreateWindowExW(0, L"BUTTON", L"Tool", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagToolCheck), nullptr, nullptr);
-        rag_delete_check_ = CreateWindowExW(0, L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagDeleteCheck), nullptr, nullptr);
-        rag_export_check_ = CreateWindowExW(0, L"BUTTON", L"Write file", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagExportCheck), nullptr, nullptr);
-        rag_default_ingest_check_ = CreateWindowExW(0, L"BUTTON", L"Default ingest", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagDefaultIngestCheck), nullptr, nullptr);
-        rag_priority_label_ = CreateWindowExW(0, L"STATIC", L"Priority:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagPriorityLabel), nullptr, nullptr);
-        rag_priority_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagPriorityEdit), nullptr, nullptr);
-        rag_max_chunks_label_ = CreateWindowExW(0, L"STATIC", L"Max chunks:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagMaxChunksLabel), nullptr, nullptr);
-        rag_max_chunks_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagMaxChunksEdit), nullptr, nullptr);
-        rag_min_confidence_label_ = CreateWindowExW(0, L"STATIC", L"Min confidence:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagMinConfidenceLabel), nullptr, nullptr);
-        rag_min_confidence_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagMinConfidenceEdit), nullptr, nullptr);
-        rag_max_confidence_label_ = CreateWindowExW(0, L"STATIC", L"Max confidence:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagMaxConfidenceLabel), nullptr, nullptr);
-        rag_max_confidence_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagMaxConfidenceEdit), nullptr, nullptr);
-        rag_export_path_label_ = CreateWindowExW(0, L"STATIC", L"Write file folder:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagExportPathLabel), nullptr, nullptr);
-        rag_export_path_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagExportPathEdit), nullptr, nullptr);
-        rag_retrieval_mode_label_ = CreateWindowExW(0, L"STATIC", L"Retrieval mode:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagRetrievalModeLabel), nullptr, nullptr);
-        rag_retrieval_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRagRetrievalModeCombo), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagServicesList), nullptr, nullptr);
+        rag_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enabled", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagEnabledCheck), nullptr, nullptr);
+        rag_read_check_ = CreateWindowExW(0, L"BUTTON", L"Read", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagReadCheck), nullptr, nullptr);
+        rag_write_check_ = CreateWindowExW(0, L"BUTTON", L"Write", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagWriteCheck), nullptr, nullptr);
+        rag_tool_check_ = CreateWindowExW(0, L"BUTTON", L"Tool", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagToolCheck), nullptr, nullptr);
+        rag_delete_check_ = CreateWindowExW(0, L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagDeleteCheck), nullptr, nullptr);
+        rag_export_check_ = CreateWindowExW(0, L"BUTTON", L"Write file", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagExportCheck), nullptr, nullptr);
+        rag_default_ingest_check_ = CreateWindowExW(0, L"BUTTON", L"Default ingest", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagDefaultIngestCheck), nullptr, nullptr);
+        rag_priority_label_ = CreateWindowExW(0, L"STATIC", L"Priority:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagPriorityLabel), nullptr, nullptr);
+        rag_priority_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagPriorityEdit), nullptr, nullptr);
+        rag_max_chunks_label_ = CreateWindowExW(0, L"STATIC", L"Max chunks:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagMaxChunksLabel), nullptr, nullptr);
+        rag_max_chunks_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagMaxChunksEdit), nullptr, nullptr);
+        rag_min_confidence_label_ = CreateWindowExW(0, L"STATIC", L"Min confidence:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagMinConfidenceLabel), nullptr, nullptr);
+        rag_min_confidence_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagMinConfidenceEdit), nullptr, nullptr);
+        rag_max_confidence_label_ = CreateWindowExW(0, L"STATIC", L"Max confidence:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagMaxConfidenceLabel), nullptr, nullptr);
+        rag_max_confidence_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagMaxConfidenceEdit), nullptr, nullptr);
+        rag_export_path_label_ = CreateWindowExW(0, L"STATIC", L"Write file folder:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagExportPathLabel), nullptr, nullptr);
+        rag_export_path_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagExportPathEdit), nullptr, nullptr);
+        rag_retrieval_mode_label_ = CreateWindowExW(0, L"STATIC", L"Retrieval mode:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagRetrievalModeLabel), nullptr, nullptr);
+        rag_retrieval_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagRetrievalModeCombo), nullptr, nullptr);
         ComboBox_AddString(rag_retrieval_mode_combo_, L"Tool access (passive later)");
         ComboBox_AddString(rag_retrieval_mode_combo_, L"Passive only (inactive)");
         ComboBox_AddString(rag_retrieval_mode_combo_, L"Active tool only");
         ComboBox_AddString(rag_retrieval_mode_combo_, L"Disabled");
         // Project variables section
-        proj_vars_header_ = CreateWindowExW(0, L"STATIC", L"Project Variables:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsHeader), nullptr, nullptr);
+        proj_vars_header_ = CreateWindowExW(0, L"STATIC", L"Project Variables:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsHeader), nullptr, nullptr);
         proj_vars_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsList), nullptr, nullptr);
-        proj_vars_add_btn_    = CreateWindowExW(0, L"BUTTON", L"+", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsAdd),    nullptr, nullptr);
-        proj_vars_remove_btn_ = CreateWindowExW(0, L"BUTTON", L"-", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsRemove), nullptr, nullptr);
-        proj_vars_name_label_  = CreateWindowExW(0, L"STATIC", L"Name:",  WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsNameLabel),  nullptr, nullptr);
-        proj_vars_name_edit_   = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsNameEdit),   nullptr, nullptr);
-        proj_vars_value_label_ = CreateWindowExW(0, L"STATIC", L"Value:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsValueLabel), nullptr, nullptr);
-        proj_vars_value_edit_  = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsValueEdit),  nullptr, nullptr);
-        proj_vars_description_label_ = CreateWindowExW(0, L"STATIC", L"Description:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsDescriptionLabel), nullptr, nullptr);
-        proj_vars_description_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsDescriptionEdit), nullptr, nullptr);
-        proj_vars_inject_check_ = CreateWindowExW(0, L"BUTTON", L"Inject this variable into the context window", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProjVarsInjectCheck), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsList), nullptr, nullptr);
+        proj_vars_add_btn_    = CreateWindowExW(0, L"BUTTON", L"+", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsAdd),    nullptr, nullptr);
+        proj_vars_remove_btn_ = CreateWindowExW(0, L"BUTTON", L"-", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsRemove), nullptr, nullptr);
+        proj_vars_name_label_  = CreateWindowExW(0, L"STATIC", L"Name:",  WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsNameLabel),  nullptr, nullptr);
+        proj_vars_name_edit_   = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsNameEdit),   nullptr, nullptr);
+        proj_vars_value_label_ = CreateWindowExW(0, L"STATIC", L"Value:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsValueLabel), nullptr, nullptr);
+        proj_vars_value_edit_  = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsValueEdit),  nullptr, nullptr);
+        proj_vars_description_label_ = CreateWindowExW(0, L"STATIC", L"Description:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsDescriptionLabel), nullptr, nullptr);
+        proj_vars_description_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsDescriptionEdit), nullptr, nullptr);
+        proj_vars_inject_check_ = CreateWindowExW(0, L"BUTTON", L"Inject this variable into the context window", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsInjectCheck), nullptr, nullptr);
 
-        agentic_mode_label_ = CreateWindowExW(0, L"STATIC", L"Default Agentic Mode:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAgenticModeLabel), nullptr, nullptr);
-        agentic_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAgenticModeCombo), nullptr, nullptr);
-        agentic_modes_list_label_ = CreateWindowExW(0, L"STATIC", L"Enabled Agentic Modes:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAgenticModesListLabel), nullptr, nullptr);
+        agentic_mode_label_ = CreateWindowExW(0, L"STATIC", L"Default Agentic Mode:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kAgenticModeLabel), nullptr, nullptr);
+        agentic_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kAgenticModeCombo), nullptr, nullptr);
+        agentic_modes_list_label_ = CreateWindowExW(0, L"STATIC", L"Enabled Agentic Modes:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kAgenticModesListLabel), nullptr, nullptr);
         agentic_modes_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAgenticModesList), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kAgenticModesList), nullptr, nullptr);
         chat_logging_check_ = CreateWindowExW(0, L"BUTTON", L"Enable detailed chat logging",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kChatLoggingCheck), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kChatLoggingCheck), nullptr, nullptr);
         web_debugging_check_ = CreateWindowExW(0, L"BUTTON", L"Enable Web Debugging",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kWebDebuggingCheck), nullptr, nullptr);
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kWebDebuggingCheck), nullptr, nullptr);
+        inline_web_links_check_ = CreateWindowExW(0, L"BUTTON", L"Serve /data and /rag web file links inline (risky)",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInlineWebLinksCheck), nullptr, nullptr);
 
-        instructions_label_ = CreateWindowExW(0, L"STATIC", L"Project Instructions:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInstructionsLabel), nullptr, nullptr);
-        import_instructions_button_ = CreateWindowExW(0, L"BUTTON", L"Import Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kImportInstructions), nullptr, nullptr);
+        instructions_label_ = CreateWindowExW(0, L"STATIC", L"Project Instructions:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInstructionsLabel), nullptr, nullptr);
+        import_instructions_button_ = CreateWindowExW(0, L"BUTTON", L"Import Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kImportInstructions), nullptr, nullptr);
         instructions_edit_ = CreateWindowExW(
             WS_EX_CLIENTEDGE,
             L"EDIT",
@@ -745,7 +909,7 @@ private:
             0,
             0,
             0,
-            hwnd_,
+            scroll_content_host_,
             reinterpret_cast<HMENU>(kInstructionsEdit),
             nullptr,
             nullptr);
@@ -761,7 +925,7 @@ private:
             server_details_panel_, server_enabled_check_, server_name_label_, server_scope_label_,
             model_tools_header_, model_tools_list_,
             variables_header_,
-            model_label_, model_combo_,
+            model_label_, model_combo_, model_timeout_label_, model_timeout_edit_,
             context_window_label_, context_window_combo_, manual_context_compression_check_,
             internal_tools_header_, internal_tools_list_, internal_tool_settings_panel_,
             internal_powershell_enabled_check_, internal_powershell_workdir_label_,
@@ -776,7 +940,7 @@ private:
             proj_vars_name_label_, proj_vars_name_edit_, proj_vars_value_label_, proj_vars_value_edit_,
             proj_vars_description_label_, proj_vars_description_edit_, proj_vars_inject_check_,
             agentic_mode_label_, agentic_mode_combo_, agentic_modes_list_label_, agentic_modes_list_,
-            chat_logging_check_, manual_context_compression_check_, web_debugging_check_,
+            chat_logging_check_, manual_context_compression_check_, web_debugging_check_, inline_web_links_check_,
             instructions_label_, import_instructions_button_, instructions_edit_,
             check_context_button_, save_button_, cancel_button_
         };
@@ -847,24 +1011,29 @@ private:
             ComboBox_SetCurSel(agentic_mode_combo_, 0);
         }
         if (options_.enable_chat_logging) {
-            CheckDlgButton(hwnd_, kChatLoggingCheck, BST_CHECKED);
+            CheckDlgButton(scroll_content_host_, kChatLoggingCheck, BST_CHECKED);
         }
         if (options_.allow_manual_context_compression) {
-            CheckDlgButton(hwnd_, kManualContextCompressionCheck, BST_CHECKED);
+            CheckDlgButton(scroll_content_host_, kManualContextCompressionCheck, BST_CHECKED);
         }
         if (options_.enable_web_debugging) {
-            CheckDlgButton(hwnd_, kWebDebuggingCheck, BST_CHECKED);
+            CheckDlgButton(scroll_content_host_, kWebDebuggingCheck, BST_CHECKED);
+        }
+        if (options_.serve_web_links_inline) {
+            CheckDlgButton(scroll_content_host_, kInlineWebLinksCheck, BST_CHECKED);
         }
         internal_powershell_enabled_ = options_.built_in_powershell_enabled;
         ListBox_AddString(internal_tools_list_,
             (std::wstring(internal_powershell_enabled_ ? L"[✓] " : L"[ ] ") + L"PowerShell command execution").c_str());
         ListBox_SetCurSel(internal_tools_list_, 0);
-        CheckDlgButton(hwnd_, kInternalPowerShellEnabled,
+        CheckDlgButton(scroll_content_host_, kInternalPowerShellEnabled,
             internal_powershell_enabled_ ? BST_CHECKED : BST_UNCHECKED);
         const std::string workdir = Trim(options_.built_in_powershell_working_directory).empty()
             ? std::string("$ProjectFolder$")
             : options_.built_in_powershell_working_directory;
         SetWindowTextW(internal_powershell_workdir_edit_, Utf8ToWide(workdir).c_str());
+
+        SetWindowTextW(model_timeout_edit_, std::to_wstring(options_.model_timeout_seconds).c_str());
     }
 
     void LayoutControls(int width, int height) {
@@ -907,35 +1076,50 @@ private:
         // Reposition any active variable controls
         LayoutVariableControls();
 
-        // Right panel
         const int right_x = margin + left_width + gutter * 2;
         const int right_width = width - right_x - margin;
 
+        // Position the scrollable right panel
+        const int scroll_top = margin;
+        const int scroll_bottom = buttons_y - gutter;
+        scroll_viewport_height_ = std::max(0, scroll_bottom - scroll_top);
+        MoveWindow(scroll_panel_, right_x, scroll_top, right_width, scroll_viewport_height_, TRUE);
+        MoveWindow(scroll_backdrop_, 0, 0, right_width, scroll_viewport_height_, TRUE);
+        SetWindowPos(scroll_backdrop_, HWND_BOTTOM, 0, 0, right_width, scroll_viewport_height_,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
         // Model selection section (top of right panel)
         y = margin;
-        MoveWindow(model_label_, right_x, y, right_width, label_height, TRUE);
+        MoveWindow(model_label_, 0, y, right_width, label_height, TRUE);
         y += label_height + gutter;
-        MoveWindow(model_combo_, right_x, y, right_width, Scale(hwnd_, 250), TRUE);
-        y += Scale(hwnd_, 28) + gutter * 2;
+        MoveWindow(model_combo_, 0, y, right_width, Scale(hwnd_, 250), TRUE);
+        y += Scale(hwnd_, 28) + gutter;
+        const int model_timeout_label_w = Scale(hwnd_, 260);
+        MoveWindow(model_timeout_label_, 0, y, model_timeout_label_w, Scale(hwnd_, 20), TRUE);
+        MoveWindow(model_timeout_edit_, model_timeout_label_w + gutter, y, Scale(hwnd_, 64), Scale(hwnd_, 22), TRUE);
+        y += Scale(hwnd_, 24) + gutter * 2;
 
         // Context window section
-        MoveWindow(context_window_label_, right_x, y, right_width, label_height, TRUE);
+        MoveWindow(context_window_label_, 0, y, right_width, label_height, TRUE);
         y += label_height + gutter;
-        MoveWindow(context_window_combo_, right_x, y, right_width, Scale(hwnd_, 200), TRUE);
+        MoveWindow(context_window_combo_, 0, y, right_width, Scale(hwnd_, 200), TRUE);
         y += Scale(hwnd_, 28) + gutter;
         const int context_third = (right_width - gutter * 2) / 3;
-        MoveWindow(manual_context_compression_check_, right_x, y, context_third, Scale(hwnd_, 20), TRUE);
-        MoveWindow(chat_logging_check_, right_x + context_third + gutter, y, context_third, Scale(hwnd_, 20), TRUE);
-        MoveWindow(web_debugging_check_, right_x + (context_third + gutter) * 2, y, context_third, Scale(hwnd_, 20), TRUE);
+        MoveWindow(manual_context_compression_check_, 0, y, context_third, Scale(hwnd_, 20), TRUE);
+        MoveWindow(chat_logging_check_, context_third + gutter, y, context_third, Scale(hwnd_, 20), TRUE);
+        MoveWindow(web_debugging_check_, (context_third + gutter) * 2, y, context_third, Scale(hwnd_, 20), TRUE);
+
+        y += Scale(hwnd_, 24);
+        MoveWindow(inline_web_links_check_, 0, y, right_width, Scale(hwnd_, 20), TRUE);
 
         y += Scale(hwnd_, 26) + gutter;
-        MoveWindow(internal_tools_header_, right_x, y, right_width, label_height, TRUE);
+        MoveWindow(internal_tools_header_, 0, y, right_width, label_height, TRUE);
         y += label_height + gutter;
         const int internal_list_w = std::max(Scale(hwnd_, 180), (right_width - gutter) / 2);
-        const int internal_settings_x = right_x + internal_list_w + gutter;
+        const int internal_settings_x =  internal_list_w + gutter;
         const int internal_settings_w = right_width - internal_list_w - gutter;
         const int internal_h = Scale(hwnd_, 92);
-        MoveWindow(internal_tools_list_, right_x, y, internal_list_w, internal_h, TRUE);
+        MoveWindow(internal_tools_list_, 0, y, internal_list_w, internal_h, TRUE);
         MoveWindow(internal_tool_settings_panel_, internal_settings_x, y, internal_settings_w, internal_h, TRUE);
         const int panel_pad = Scale(hwnd_, 10);
         MoveWindow(internal_powershell_enabled_check_, internal_settings_x + panel_pad, y + Scale(hwnd_, 18), internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
@@ -945,45 +1129,45 @@ private:
 
         // RAG services section
         y += internal_h + gutter * 2;
-        MoveWindow(rag_services_header_, right_x, y, right_width, label_height, TRUE);
+        MoveWindow(rag_services_header_, 0, y, right_width, label_height, TRUE);
         y += label_height + gutter;
         const int rag_list_height = Scale(hwnd_, 100);
-        MoveWindow(rag_services_list_, right_x, y, right_width, rag_list_height, TRUE);
+        MoveWindow(rag_services_list_, 0, y, right_width, rag_list_height, TRUE);
         y += rag_list_height + gutter;
         // RAG permission checkboxes - positioned below the list
         const int checkbox_width = Scale(hwnd_, 70);
         const int checkbox_gap = Scale(hwnd_, 15);
-        MoveWindow(rag_enabled_check_, right_x, y, checkbox_width, Scale(hwnd_, 20), TRUE);
-        MoveWindow(rag_read_check_, right_x + checkbox_width + checkbox_gap, y, checkbox_width, Scale(hwnd_, 20), TRUE);
-        MoveWindow(rag_write_check_, right_x + (checkbox_width + checkbox_gap) * 2, y, checkbox_width, Scale(hwnd_, 20), TRUE);
-        MoveWindow(rag_tool_check_, right_x + (checkbox_width + checkbox_gap) * 3, y, checkbox_width, Scale(hwnd_, 20), TRUE);
-        MoveWindow(rag_export_check_, right_x + (checkbox_width + checkbox_gap) * 4, y, Scale(hwnd_, 95), Scale(hwnd_, 20), TRUE);
+        MoveWindow(rag_enabled_check_, 0, y, checkbox_width, Scale(hwnd_, 20), TRUE);
+        MoveWindow(rag_read_check_, checkbox_width + checkbox_gap, y, checkbox_width, Scale(hwnd_, 20), TRUE);
+        MoveWindow(rag_write_check_, (checkbox_width + checkbox_gap) * 2, y, checkbox_width, Scale(hwnd_, 20), TRUE);
+        MoveWindow(rag_tool_check_, (checkbox_width + checkbox_gap) * 3, y, checkbox_width, Scale(hwnd_, 20), TRUE);
+        MoveWindow(rag_export_check_, (checkbox_width + checkbox_gap) * 4, y, Scale(hwnd_, 95), Scale(hwnd_, 20), TRUE);
         y += Scale(hwnd_, 24);
-        MoveWindow(rag_delete_check_, right_x, y, checkbox_width, Scale(hwnd_, 20), TRUE);
-        MoveWindow(rag_default_ingest_check_, right_x + checkbox_width + checkbox_gap, y, Scale(hwnd_, 130), Scale(hwnd_, 20), TRUE);
+        MoveWindow(rag_delete_check_, 0, y, checkbox_width, Scale(hwnd_, 20), TRUE);
+        MoveWindow(rag_default_ingest_check_, checkbox_width + checkbox_gap, y, Scale(hwnd_, 130), Scale(hwnd_, 20), TRUE);
         y += Scale(hwnd_, 24) + gutter;
 
         const int path_label_width = Scale(hwnd_, 115);
-        MoveWindow(rag_export_path_label_, right_x, y + Scale(hwnd_, 3), path_label_width, label_height, TRUE);
-        MoveWindow(rag_export_path_edit_, right_x + path_label_width, y, right_width - path_label_width, Scale(hwnd_, 22), TRUE);
+        MoveWindow(rag_export_path_label_, 0, y + Scale(hwnd_, 3), path_label_width, label_height, TRUE);
+        MoveWindow(rag_export_path_edit_, path_label_width, y, right_width - path_label_width, Scale(hwnd_, 22), TRUE);
         y += Scale(hwnd_, 24) + gutter;
 
         const int numeric_label_width = Scale(hwnd_, 105);
         const int numeric_edit_width = Scale(hwnd_, 70);
         const int numeric_row_height = Scale(hwnd_, 24);
         const int numeric_pair_width = numeric_label_width + numeric_edit_width + gutter * 2;
-        MoveWindow(rag_priority_label_, right_x, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
-        MoveWindow(rag_priority_edit_, right_x + numeric_label_width, y, numeric_edit_width, Scale(hwnd_, 22), TRUE);
-        MoveWindow(rag_max_chunks_label_, right_x + numeric_pair_width, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
-        MoveWindow(rag_max_chunks_edit_, right_x + numeric_pair_width + numeric_label_width, y, numeric_edit_width, Scale(hwnd_, 22), TRUE);
+        MoveWindow(rag_priority_label_, 0, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
+        MoveWindow(rag_priority_edit_, numeric_label_width, y, numeric_edit_width, Scale(hwnd_, 22), TRUE);
+        MoveWindow(rag_max_chunks_label_, numeric_pair_width, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
+        MoveWindow(rag_max_chunks_edit_, numeric_pair_width + numeric_label_width, y, numeric_edit_width, Scale(hwnd_, 22), TRUE);
         y += numeric_row_height + gutter;
-        MoveWindow(rag_min_confidence_label_, right_x, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
-        MoveWindow(rag_min_confidence_edit_, right_x + numeric_label_width, y, numeric_edit_width, Scale(hwnd_, 22), TRUE);
-        MoveWindow(rag_max_confidence_label_, right_x + numeric_pair_width, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
-        MoveWindow(rag_max_confidence_edit_, right_x + numeric_pair_width + numeric_label_width, y, numeric_edit_width, Scale(hwnd_, 22), TRUE);
+        MoveWindow(rag_min_confidence_label_, 0, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
+        MoveWindow(rag_min_confidence_edit_, numeric_label_width, y, numeric_edit_width, Scale(hwnd_, 22), TRUE);
+        MoveWindow(rag_max_confidence_label_, numeric_pair_width, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
+        MoveWindow(rag_max_confidence_edit_, numeric_pair_width + numeric_label_width, y, numeric_edit_width, Scale(hwnd_, 22), TRUE);
         y += numeric_row_height + gutter;
-        MoveWindow(rag_retrieval_mode_label_, right_x, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
-        MoveWindow(rag_retrieval_mode_combo_, right_x + numeric_label_width, y, Scale(hwnd_, 180), Scale(hwnd_, 200), TRUE);
+        MoveWindow(rag_retrieval_mode_label_, 0, y + Scale(hwnd_, 3), numeric_label_width, label_height, TRUE);
+        MoveWindow(rag_retrieval_mode_combo_, numeric_label_width, y, Scale(hwnd_, 180), Scale(hwnd_, 200), TRUE);
         y += numeric_row_height + gutter;
 
         // Project variables section
@@ -995,27 +1179,27 @@ private:
             const int pv_row_h   = pv_edit_h + Scale(hwnd_, 4);
             const int list_w     = right_width - pv_btn_w - gutter;
 
-            MoveWindow(proj_vars_header_, right_x, y, right_width, label_height, TRUE);
+            MoveWindow(proj_vars_header_, 0, y, right_width, label_height, TRUE);
             y += label_height + gutter;
 
-            MoveWindow(proj_vars_list_,       right_x,                y,                  list_w,         pv_list_h,  TRUE);
-            MoveWindow(proj_vars_add_btn_,    right_x + list_w + gutter, y,               pv_btn_w,       button_height, TRUE);
-            MoveWindow(proj_vars_remove_btn_, right_x + list_w + gutter, y + button_height + gutter, pv_btn_w, button_height, TRUE);
+            MoveWindow(proj_vars_list_,       0,                y,                  list_w,         pv_list_h,  TRUE);
+            MoveWindow(proj_vars_add_btn_,    list_w + gutter, y,               pv_btn_w,       button_height, TRUE);
+            MoveWindow(proj_vars_remove_btn_, list_w + gutter, y + button_height + gutter, pv_btn_w, button_height, TRUE);
             y += pv_list_h + gutter;
 
-            MoveWindow(proj_vars_name_label_,  right_x,            y + Scale(hwnd_, 3), pv_lbl_w,              label_height, TRUE);
-            MoveWindow(proj_vars_name_edit_,   right_x + pv_lbl_w, y,                  right_width - pv_lbl_w, pv_edit_h,    TRUE);
+            MoveWindow(proj_vars_name_label_,  0,            y + Scale(hwnd_, 3), pv_lbl_w,              label_height, TRUE);
+            MoveWindow(proj_vars_name_edit_,   pv_lbl_w, y,                  right_width - pv_lbl_w, pv_edit_h,    TRUE);
             y += pv_row_h + gutter;
 
-            MoveWindow(proj_vars_value_label_, right_x,            y + Scale(hwnd_, 3), pv_lbl_w,              label_height, TRUE);
-            MoveWindow(proj_vars_value_edit_,  right_x + pv_lbl_w, y,                  right_width - pv_lbl_w, pv_edit_h,    TRUE);
+            MoveWindow(proj_vars_value_label_, 0,            y + Scale(hwnd_, 3), pv_lbl_w,              label_height, TRUE);
+            MoveWindow(proj_vars_value_edit_,  pv_lbl_w, y,                  right_width - pv_lbl_w, pv_edit_h,    TRUE);
             y += pv_row_h + gutter;
 
-            MoveWindow(proj_vars_description_label_, right_x, y + Scale(hwnd_, 3), pv_lbl_w, label_height, TRUE);
-            MoveWindow(proj_vars_description_edit_, right_x + pv_lbl_w, y, right_width - pv_lbl_w, pv_edit_h, TRUE);
+            MoveWindow(proj_vars_description_label_, 0, y + Scale(hwnd_, 3), pv_lbl_w, label_height, TRUE);
+            MoveWindow(proj_vars_description_edit_, pv_lbl_w, y, right_width - pv_lbl_w, pv_edit_h, TRUE);
             y += pv_row_h + gutter;
 
-            MoveWindow(proj_vars_inject_check_, right_x + pv_lbl_w, y, right_width - pv_lbl_w, Scale(hwnd_, 20), TRUE);
+            MoveWindow(proj_vars_inject_check_, pv_lbl_w, y, right_width - pv_lbl_w, Scale(hwnd_, 20), TRUE);
             y += Scale(hwnd_, 22) + gutter;
         }
 
@@ -1025,21 +1209,27 @@ private:
         const int am_label_h = label_height;
         const int am_control_h = Scale(hwnd_, 130);
 
-        MoveWindow(agentic_mode_label_,       right_x,              am_top,              am_half, am_label_h, TRUE);
-        MoveWindow(agentic_mode_combo_,        right_x,              am_top + am_label_h + gutter,
+        MoveWindow(agentic_mode_label_,       0,              am_top,              am_half, am_label_h, TRUE);
+        MoveWindow(agentic_mode_combo_,        0,              am_top + am_label_h + gutter,
                                               am_half,              Scale(hwnd_, 200), TRUE);
-        MoveWindow(agentic_modes_list_label_, right_x + am_half + gutter, am_top,       am_half, am_label_h, TRUE);
-        MoveWindow(agentic_modes_list_,       right_x + am_half + gutter, am_top + am_label_h + gutter,
+        MoveWindow(agentic_modes_list_label_, am_half + gutter, am_top,       am_half, am_label_h, TRUE);
+        MoveWindow(agentic_modes_list_,       am_half + gutter, am_top + am_label_h + gutter,
                                               am_half,              am_control_h, TRUE);
         y = am_top + am_label_h + gutter + Scale(hwnd_, 200) + gutter;
 
         const int import_width = Scale(hwnd_, 130);
-        MoveWindow(instructions_label_, right_x, y + Scale(hwnd_, 5), right_width - import_width - gutter, label_height, TRUE);
-        MoveWindow(import_instructions_button_, right_x + right_width - import_width, y, import_width, button_height, TRUE);
+        MoveWindow(instructions_label_, 0, y + Scale(hwnd_, 5), right_width - import_width - gutter, label_height, TRUE);
+        MoveWindow(import_instructions_button_, right_width - import_width, y, import_width, button_height, TRUE);
         y += button_height + gutter;
-        MoveWindow(instructions_edit_, right_x, y, right_width, std::max(Scale(hwnd_, 120), buttons_y - y - gutter), TRUE);
+        MoveWindow(instructions_edit_, 0, y, right_width, std::max(Scale(hwnd_, 120), scroll_viewport_height_ - y - gutter), TRUE);
 
-        // Footer buttons
+        // Set scroll content dimensions
+        scroll_content_width_ = right_width;
+        scroll_content_height_ = std::max(0, y + Scale(hwnd_, 120) + gutter);
+        UpdateScrollContentHostBounds();
+        UpdateScrollInfo();
+
+        // Footer buttons (relative to dialog)
         const int check_width = Scale(hwnd_, 160);
         MoveWindow(cancel_button_, width - margin - button_width, buttons_y, button_width, button_height, TRUE);
         MoveWindow(save_button_, width - margin - button_width * 2 - gutter, buttons_y, button_width, button_height, TRUE);
@@ -1097,14 +1287,14 @@ private:
                 ListBox_InsertString(internal_tools_list_, 0,
                     (std::wstring(internal_powershell_enabled_ ? L"[✓] " : L"[ ] ") + L"PowerShell command execution").c_str());
                 ListBox_SetCurSel(internal_tools_list_, 0);
-                CheckDlgButton(hwnd_, kInternalPowerShellEnabled,
+                CheckDlgButton(scroll_content_host_, kInternalPowerShellEnabled,
                     internal_powershell_enabled_ ? BST_CHECKED : BST_UNCHECKED);
                 toggling_internal_tool_ = false;
             }
             break;
         case kInternalPowerShellEnabled:
             if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
-                internal_powershell_enabled_ = (IsDlgButtonChecked(hwnd_, kInternalPowerShellEnabled) == BST_CHECKED);
+                internal_powershell_enabled_ = (IsDlgButtonChecked(scroll_content_host_, kInternalPowerShellEnabled) == BST_CHECKED);
                 ListBox_DeleteString(internal_tools_list_, 0);
                 ListBox_InsertString(internal_tools_list_, 0,
                     (std::wstring(internal_powershell_enabled_ ? L"[✓] " : L"[ ] ") + L"PowerShell command execution").c_str());
@@ -1921,13 +2111,19 @@ private:
         result.project_variables = project_variables_;
         result.selected_agentic_mode_id = std::move(selected_agentic_mode_id);
         result.enabled_agentic_mode_ids = std::move(enabled_agentic_mode_ids);
-        result.enable_chat_logging = (IsDlgButtonChecked(hwnd_, kChatLoggingCheck) == BST_CHECKED);
-        result.allow_manual_context_compression = (IsDlgButtonChecked(hwnd_, kManualContextCompressionCheck) == BST_CHECKED);
-        result.enable_web_debugging = (IsDlgButtonChecked(hwnd_, kWebDebuggingCheck) == BST_CHECKED);
+        result.enable_chat_logging = (IsDlgButtonChecked(scroll_content_host_, kChatLoggingCheck) == BST_CHECKED);
+        result.allow_manual_context_compression = (IsDlgButtonChecked(scroll_content_host_, kManualContextCompressionCheck) == BST_CHECKED);
+        result.enable_web_debugging = (IsDlgButtonChecked(scroll_content_host_, kWebDebuggingCheck) == BST_CHECKED);
+        result.serve_web_links_inline = (IsDlgButtonChecked(scroll_content_host_, kInlineWebLinksCheck) == BST_CHECKED);
         result.built_in_powershell_enabled = internal_powershell_enabled_;
         result.built_in_powershell_working_directory = Trim(WideToUtf8(GetWindowTextString(internal_powershell_workdir_edit_)));
         if (result.built_in_powershell_working_directory.empty()) {
             result.built_in_powershell_working_directory = "$ProjectFolder$";
+        }
+        const std::wstring timeout_text = TrimWide(GetWindowTextString(model_timeout_edit_));
+        if (!timeout_text.empty()) {
+            result.model_timeout_seconds = std::stoi(timeout_text);
+            if (result.model_timeout_seconds < 0) result.model_timeout_seconds = 0;
         }
         return result;
     }
@@ -2412,6 +2608,8 @@ private:
 
     HWND model_label_ = nullptr;
     HWND model_combo_ = nullptr;
+    HWND model_timeout_label_ = nullptr;
+    HWND model_timeout_edit_ = nullptr;
     HWND context_window_label_ = nullptr;
     HWND context_window_combo_ = nullptr;
     HWND rag_services_header_ = nullptr;
@@ -2447,6 +2645,7 @@ private:
     HWND chat_logging_check_ = nullptr;
     HWND manual_context_compression_check_ = nullptr;
     HWND web_debugging_check_ = nullptr;
+    HWND inline_web_links_check_ = nullptr;
     HWND internal_tools_header_ = nullptr;
     HWND internal_tools_list_ = nullptr;
     HWND internal_tool_settings_panel_ = nullptr;
@@ -2458,6 +2657,14 @@ private:
     bool toggling_internal_tool_ = false;
     std::vector<bool> agentic_mode_enabled_;
     bool toggling_agentic_mode_ = false;
+
+    HWND scroll_panel_ = nullptr;
+    HWND scroll_backdrop_ = nullptr;
+    HWND scroll_content_host_ = nullptr;
+    int scroll_offset_ = 0;
+    int scroll_viewport_height_ = 0;
+    int scroll_content_height_ = 0;
+    int scroll_content_width_ = 0;
 
     HWND instructions_label_ = nullptr;
     HWND instructions_edit_ = nullptr;

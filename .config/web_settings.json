@@ -3,7 +3,7 @@
   "base_url": "",
   "bind_address": "0.0.0.0",
   "enabled": true,
-  "http_redirect_port": 80,
+  "http_redirect_port": 0,
   "max_upload_mb": 50,
   "port": 8080,
   "session_timeout_minutes": 60,
@@ -15,5 +15,5 @@
     "pfx_file": "",
     "pfx_passphrase": ""
   },
-  "web_root": "C:\\Users\\TheunisvanNiekerk\\Code\\agent\\www"
+  "web_root": ""
 }

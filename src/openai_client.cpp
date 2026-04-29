@@ -481,7 +481,11 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
             return result;
         }
 
-        WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 15000, 15000, 30000, 30000);
+        // Apply per-project timeout: 0 = infinite (default), otherwise send+receive in ms.
+        const DWORD timeout_ms = request.model_timeout_seconds > 0
+            ? static_cast<DWORD>(request.model_timeout_seconds * 1000)
+            : 0;
+        WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 0, 0, timeout_ms, timeout_ms);
         ApplyCertificateFingerprintBypass(static_cast<HINTERNET>(request_handle.get()), request.provider.tls_certificate_fingerprint);
 
         std::wstring headers = L"Content-Type: application/json\r\nAccept: ";
@@ -851,7 +855,11 @@ ChatCompletionResult OpenAIClient::CreateToolAwareCompletion(const ChatRequestOp
                 return result;
             }
 
-            WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 15000, 15000, 30000, 30000);
+            // Apply per-project timeout: 0 = infinite (default), otherwise send+receive in ms.
+            const DWORD timeout_ms = request.model_timeout_seconds > 0
+                ? static_cast<DWORD>(request.model_timeout_seconds * 1000)
+                : 0;
+            WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 0, 0, timeout_ms, timeout_ms);
             ApplyCertificateFingerprintBypass(static_cast<HINTERNET>(request_handle.get()), request.provider.tls_certificate_fingerprint);
 
             std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
@@ -975,7 +983,11 @@ ChatCompletionResult OpenAIClient::CreateSimpleCompletion(const ChatRequestOptio
                 return result;
             }
 
-            WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 15000, 15000, 30000, 30000);
+            // Apply per-project timeout: 0 = infinite (default), otherwise send+receive in ms.
+            const DWORD timeout_ms = request.model_timeout_seconds > 0
+                ? static_cast<DWORD>(request.model_timeout_seconds * 1000)
+                : 0;
+            WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 0, 0, timeout_ms, timeout_ms);
             ApplyCertificateFingerprintBypass(static_cast<HINTERNET>(request_handle.get()), request.provider.tls_certificate_fingerprint);
 
             std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
@@ -1111,7 +1123,11 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
                 return result;
             }
 
-            WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 15000, 15000, 30000, 30000);
+            // Apply per-project timeout: 0 = infinite (default), otherwise send+receive in ms.
+            const DWORD timeout_ms = request.model_timeout_seconds > 0
+                ? static_cast<DWORD>(request.model_timeout_seconds * 1000)
+                : 0;
+            WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 0, 0, timeout_ms, timeout_ms);
             ApplyCertificateFingerprintBypass(static_cast<HINTERNET>(request_handle.get()), request.provider.tls_certificate_fingerprint);
 
             std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";

@@ -38,6 +38,7 @@
       "variables": []
     }
   ],
+  "model_timeout_seconds": 0,
   "model_tool_ids": [],
   "preferred_model_id": "codex-MiniMax-M2.7",
   "preferred_provider_id": "provider_1775726633372_1",
@@ -71,5 +72,6 @@
     }
   ],
   "selected_agentic_mode_id": "",
-  "selected_compression_config_id": "cc_1776744536752_9"
+  "selected_compression_config_id": "cc_1776744536752_9",
+  "serve_web_links_inline": true
 }

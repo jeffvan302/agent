@@ -642,6 +642,8 @@ struct ProjectSettings {
     bool enable_chat_logging = false;             // Enable detailed per-chat/request logging for this project
     bool allow_manual_context_compression = false; // Allow manual context window compression from web UI
     bool enable_web_debugging = false;             // Allow prompt/context debugging bubbles in the web UI
+    bool serve_web_links_inline = false;            // Serve /data and /rag file links inline instead of forced downloads
     bool built_in_powershell_enabled = false;      // Enable high-risk built-in PowerShell execution tool
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
+    int model_timeout_seconds = 0;                  // 0 = wait forever (default), otherwise max seconds per model request
 };

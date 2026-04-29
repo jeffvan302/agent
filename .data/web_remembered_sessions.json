@@ -1,14 +1,14 @@
 {
   "sessions": [
     {
-      "created_at_unix": 1777353254,
+      "created_at_unix": 1777448899,
       "force_password_reset": false,
-      "last_activity_unix": 1777353254,
+      "last_activity_unix": 1777448899,
       "needs_password_reset": false,
       "persistent": true,
-      "persistent_until_unix": 1779945254,
+      "persistent_until_unix": 1780040899,
       "remote_addr": "127.0.0.1",
-      "token": "759ff52a24d8714975cc9ad35957902828ca3e4ac2d2dddd5541cbd99db92496",
+      "token": "2ca7ea95ea51c04d02a3d50b1fc9c1c9f1e5460ba1e17fa61296ff4584113a74",
       "user_id": "3593868E-3A09-47E2-BEF0-CCBDFFAB7292",
       "username": "admin"
     }

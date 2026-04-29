@@ -137,6 +137,7 @@ public:
     // Returns days until the configured certificate expires, or -1 if
     // unknown / not applicable (HTTP mode, cert unreadable, no OpenSSL).
     int GetCertExpiryDays() const;
+    int GetCertExpiryDays(const WebServerConfig& config) const;
 
 private:
     // ── Session ──────────────────────────────────────────────────────────
@@ -224,6 +225,7 @@ private:
     bool ServeFile         (const std::filesystem::path& abs_path, void* res);
     bool ServeDownloadFile (const std::filesystem::path& abs_path,
                             const std::string& download_name,
+                            bool serve_inline,
                             void* res);
     static std::string MimeType(const std::string& ext);
 
@@ -328,6 +330,9 @@ private:
     // Resolves the active cert + key paths for Start() based on tls_mode.
     // Returns false if the mode requires files that don't exist or are invalid.
     // On "self_signed" this generates the cert/key if absent.
+    bool ResolveTlsCertAndKey(const WebServerConfig& config,
+                              std::string& out_cert,
+                              std::string& out_key) const;
     bool ResolveTlsCertAndKey(std::string& out_cert, std::string& out_key) const;
 
 

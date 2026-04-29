@@ -18,6 +18,7 @@ struct ChatRequestOptions {
     std::vector<MessageRecord> messages;
     int retry_budget_seconds_override = 0;
     int retry_interval_seconds_override = 0;
+    int model_timeout_seconds = 0; // 0 = infinite (default), otherwise max seconds per request (send+receive)
 };
 
 struct ChatToolDefinition {

@@ -1,8 +1,0 @@
-We're going to need an MCP server tool that is going to help us store information as a cache system. 
-For example, if we have a lot of diagrams being created by the model, for example an SVG format which can take quite a bit of text to do so.
-And we make subsequent changes to the diagram. 
-And then we go through a compression algorithm that then basically wipes that out. We might have the original data. We might have all of the original references through the compression algorithm. But we lose the refinement that we've done over the last couple of messages. 
-What we can do to save this is actually create in the .agent folder. A caching mechanism where these SVGs or other reference material could be saved for the purpose of caching them for future usage 
-For example, we can create.md files about the SVG version 1, version 2, version 3, and then have an index file that can tell us which one has the references that we need. 
-There's no need for really a RAG database in this sense, because we could then just implement the RAG to store them if we have it. This is a different version for compression, especially if we have these versions that are going to be reiterated on. 
-This could be a great tool around the compression time where we can go through and tell the algorithm, prior to the compression, to give it to a model. Tell it to extract all of the SVG code, all of the other display formats information, and then index that into your md, into markdown files. 

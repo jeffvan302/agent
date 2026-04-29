@@ -1837,9 +1837,8 @@ function renderVegaBlocks(container) {
 
     let spec;
     try {
-      spec )ASSET"
+      spec = JSON.parse(source);)ASSET"
 R"ASSET(
-= JSON.parse(source);
       if (spec && typeof spec === 'object' && spec.spec !== undefined &&
           (spec.type === 'vega-lite' || spec.type === 'vega' || spec.type === 'vegalite')) {
         spec = spec.spec;
@@ -2202,9 +2201,8 @@ function createFileUploadRow(input, initialStatus) {
   body.appendChild(links);
   body.appendChild(progress);
   card.appendChild(mark);
-  card.appendChild(b)ASSET"
+  card.appendChild(body);)ASSET"
 R"ASSET(
-ody);
   row.appendChild(lbl);
   row.appendChild(card);
 
@@ -2580,9 +2578,8 @@ function normalizeAssistantTrace(trace, fallbackContent = '') {
 function prettyToolUsageText(value) {
   if (value == null) return '';
   if (typeof value === 'string') {
-    const trim)ASSET"
+    const trimmed = value.trim();)ASSET"
 R"ASSET(
-med = value.trim();
     if (!trimmed) return '';
     try {
       return JSON.stringify(JSON.parse(trimmed), null, 2);
@@ -2960,8 +2957,7 @@ function createAssistantTurnRow(initialTrace = []) {
   }
 
   function remove() {
-    row.remove();
-)ASSET"
+    row.remove();)ASSET"
 R"ASSET(
   }
 
@@ -3306,8 +3302,7 @@ function openAgenticModePicker() {
     row.style.cssText = `
       padding:8px 12px; cursor:pointer;
       color: var(--color-text-primary); font-size:var(--font-size-base);
-      border-bottom:1px solid var(--color-border-main);
- )ASSET"
+      border-bottom:1px solid var(--color-border-main);)ASSET"
 R"ASSET(
    `;
     row.textContent = item.name || 'None';
@@ -3658,9 +3653,8 @@ async function sendMessage() {
 
   // Build display content (append uploaded file names if any)
   let displayContent = content;
-  if (uploa)ASSET"
+  if (uploadedFiles.length) {)ASSET"
 R"ASSET(
-dedFiles.length) {
     displayContent += '\n\n\uD83D\uDCCE ' + uploadedFiles.join(', ');
   }
 
@@ -3911,14 +3905,11 @@ function escapeRegExp(str) {
 
 // ── Initialisation ────────────────────────────────────────────────────────
 async function init() {
-  const [meResp, projResp] = await Promise.all([
-    api('GET', '/api/me'),
-    api('GET', '/api/projects'),
-  ]);
-  if (!meResp || !projResp) return;
-  if (!projResp.ok) { window.location.href = '/login'; return; }
+  try {
+    const meResp = await api('GET', '/api/me');
+    if (!meResp) return;
+    if (!meResp.ok) { window.location.href = '/login'; return; }
 
-  if (meResp.ok) {
     const me = await meResp.json();
     // Redirect immediately if admin has flagged a password reset
     if (me.force_password_reset) {
@@ -3929,14 +3920,22 @@ async function init() {
     state.displayName = me.display_name || '';
     state.email = me.email || '';
     headerUser.textContent = state.displayName || me.username || '';
-  }
 
-  state.projects = await projResp.json();
-  renderProjectList();
-  emptyState.style.display = state.projects.length ? '' : 'flex';
-  if (state.projects.length === 0)
+    const projResp = await api('GET', '/api/projects');
+    if (!projResp) return;
+    if (!projResp.ok) throw new Error('Could not load projects.');
+
+    state.projects = await projResp.json();
+    renderProjectList();
+    emptyState.style.display = state.projects.length ? '' : 'flex';
+    if (state.projects.length === 0)
+      emptyState.querySelector('p').textContent =
+        'No projects are assigned to your account yet. Ask your administrator.';
+  } catch (err) {
+    emptyState.style.display = 'flex';
     emptyState.querySelector('p').textContent =
-      'No projects are assigned to your account yet. Ask your administrator.';
+      'Could not load your projects. Please refresh or sign in again.';
+  }
 }
 
 init();

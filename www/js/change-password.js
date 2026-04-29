@@ -1,3 +1,4 @@
+
 'use strict';
 
 let forced = sessionStorage.getItem('force_password_reset') === 'true';

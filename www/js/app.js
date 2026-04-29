@@ -1,3 +1,4 @@
+
 /* ─────────────────────────────────────────────────────────────────────────
    app.js — Web chat application
    Vanilla JS, no framework.  Uses Server-Sent Events for streaming responses.
@@ -1812,7 +1813,7 @@ function openAgenticModePicker() {
       padding:8px 12px; cursor:pointer;
       color: var(--color-text-primary); font-size:var(--font-size-base);
       border-bottom:1px solid var(--color-border-main);
-    `;
+   `;
     row.textContent = item.name || 'None';
     if (item.id === current) {
       row.style.fontWeight = '700';
@@ -2412,14 +2413,11 @@ function escapeRegExp(str) {
 
 // ── Initialisation ────────────────────────────────────────────────────────
 async function init() {
-  const [meResp, projResp] = await Promise.all([
-    api('GET', '/api/me'),
-    api('GET', '/api/projects'),
-  ]);
-  if (!meResp || !projResp) return;
-  if (!projResp.ok) { window.location.href = '/login'; return; }
+  try {
+    const meResp = await api('GET', '/api/me');
+    if (!meResp) return;
+    if (!meResp.ok) { window.location.href = '/login'; return; }
 
-  if (meResp.ok) {
     const me = await meResp.json();
     // Redirect immediately if admin has flagged a password reset
     if (me.force_password_reset) {
@@ -2430,14 +2428,22 @@ async function init() {
     state.displayName = me.display_name || '';
     state.email = me.email || '';
     headerUser.textContent = state.displayName || me.username || '';
-  }
 
-  state.projects = await projResp.json();
-  renderProjectList();
-  emptyState.style.display = state.projects.length ? '' : 'flex';
-  if (state.projects.length === 0)
+    const projResp = await api('GET', '/api/projects');
+    if (!projResp) return;
+    if (!projResp.ok) throw new Error('Could not load projects.');
+
+    state.projects = await projResp.json();
+    renderProjectList();
+    emptyState.style.display = state.projects.length ? '' : 'flex';
+    if (state.projects.length === 0)
+      emptyState.querySelector('p').textContent =
+        'No projects are assigned to your account yet. Ask your administrator.';
+  } catch (err) {
+    emptyState.style.display = 'flex';
     emptyState.querySelector('p').textContent =
-      'No projects are assigned to your account yet. Ask your administrator.';
+      'Could not load your projects. Please refresh or sign in again.';
+  }
 }
 
 init();

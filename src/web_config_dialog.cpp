@@ -978,17 +978,16 @@ static LRESULT CALLBACK WebConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                             L"Generate Certificate", MB_ICONERROR);
                 return 0;
             }
-            // Force regeneration by temporarily applying the current config,
-            // then calling GetCertExpiryDays() which triggers cert generation.
+            // Force regeneration using the current dialog config, even if the
+            // user has not saved/reconfigured the live server yet.
             WebServerConfig tmp = ReadFields(dlg, st);
-            // Swap into server so ResolveTlsCertAndKey uses the right paths
             *st->cfg = tmp;
             // Delete existing certs so they are regenerated
             const auto certs_dir = st->server->TlsCertsDir();
             std::error_code ec;
             std::filesystem::remove(certs_dir / "server.crt", ec);
             std::filesystem::remove(certs_dir / "server.key", ec);
-            int days = st->server->GetCertExpiryDays();
+            int days = st->server->GetCertExpiryDays(tmp);
             if (days < 0) {
                 MessageBoxW(dlg,
                     L"Certificate generation failed.\n\n"

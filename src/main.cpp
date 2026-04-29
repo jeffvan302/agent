@@ -44,6 +44,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -132,6 +133,35 @@ std::filesystem::path DetermineAppRoot() {
         root = root.parent_path();
     }
     return root;
+}
+
+std::filesystem::path ResolveWebUsersPath() {
+    const auto root = DetermineAppRoot();
+    const auto config_root = root / ".config";
+    const auto users_path = config_root / "users.json";
+    const auto legacy_users_path = root / "users.json";
+
+    std::error_code ec;
+    std::filesystem::create_directories(config_root, ec);
+    if (std::filesystem::is_regular_file(legacy_users_path, ec)) {
+        const bool target_missing = !std::filesystem::is_regular_file(users_path, ec);
+        bool legacy_is_newer = false;
+        if (!target_missing) {
+            const auto legacy_time = std::filesystem::last_write_time(legacy_users_path, ec);
+            if (!ec) {
+                const auto config_time = std::filesystem::last_write_time(users_path, ec);
+                legacy_is_newer = !ec && legacy_time > config_time;
+            }
+        }
+        if (target_missing || legacy_is_newer) {
+            std::filesystem::copy_file(
+                legacy_users_path,
+                users_path,
+                std::filesystem::copy_options::overwrite_existing,
+                ec);
+        }
+    }
+    return users_path;
 }
 
 size_t EstimateTokenCount(const std::string& text) {
@@ -2880,7 +2910,7 @@ MainWindow::MainWindow()
     , mcp_manager_(&storage_)
     , rag_service_(&storage_)
     , compression_service_(&storage_)
-    , user_store_(DetermineAppRoot() / "users.json")
+    , user_store_(ResolveWebUsersPath())
 {}
 
 int MainWindow::Scale(HWND hwnd, int value) {
@@ -3483,6 +3513,7 @@ void MainWindow::EditProjectSettings() {
     options.enable_chat_logging = project_settings.enable_chat_logging;
     options.allow_manual_context_compression = project_settings.allow_manual_context_compression;
     options.enable_web_debugging = project_settings.enable_web_debugging;
+    options.serve_web_links_inline = project_settings.serve_web_links_inline;
     options.built_in_powershell_enabled = project_settings.built_in_powershell_enabled;
     options.built_in_powershell_working_directory = project_settings.built_in_powershell_working_directory;
 
@@ -3528,6 +3559,7 @@ void MainWindow::EditProjectSettings() {
     saved_settings.enable_chat_logging = result->enable_chat_logging;
     saved_settings.allow_manual_context_compression = result->allow_manual_context_compression;
     saved_settings.enable_web_debugging = result->enable_web_debugging;
+    saved_settings.serve_web_links_inline = result->serve_web_links_inline;
     saved_settings.built_in_powershell_enabled = result->built_in_powershell_enabled;
     saved_settings.built_in_powershell_working_directory = result->built_in_powershell_working_directory;
     storage_.SaveProjectSettings(active_project_id_, saved_settings);
@@ -4165,6 +4197,7 @@ void MainWindow::SendCurrentMessage() {
     request.system_prompt = chat->system_prompt;
     request.temperature = chat->temperature;
     request.max_tokens = chat->max_tokens;
+    request.model_timeout_seconds = send_proj_settings.model_timeout_seconds;
 
     std::vector<MessageRecord> full_messages = active_messages_;
     full_messages.push_back(user_message);
