@@ -72,10 +72,10 @@ if exist "%OUT_DIR%" rmdir /s /q "%OUT_DIR%"
 mkdir "%OUT_DIR%"
 
 if /I "%BUILD_TYPE%"=="release" (
-    set CFLAGS=/nologo /std:c++20 /Zc:__cplusplus /permissive- /W4 /EHsc /utf-8 /O2 /MD /DNDEBUG /DUNICODE /D_UNICODE /DNOMINMAX /DSQLITE_ENABLE_FTS5
+    set CFLAGS=/nologo /std:c++20 /Zc:__cplusplus /permissive- /W4 /EHsc /utf-8 /bigobj /O2 /MD /DNDEBUG /DUNICODE /D_UNICODE /DNOMINMAX /DSQLITE_ENABLE_FTS5
     set LDFLAGS=/nologo /INCREMENTAL:NO
 ) else (
-    set CFLAGS=/nologo /std:c++20 /Zc:__cplusplus /permissive- /W4 /EHsc /utf-8 /Od /MDd /Zi /D_DEBUG /DUNICODE /D_UNICODE /DNOMINMAX /DSQLITE_ENABLE_FTS5
+    set CFLAGS=/nologo /std:c++20 /Zc:__cplusplus /permissive- /W4 /EHsc /utf-8 /bigobj /Od /MDd /Zi /D_DEBUG /DUNICODE /D_UNICODE /DNOMINMAX /DSQLITE_ENABLE_FTS5
     set LDFLAGS=/nologo /DEBUG:FULL
 )
 

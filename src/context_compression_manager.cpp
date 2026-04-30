@@ -3,6 +3,7 @@
 #include "util.h"
 
 #include <commctrl.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <windowsx.h>
 
@@ -16,6 +17,7 @@ constexpr wchar_t kCompressionManagerClassName[] = L"AgentContextCompressionMana
 constexpr wchar_t kCompressionScrollPanelClassName[] = L"AgentContextCompressionScrollPanel";
 constexpr wchar_t kCompressionScrollContentClassName[] = L"AgentContextCompressionScrollContent";
 constexpr int kScrollPanelColorIndex = COLOR_WINDOW;
+constexpr UINT_PTR kHelpHoverTimer = 1;
 
 HBRUSH ScrollPanelBrush() {
     return GetSysColorBrush(kScrollPanelColorIndex);
@@ -99,9 +101,144 @@ enum ControlId : int {
     kContextTriggerLabel = 6367,
     kContextTriggerEdit = 6368,
 
+    kHelpPanel = 6369,
+    kHelpTitle = 6370,
+    kHelpText = 6371,
+    kHelpLink = 6372,
+
     kSaveButton = IDOK,
     kCancelButton = IDCANCEL,
 };
+
+struct HelpTopic {
+    const wchar_t* title = L"Context window editor";
+    const wchar_t* body = L"Hover over a setting, or click into a value, to keep its explanation here while you edit.\r\n\r\n"
+                          L"Use these configs from Project Settings to decide how old chat history is compressed before it is sent back to the model.";
+    const wchar_t* url = L"";
+};
+
+HelpTopic HelpTopicForControlId(int control_id) {
+    switch (control_id) {
+    case kConfigList:
+        return {L"Compression configs",
+            L"Each row is a reusable context-window configuration. Projects pick one of these configs in Project Settings.\r\n\r\n"
+            L"Duplicate an existing config before experimenting with a different strategy or token budget.", L""};
+    case kAddConfig:
+        return {L"Add config", L"Creates a new hierarchical compression config with practical defaults for L1-L4 and L0 disabled.", L""};
+    case kDeleteConfig:
+        return {L"Delete config", L"Removes the selected config from the global compression library. Check Project Settings first if a project still depends on it.", L""};
+    case kDuplicateConfig:
+        return {L"Duplicate config", L"Copies the currently edited config so you can tune thresholds, prompts, or models without losing a known-good setup.", L""};
+    case kConfigNameLabel:
+    case kConfigNameEdit:
+        return {L"Config name", L"A human-readable name shown in this list and in Project Settings. Use names that describe intent, such as 'Code work - balanced' or 'Long research - aggressive'.", L""};
+    case kStrategyLabel:
+    case kStrategyCombo:
+        return {L"Strategy",
+            L"Truncate Top keeps only the newest messages and drops older context.\r\n\r\n"
+            L"Hierarchical Structured Compression uses L0-L4 together: artifact memory, verbatim pins, summaries, structured state, and recent raw turns.",
+            L"https://en.wikipedia.org/wiki/Automatic_summarization"};
+    case kTruncatePanel:
+    case kTruncateKeepLabel:
+    case kTruncateKeepEdit:
+        return {L"Keep recent messages", L"For Truncate Top, this is the number of newest model-visible messages kept exactly. Older messages are not summarized or preserved.", L""};
+    case kL0Panel:
+    case kL0Enabled:
+        return {L"L0 artifact memory",
+            L"Stores durable artifacts outside the prompt, such as generated HTML, code, SVG, or documents. Later turns inject only selected memory rows instead of entire artifacts.\r\n\r\n"
+            L"Use this when chats create files or long code blocks that need to survive aggressive compression.", L""};
+    case kL0CaptureModelLabel:
+    case kL0CaptureModelCombo:
+        return {L"L0 capture model", L"Optional model used to extract artifact-memory entries from chat messages. Leave unset if you want deterministic fallback capture to do most of the work.", L""};
+    case kL0CapturePromptLabel:
+    case kL0CapturePromptDefault:
+    case kL0CapturePromptEdit:
+        return {L"L0 capture instructions", L"Prompt template used by the capture model to decide which artifacts should be written into artifact memory and how they should be described.", L"https://en.wikipedia.org/wiki/Information_extraction"};
+    case kL0SelectionModelLabel:
+    case kL0SelectionModelCombo:
+        return {L"L0 selection model", L"Optional model used to choose which saved artifact-memory rows are relevant for the next prompt. Use a cheap, reliable model if you enable this.", L""};
+    case kL0SelectionPromptLabel:
+    case kL0SelectionPromptDefault:
+    case kL0SelectionPromptEdit:
+        return {L"L0 selection instructions", L"Prompt template used to rank stored artifact-memory rows against the current chat context. Keep it strict so unrelated artifacts are not injected.", L""};
+    case kL0StorageLabel:
+    case kL0StorageEdit:
+    case kL0StorageBrowse:
+        return {L"L0 storage folder",
+            L"Folder template where artifact memory files and indexes are written. Variables such as $ProjectFolder$, $CHATID$, $CHATNAME_$, and $USERNAME$ can be used.\r\n\r\n"
+            L"For project-local memory, use a path under the project folder, for example $ProjectFolder$\\.agent\\memory\\$CHATID$.", L""};
+    case kL0MaxRowsLabel:
+    case kL0MaxRowsEdit:
+        return {L"Max injected rows", L"Caps how many artifact-memory rows may be injected into the prompt. More rows can recover more context, but they also cost tokens and can add noise. Start around 8-16.", L""};
+    case kL1Panel:
+    case kL1Enabled:
+        return {L"L1 verbatim pinning", L"Keeps selected snippets exactly as written before summarization. This is useful for facts that should not be paraphrased, such as code, paths, URLs, versions, and explicit instructions.", L""};
+    case kL1MaxPinsLabel:
+    case kL1MaxPinsEdit:
+        return {L"Max pins", L"Maximum number of exact snippets L1 may preserve. Higher values protect more details but consume more of the compressed context budget.", L""};
+    case kL1PinCode:
+        return {L"Pin code blocks", L"Preserves fenced code blocks exactly. Enable this for development chats where losing punctuation or formatting can break generated code.", L""};
+    case kL1PinUrls:
+        return {L"Pin URLs and paths", L"Preserves links and file paths exactly so downloads, local paths, and project references survive compression.", L""};
+    case kL1PinNumbers:
+        return {L"Pin numbers and versions", L"Preserves numeric values, versions, ports, thresholds, and IDs that summaries often distort.", L""};
+    case kL1PinFirst:
+        return {L"Pin first user message", L"Keeps the initial task brief exact. This helps the model retain the original goal after many turns.", L""};
+    case kL1PinUserFlag:
+        return {L"Pin [PIN] markers", L"Lets users force exact preservation by marking important text with [PIN].", L""};
+    case kL1PinInstructions:
+        return {L"Pin explicit instructions", L"Preserves text that looks like a requirement, rule, constraint, or instruction. Useful when later summaries should not soften user requirements.", L""};
+    case kL2Panel:
+    case kL2Enabled:
+        return {L"L2 summary", L"Creates a compact narrative summary of older chat turns. This is the main space-saving layer for long conversations.", L"https://en.wikipedia.org/wiki/Automatic_summarization"};
+    case kL2ModelLabel:
+    case kL2ModelCombo:
+        return {L"L2 model", L"Model used to produce the L2 summary. Prefer a model that follows formatting instructions well; it can usually be cheaper than the main chat model.", L""};
+    case kL2MaxTokensLabel:
+    case kL2MaxTokensEdit:
+        return {L"L2 max tokens", L"Approximate output budget for the narrative summary. Too low loses nuance; too high leaves less room for the live conversation.", L""};
+    case kL2TriggerLabel:
+    case kL2TriggerEdit:
+        return {L"L2 trigger turns", L"Minimum number of turns before L2 starts summarizing. Larger values delay compression and preserve more raw context for short chats.", L""};
+    case kL2PromptLabel:
+    case kL2PromptDefault:
+    case kL2PromptEdit:
+        return {L"L2 summary instructions", L"Prompt template for writing the narrative summary. Tune this when summaries miss requirements, decisions, open tasks, or important constraints.", L"https://en.wikipedia.org/wiki/Prompt_engineering"};
+    case kL3Panel:
+    case kL3Enabled:
+        return {L"L3 structured state", L"Extracts durable state as structured bullets: goals, decisions, files, entities, constraints, and open tasks. This complements the more narrative L2 summary.", L"https://en.wikipedia.org/wiki/State_(computer_science)"};
+    case kL3ModelLabel:
+    case kL3ModelCombo:
+        return {L"L3 model", L"Model used to produce structured state. Choose a model that reliably follows schemas and avoids inventing state.", L""};
+    case kL3MaxTokensLabel:
+    case kL3MaxTokensEdit:
+        return {L"L3 max tokens", L"Output budget for structured state. Increase this for projects with many files, decisions, or requirements; decrease it if injected context becomes noisy.", L""};
+    case kL3PromptLabel:
+    case kL3PromptDefault:
+    case kL3PromptEdit:
+        return {L"L3 state instructions", L"Prompt template for extracting structured project state. Tune this if state entries are too vague, too verbose, or omit important categories.", L""};
+    case kL4Panel:
+    case kL4Enabled:
+        return {L"L4 recency window", L"Always keeps the newest raw turns even when older context is compressed. This protects local continuity and the user's immediate intent.", L"https://en.wikipedia.org/wiki/Recency_effect"};
+    case kL4MinRecentLabel:
+    case kL4MinRecentEdit:
+        return {L"Min recent turns", L"Minimum number of latest user/assistant turns kept verbatim after compression. Increase this for fast-moving debugging or design work.", L""};
+    case kFooterPanel:
+        return {L"Compression triggers", L"Controls when automatic compression runs. Manual compression can still be triggered from the main chat window if the project allows it.", L""};
+    case kFrequencyLabel:
+    case kFrequencyEdit:
+        return {L"Frequency", L"Runs automatic compression every N prompts. Set 0 for manual-only. Combine with the context trigger to avoid unnecessary compression on short chats.", L""};
+    case kContextTriggerLabel:
+    case kContextTriggerEdit:
+        return {L"Context trigger percent", L"Runs automatic compression when the estimated request size reaches this percent of the selected model's context window. Lower values compress earlier; higher values preserve more raw context.", L"https://en.wikipedia.org/wiki/Large_language_model#Context_window"};
+    case kSaveButton:
+        return {L"Save", L"Writes the edited global compression configs and closes the editor.", L""};
+    case kCancelButton:
+        return {L"Cancel", L"Closes the editor without saving the current edits.", L""};
+    default:
+        return {};
+    }
+}
 
 int Scale(HWND hwnd, int value) {
     return MulDiv(value, GetDpiForWindow(hwnd), 96);
@@ -189,6 +326,11 @@ private:
     void UpdateScrollContentHostBounds();
     void SetScrollOffset(int new_offset);
     void UpdateLayerEnabledStates() const;
+    void UpdateContextHelp(int control_id, bool focused);
+    void UpdateHoverContextHelp();
+    void OpenCurrentHelpLink() const;
+    int HelpControlIdFromWindow(HWND control) const;
+    bool IsHelpControlId(int control_id) const;
     void OnCommand(int control_id, int notification_code);
     void RefreshConfigList();
     void SelectConfig(int index);
@@ -225,6 +367,10 @@ private:
     HWND add_button_ = nullptr;
     HWND delete_button_ = nullptr;
     HWND duplicate_button_ = nullptr;
+    HWND help_panel_ = nullptr;
+    HWND help_title_ = nullptr;
+    HWND help_text_ = nullptr;
+    HWND help_link_button_ = nullptr;
     HWND config_name_label_ = nullptr;
     HWND config_name_edit_ = nullptr;
     HWND strategy_label_ = nullptr;
@@ -300,6 +446,10 @@ private:
     HWND context_trigger_edit_ = nullptr;
     HWND save_button_ = nullptr;
     HWND cancel_button_ = nullptr;
+    int focused_help_control_id_ = 0;
+    int hovered_help_control_id_ = 0;
+    int active_help_control_id_ = 0;
+    std::wstring current_help_url_;
 };
 
 HWND CompressionManagerWindow::Create(HINSTANCE instance) {
@@ -390,10 +540,17 @@ LRESULT CALLBACK CompressionManagerWindow::WindowProc(HWND hwnd, UINT message, W
     case WM_COMMAND:
         self->OnCommand(LOWORD(w_param), HIWORD(w_param));
         return 0;
+    case WM_TIMER:
+        if (w_param == kHelpHoverTimer) {
+            self->UpdateHoverContextHelp();
+            return 0;
+        }
+        return DefWindowProcW(hwnd, message, w_param, l_param);
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        KillTimer(hwnd, kHelpHoverTimer);
         delete self;
         return 0;
     default:
@@ -470,6 +627,16 @@ void CompressionManagerWindow::OnCreate() {
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kDeleteConfig), nullptr, nullptr);
     duplicate_button_ = CreateWindowExW(0, L"BUTTON", L"Duplicate", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kDuplicateConfig), nullptr, nullptr);
+
+    help_panel_ = CreateWindowExW(0, L"BUTTON", L"Context Help", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kHelpPanel), nullptr, nullptr);
+    help_title_ = CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kHelpTitle), nullptr, nullptr);
+    help_text_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr,
+        WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,
+        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kHelpText), nullptr, nullptr);
+    help_link_button_ = CreateWindowExW(0, L"BUTTON", L"More reading", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kHelpLink), nullptr, nullptr);
 
     config_name_label_ = CreateWindowExW(0, L"STATIC", L"Name:", WS_CHILD | WS_VISIBLE,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kConfigNameLabel), nullptr, nullptr);
@@ -684,6 +851,15 @@ void CompressionManagerWindow::OnCreate() {
     for (HWND control : controls_3) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
+    std::array<HWND, 4> help_controls = {
+        help_panel_, help_title_, help_text_, help_link_button_
+    };
+    for (HWND control : help_controls) {
+        SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    }
+
+    UpdateContextHelp(0, false);
+    SetTimer(hwnd_, kHelpHoverTimer, 150, nullptr);
 
     ComboBox_AddString(strategy_combo_, L"Truncate Top (Rolling Window)");
     ComboBox_AddString(strategy_combo_, L"Hierarchical Structured Compression");
@@ -759,14 +935,27 @@ void CompressionManagerWindow::LayoutControls(int width, int height) {
     const int label_height = Scale(hwnd_, 18);
     const int edit_height = Scale(hwnd_, 24);
     const int sidebar_width = Scale(hwnd_, 260);
+    const int help_target_height = Scale(hwnd_, 250);
     const int top_area_height = Scale(hwnd_, 86);
     const int footer_height = Scale(hwnd_, 106);
 
-    MoveWindow(config_list_, margin, margin, sidebar_width, height - margin * 2 - button_height - gutter, TRUE);
-    const int list_bottom = height - margin - button_height;
-    MoveWindow(add_button_, margin, list_bottom, Scale(hwnd_, 72), button_height, TRUE);
-    MoveWindow(delete_button_, margin + Scale(hwnd_, 78), list_bottom, Scale(hwnd_, 72), button_height, TRUE);
-    MoveWindow(duplicate_button_, margin + Scale(hwnd_, 156), list_bottom, Scale(hwnd_, 104), button_height, TRUE);
+    const int list_height = std::max(
+        Scale(hwnd_, 170),
+        height - margin * 2 - button_height - gutter * 2 - help_target_height);
+    MoveWindow(config_list_, margin, margin, sidebar_width, list_height, TRUE);
+
+    const int buttons_y = margin + list_height + gutter;
+    MoveWindow(add_button_, margin, buttons_y, Scale(hwnd_, 72), button_height, TRUE);
+    MoveWindow(delete_button_, margin + Scale(hwnd_, 78), buttons_y, Scale(hwnd_, 72), button_height, TRUE);
+    MoveWindow(duplicate_button_, margin + Scale(hwnd_, 156), buttons_y, Scale(hwnd_, 104), button_height, TRUE);
+
+    const int help_y = buttons_y + button_height + gutter;
+    const int help_height = std::max(Scale(hwnd_, 150), height - help_y - margin);
+    MoveWindow(help_panel_, margin, help_y, sidebar_width, help_height, TRUE);
+    MoveWindow(help_title_, margin + gutter, help_y + Scale(hwnd_, 24), sidebar_width - gutter * 2, label_height * 2, TRUE);
+    MoveWindow(help_link_button_, margin + gutter, help_y + help_height - button_height - gutter, Scale(hwnd_, 112), button_height, TRUE);
+    MoveWindow(help_text_, margin + gutter, help_y + Scale(hwnd_, 62), sidebar_width - gutter * 2,
+        std::max(Scale(hwnd_, 64), help_height - Scale(hwnd_, 62) - button_height - gutter * 2), TRUE);
 
     const int right_x = margin + sidebar_width + gutter * 2;
     const int right_width = std::max(Scale(hwnd_, 620), width - right_x - margin);
@@ -1008,6 +1197,71 @@ void CompressionManagerWindow::UpdateLayerEnabledStates() const {
     EnableWindow(l4_min_recent_edit_, l4_enabled);
 }
 
+bool CompressionManagerWindow::IsHelpControlId(int control_id) const {
+    return control_id == kHelpPanel ||
+           control_id == kHelpTitle ||
+           control_id == kHelpText ||
+           control_id == kHelpLink;
+}
+
+int CompressionManagerWindow::HelpControlIdFromWindow(HWND control) const {
+    while (control && control != hwnd_) {
+        const int control_id = GetDlgCtrlID(control);
+        if (control_id == kSaveButton ||
+            control_id == kCancelButton ||
+            (control_id >= kConfigList && control_id <= kHelpLink)) {
+            return control_id;
+        }
+        control = GetParent(control);
+    }
+    return 0;
+}
+
+void CompressionManagerWindow::UpdateContextHelp(int control_id, bool focused) {
+    if (IsHelpControlId(control_id)) return;
+
+    const HelpTopic topic = HelpTopicForControlId(control_id);
+    active_help_control_id_ = control_id;
+    current_help_url_ = topic.url ? topic.url : L"";
+
+    std::wstring title = topic.title ? topic.title : L"Context window editor";
+    if (focused && control_id != 0) {
+        title += L" (editing)";
+    }
+    SetWindowTextW(help_title_, title.c_str());
+    SetWindowTextW(help_text_, topic.body ? topic.body : L"");
+    EnableWindow(help_link_button_, !current_help_url_.empty());
+}
+
+void CompressionManagerWindow::UpdateHoverContextHelp() {
+    if (!hwnd_ || focused_help_control_id_ != 0) return;
+
+    POINT point{};
+    if (!GetCursorPos(&point)) return;
+    HWND hover_window = WindowFromPoint(point);
+    if (!hover_window || (hover_window != hwnd_ && !IsChild(hwnd_, hover_window))) {
+        if (hovered_help_control_id_ != 0) {
+            hovered_help_control_id_ = 0;
+            UpdateContextHelp(0, false);
+        }
+        return;
+    }
+
+    int control_id = HelpControlIdFromWindow(hover_window);
+    if (IsHelpControlId(control_id)) {
+        control_id = active_help_control_id_;
+    }
+    if (control_id != hovered_help_control_id_) {
+        hovered_help_control_id_ = control_id;
+        UpdateContextHelp(control_id, false);
+    }
+}
+
+void CompressionManagerWindow::OpenCurrentHelpLink() const {
+    if (current_help_url_.empty()) return;
+    ShellExecuteW(hwnd_, L"open", current_help_url_.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
 void CompressionManagerWindow::Relayout() {
     RECT rect{};
     GetClientRect(hwnd_, &rect);
@@ -1223,6 +1477,25 @@ void CompressionManagerWindow::SaveAllConfigs() {
 }
 
 void CompressionManagerWindow::OnCommand(int control_id, int notification_code) {
+    const bool focus_notification =
+        notification_code == EN_SETFOCUS ||
+        notification_code == CBN_SETFOCUS ||
+        notification_code == LBN_SETFOCUS ||
+        notification_code == BN_SETFOCUS;
+    const bool kill_focus_notification =
+        notification_code == EN_KILLFOCUS ||
+        notification_code == CBN_KILLFOCUS ||
+        notification_code == LBN_KILLFOCUS ||
+        notification_code == BN_KILLFOCUS;
+
+    if (focus_notification && !IsHelpControlId(control_id)) {
+        focused_help_control_id_ = control_id;
+        UpdateContextHelp(control_id, true);
+    } else if (kill_focus_notification && control_id == focused_help_control_id_) {
+        focused_help_control_id_ = 0;
+        UpdateHoverContextHelp();
+    }
+
     switch (control_id) {
     case kConfigList:
         if (notification_code == LBN_SELCHANGE) {
@@ -1238,8 +1511,12 @@ void CompressionManagerWindow::OnCommand(int control_id, int notification_code) 
     case kDuplicateConfig:
         DuplicateConfig();
         break;
+    case kHelpLink:
+        OpenCurrentHelpLink();
+        break;
     case kStrategyCombo:
         if (notification_code == CBN_SELCHANGE) {
+            UpdateContextHelp(kStrategyCombo, focused_help_control_id_ == kStrategyCombo);
             scroll_offset_ = 0;
             Relayout();
         }

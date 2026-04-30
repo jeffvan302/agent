@@ -1828,6 +1828,7 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     j["serve_web_links_inline"] = settings.serve_web_links_inline;
     j["built_in_powershell_enabled"] = settings.built_in_powershell_enabled;
     j["built_in_powershell_working_directory"] = settings.built_in_powershell_working_directory;
+    j["built_in_artifact_memory_enabled"] = settings.built_in_artifact_memory_enabled;
     j["model_timeout_seconds"] = settings.model_timeout_seconds;
 
     return j;
@@ -1900,6 +1901,7 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     if (Trim(settings.built_in_powershell_working_directory).empty()) {
         settings.built_in_powershell_working_directory = "$ProjectFolder$";
     }
+    settings.built_in_artifact_memory_enabled = j.value("built_in_artifact_memory_enabled", false);
     settings.model_timeout_seconds = j.value("model_timeout_seconds", 0);
     if (settings.model_timeout_seconds < 0) {
         settings.model_timeout_seconds = 0;

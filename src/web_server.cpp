@@ -29,6 +29,7 @@
 
 #include "artifact_memory_tool_bridge.h"
 #include "built_in_tools.h"
+#include "message_sanitizer.h"
 #include "mcp_manager.h"
 #include "openai_client.h"
 #include "rag_tool_bridge.h"
@@ -59,6 +60,8 @@ using json = nlohmann::json;
 namespace fs = std::filesystem;
 
 static std::string NowIso();
+static std::vector<MessageRecord> ModelVisibleMessages(
+    const std::vector<MessageRecord>& messages);
 
 namespace {
 
@@ -2007,6 +2010,27 @@ bool WebServer::ServeDownloadFile(const fs::path& abs_path,
     res->set_header("Content-Disposition",
                     std::string(serve_inline ? "inline" : "attachment") +
                     "; filename=\"" + safe_name + "\"");
+    if (serve_inline) {
+        // Remove any existing default-delivery CSP so our per-response one wins.
+        for (auto it = res->headers.begin(); it != res->headers.end(); ) {
+            if (LowerAscii(it->first) == "content-security-policy") {
+                it = res->headers.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        res->set_header("Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "img-src 'self' data: blob:; "
+            "connect-src 'self'; "
+            "font-src 'self'; "
+            "frame-ancestors 'none'");
+        res->set_header("X-Content-Type-Options", "nosniff");
+        res->set_header("X-Frame-Options", "DENY");
+        res->set_header("Referrer-Policy", "strict-origin-when-cross-origin");
+    }
     res->set_content_provider(
         static_cast<size_t>(file_size),
         MimeType(ext),
@@ -2561,14 +2585,11 @@ void WebServer::HandleCompressChat(const void* req_ptr, void* res_ptr) {
     }
 
     auto messages = storage_->LoadMessages(*project_id, chat_id);
-    // Strip non-model-visible messages before compression
-    std::vector<MessageRecord> visible;
-    visible.reserve(messages.size());
-    for (const auto& m : messages) {
-        if (m.role == "user" || m.role == "assistant" || m.role == "system") {
-            visible.push_back(m);
-        }
-    }
+    auto visible = ModelVisibleMessages(messages);
+    const auto runtime_variables = BuildWebRuntimeVariables(
+        storage_, user_store_, *project_id, chat_id, session->username, proj_settings);
+    const auto resolved_prompt_variables = BuildResolvedProjectVariables(
+        mcp_manager_, storage_, *project_id, runtime_variables);
 
     auto model_caller = [&](const ChatRequestOptions& opts) -> std::optional<ChatCompletionResult> {
         auto result = OpenAIClient::CreateSimpleCompletion(opts);
@@ -2577,7 +2598,7 @@ void WebServer::HandleCompressChat(const void* req_ptr, void* res_ptr) {
 
     std::string compressed = compression_service_.CompressConversation(
         visible, *project_id, chat_id, proj_settings.selected_compression_config_id,
-        model_caller, true, "manual");
+        model_caller, true, "manual", resolved_prompt_variables);
 
     if (compressed.empty()) {
         SendJson(res_ptr, 200, R"({"ok":false,"message":"No compression needed / nothing to compress"})");
@@ -2970,13 +2991,7 @@ static std::string NowIso() {
 
 static std::vector<MessageRecord>
 ModelVisibleMessages(const std::vector<MessageRecord>& messages) {
-    std::vector<MessageRecord> filtered;
-    filtered.reserve(messages.size());
-    for (const auto& message : messages) {
-        if (message.role == "file" || message.role == "compression") continue;
-        filtered.push_back(message);
-    }
-    return filtered;
+    return message_sanitizer::SanitizeModelVisibleMessages(messages);
 }
 
 struct PreparedWebHistory {
@@ -3073,6 +3088,8 @@ PreparedWebHistory PrepareWebRequestHistory(
         prepared.request_history.erase(
             prepared.request_history.begin(),
             prepared.request_history.begin() + first_uncompressed);
+        prepared.request_history =
+            message_sanitizer::SanitizeModelVisibleMessages(prepared.request_history);
     }
 
     if (storage && compression_generated && !prepared.compressed_context.empty() &&
@@ -3119,6 +3136,7 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
     const std::vector<ProjectMcpVariableValue>& runtime_variables,
     const std::vector<ProjectMcpVariableValue>& resolved_prompt_variables,
     const std::string& compressed_context,
+    const std::optional<ContextCompressionConfig>& selected_config,
     const std::string& chat_selected_agentic_mode_id) {
     BuiltWebSystemPrompt built;
     built.full_prompt = compressed_context;
@@ -3172,6 +3190,14 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
         if (!rag_context.empty()) {
             built.sections.push_back({"RAG Project Context", rag_context});
         }
+    }
+
+    if (artifact_memory_tools::ShouldExposeArtifactMemoryTools(
+            selected_config,
+            project_settings.built_in_artifact_memory_enabled)) {
+        const std::string artifact_context = artifact_memory_tools::BuildArtifactMemoryUsageContext();
+        AppendPromptSection(built.full_prompt, artifact_context);
+        built.sections.push_back({"Artifact Memory Restore Rules", artifact_context});
     }
 
     const std::string formatting_context = BuildWebFormattingContext(
@@ -3293,6 +3319,7 @@ WebServer::CallModel(const std::string& project_id,
         runtime_variables,
         resolved_prompt_variables,
         prepared_history.compressed_context,
+        prepared_history.selected_config,
         chat_selected_agentic_mode_id);
     const std::string& system_prompt = built_system_prompt.full_prompt;
 
@@ -3345,7 +3372,8 @@ WebServer::CallModel(const std::string& project_id,
             prepared_history.selected_config,
             project_id,
             chat_id,
-            resolved_prompt_variables)
+            resolved_prompt_variables,
+            proj_settings.built_in_artifact_memory_enabled)
         : artifact_memory_tools::ArtifactMemoryToolSet{};
     const auto built_in_tool_definitions = selected_model.supports_tools
         ? built_in_tools::BuildDefinitions(proj_settings)
@@ -3670,6 +3698,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
         runtime_variables,
         resolved_prompt_variables,
         prepared_history.compressed_context,
+        prepared_history.selected_config,
         chat_selected_agentic_mode_id);
     const std::string& system_prompt = built_system_prompt.full_prompt;
 
@@ -3714,7 +3743,8 @@ std::string WebServer::StreamModel(const std::string& project_id,
             prepared_history.selected_config,
             project_id,
             chat_id,
-            resolved_prompt_variables)
+            resolved_prompt_variables,
+            proj_settings.built_in_artifact_memory_enabled)
         : artifact_memory_tools::ArtifactMemoryToolSet{};
     const auto built_in_tool_definitions = selected_model.supports_tools
         ? built_in_tools::BuildDefinitions(proj_settings)

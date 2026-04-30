@@ -1,6 +1,7 @@
 #include "openai_client.h"
 
 #include "ollama_api_client.h"
+#include "message_sanitizer.h"
 #include "provider_profiles.h"
 
 #include <windows.h>
@@ -16,6 +17,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 using json = nlohmann::json;
@@ -292,6 +294,35 @@ json SerializeToolCallsForProvider(const std::vector<ChatToolCall>& tool_calls) 
     return serialized;
 }
 
+std::vector<std::string> ToolCallIds(const json& tool_calls) {
+    std::vector<std::string> ids;
+    if (!tool_calls.is_array()) return ids;
+    for (const auto& item : tool_calls) {
+        if (!item.is_object()) continue;
+        const std::string id = item.value("id", "");
+        if (!id.empty()) ids.push_back(id);
+    }
+    return ids;
+}
+
+bool HasImmediateToolResultsForAll(
+    const std::vector<MessageRecord>& messages,
+    size_t assistant_index,
+    const json& tool_calls) {
+    std::unordered_set<std::string> expected;
+    for (const auto& id : ToolCallIds(tool_calls)) {
+        expected.insert(id);
+    }
+    if (expected.empty()) return false;
+
+    for (size_t i = assistant_index + 1;
+         i < messages.size() && messages[i].role == "tool";
+         ++i) {
+        expected.erase(messages[i].tool_call_id);
+    }
+    return expected.empty();
+}
+
 json BuildRequestBody(const ChatRequestOptions& request, bool stream, const std::vector<ChatToolDefinition>& tools = {}) {
     json body;
     body["model"] = request.model.id;
@@ -307,12 +338,26 @@ json BuildRequestBody(const ChatRequestOptions& request, bool stream, const std:
         });
     }
 
-    for (const auto& message : request.messages) {
+    std::unordered_set<std::string> expected_tool_result_ids;
+    for (size_t message_index = 0; message_index < request.messages.size(); ++message_index) {
+        const auto& message = request.messages[message_index];
+        if (message.role == "tool") {
+            if (message.tool_call_id.empty() ||
+                expected_tool_result_ids.find(message.tool_call_id) == expected_tool_result_ids.end()) {
+                continue;
+            }
+        } else if (!expected_tool_result_ids.empty()) {
+            expected_tool_result_ids.clear();
+        }
+
         json payload{
             {"role", message.role},
         };
-        if (!message.content.empty() || message.role != "assistant") {
-            payload["content"] = message.content;
+        const std::string content = message.role == "assistant"
+            ? message_sanitizer::StripRawProviderToolCallBlocks(message.content)
+            : message.content;
+        if (!content.empty() || message.role != "assistant") {
+            payload["content"] = content;
         }
         if (!message.name.empty()) {
             payload["name"] = message.name;
@@ -322,11 +367,26 @@ json BuildRequestBody(const ChatRequestOptions& request, bool stream, const std:
         }
         if (!message.tool_calls_json.empty()) {
             try {
-                payload["tool_calls"] = NormalizeToolCallsForProvider(json::parse(message.tool_calls_json));
+                const auto normalized_tool_calls = NormalizeToolCallsForProvider(json::parse(message.tool_calls_json));
+                if (!normalized_tool_calls.empty() &&
+                    HasImmediateToolResultsForAll(request.messages, message_index, normalized_tool_calls)) {
+                    payload["tool_calls"] = normalized_tool_calls;
+                    for (const auto& id : ToolCallIds(normalized_tool_calls)) {
+                        expected_tool_result_ids.insert(id);
+                    }
+                }
             } catch (...) {
             }
         }
+        if (message.role == "assistant" &&
+            !payload.contains("content") &&
+            !payload.contains("tool_calls")) {
+            continue;
+        }
         body["messages"].push_back(std::move(payload));
+        if (message.role == "tool") {
+            expected_tool_result_ids.erase(message.tool_call_id);
+        }
     }
 
     if (!tools.empty()) {

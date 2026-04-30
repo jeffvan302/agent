@@ -18,6 +18,18 @@ marked.setOptions({
   gfm: true,
 });
 
+const renderer = new marked.Renderer();
+renderer.link = function(href, title, text) {
+  let out = '<a href="' + href + '"';
+  out += ' target="_blank" rel="noopener noreferrer"';
+  if (title) {
+    out += ' title="' + title + '"';
+  }
+  out += '>' + text + '</a>';
+  return out;
+};
+marked.use({ renderer });
+
 if (window.mermaid) {
   mermaid.initialize({
     startOnLoad: false,

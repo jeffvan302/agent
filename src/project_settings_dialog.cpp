@@ -123,6 +123,8 @@ enum ControlId : int {
     kInternalPowerShellWorkingDirLabel = 6473,
     kInternalPowerShellWorkingDirEdit = 6474,
     kInternalPowerShellRiskLabel = 6475,
+    kInternalArtifactMemoryEnabled = 6477,
+    kInternalArtifactMemoryNoteLabel = 6478,
 
     // Right panel scrollable host
     kSettingsScrollPanel = 6480,
@@ -838,6 +840,13 @@ private:
             L"Risk: this allows the model to run local PowerShell commands for this project.",
             WS_CHILD | WS_VISIBLE,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalPowerShellRiskLabel), nullptr, nullptr);
+        internal_artifact_memory_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable Artifact/Code Memory tools",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalArtifactMemoryEnabled), nullptr, nullptr);
+        internal_artifact_memory_note_label_ = CreateWindowExW(0, L"STATIC",
+            L"Layer 0 compression forces this on for artifact restore and code memory.",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalArtifactMemoryNoteLabel), nullptr, nullptr);
 
         // RAG services section
         rag_services_header_ = CreateWindowExW(0, L"STATIC", L"RAG Services:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagServicesHeader), nullptr, nullptr);
@@ -930,6 +939,7 @@ private:
             internal_tools_header_, internal_tools_list_, internal_tool_settings_panel_,
             internal_powershell_enabled_check_, internal_powershell_workdir_label_,
             internal_powershell_workdir_edit_, internal_powershell_risk_label_,
+            internal_artifact_memory_enabled_check_, internal_artifact_memory_note_label_,
             rag_services_header_, rag_services_list_, rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_check_,
             rag_priority_label_, rag_priority_edit_, rag_max_chunks_label_, rag_max_chunks_edit_,
@@ -1023,15 +1033,12 @@ private:
             CheckDlgButton(scroll_content_host_, kInlineWebLinksCheck, BST_CHECKED);
         }
         internal_powershell_enabled_ = options_.built_in_powershell_enabled;
-        ListBox_AddString(internal_tools_list_,
-            (std::wstring(internal_powershell_enabled_ ? L"[✓] " : L"[ ] ") + L"PowerShell command execution").c_str());
-        ListBox_SetCurSel(internal_tools_list_, 0);
-        CheckDlgButton(scroll_content_host_, kInternalPowerShellEnabled,
-            internal_powershell_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+        internal_artifact_memory_enabled_ = options_.built_in_artifact_memory_enabled;
         const std::string workdir = Trim(options_.built_in_powershell_working_directory).empty()
             ? std::string("$ProjectFolder$")
             : options_.built_in_powershell_working_directory;
         SetWindowTextW(internal_powershell_workdir_edit_, Utf8ToWide(workdir).c_str());
+        RefreshInternalToolsList(0);
 
         SetWindowTextW(model_timeout_edit_, std::to_wstring(options_.model_timeout_seconds).c_str());
     }
@@ -1118,7 +1125,7 @@ private:
         const int internal_list_w = std::max(Scale(hwnd_, 180), (right_width - gutter) / 2);
         const int internal_settings_x =  internal_list_w + gutter;
         const int internal_settings_w = right_width - internal_list_w - gutter;
-        const int internal_h = Scale(hwnd_, 92);
+        const int internal_h = Scale(hwnd_, 136);
         MoveWindow(internal_tools_list_, 0, y, internal_list_w, internal_h, TRUE);
         MoveWindow(internal_tool_settings_panel_, internal_settings_x, y, internal_settings_w, internal_h, TRUE);
         const int panel_pad = Scale(hwnd_, 10);
@@ -1126,6 +1133,8 @@ private:
         MoveWindow(internal_powershell_workdir_label_, internal_settings_x + panel_pad, y + Scale(hwnd_, 43), Scale(hwnd_, 90), label_height, TRUE);
         MoveWindow(internal_powershell_workdir_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 90), y + Scale(hwnd_, 40), internal_settings_w - panel_pad * 2 - Scale(hwnd_, 90), Scale(hwnd_, 22), TRUE);
         MoveWindow(internal_powershell_risk_label_, internal_settings_x + panel_pad, y + Scale(hwnd_, 66), internal_settings_w - panel_pad * 2, label_height, TRUE);
+        MoveWindow(internal_artifact_memory_enabled_check_, internal_settings_x + panel_pad, y + Scale(hwnd_, 88), internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(internal_artifact_memory_note_label_, internal_settings_x + panel_pad, y + Scale(hwnd_, 112), internal_settings_w - panel_pad * 2, label_height, TRUE);
 
         // RAG services section
         y += internal_h + gutter * 2;
@@ -1281,24 +1290,28 @@ private:
             break;
         case kInternalToolsList:
             if (notification_code == LBN_SELCHANGE && !toggling_internal_tool_) {
-                toggling_internal_tool_ = true;
-                internal_powershell_enabled_ = !internal_powershell_enabled_;
-                ListBox_DeleteString(internal_tools_list_, 0);
-                ListBox_InsertString(internal_tools_list_, 0,
-                    (std::wstring(internal_powershell_enabled_ ? L"[✓] " : L"[ ] ") + L"PowerShell command execution").c_str());
-                ListBox_SetCurSel(internal_tools_list_, 0);
-                CheckDlgButton(scroll_content_host_, kInternalPowerShellEnabled,
-                    internal_powershell_enabled_ ? BST_CHECKED : BST_UNCHECKED);
-                toggling_internal_tool_ = false;
+                const int sel = ListBox_GetCurSel(internal_tools_list_);
+                if (sel == 0) {
+                    internal_powershell_enabled_ = !internal_powershell_enabled_;
+                } else if (sel == 1 && !ArtifactMemoryForcedByLayer0()) {
+                    internal_artifact_memory_enabled_ = !internal_artifact_memory_enabled_;
+                }
+                RefreshInternalToolsList(sel >= 0 ? sel : 0);
             }
             break;
         case kInternalPowerShellEnabled:
             if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
                 internal_powershell_enabled_ = (IsDlgButtonChecked(scroll_content_host_, kInternalPowerShellEnabled) == BST_CHECKED);
-                ListBox_DeleteString(internal_tools_list_, 0);
-                ListBox_InsertString(internal_tools_list_, 0,
-                    (std::wstring(internal_powershell_enabled_ ? L"[✓] " : L"[ ] ") + L"PowerShell command execution").c_str());
-                ListBox_SetCurSel(internal_tools_list_, 0);
+                RefreshInternalToolsList(0);
+            }
+            break;
+        case kInternalArtifactMemoryEnabled:
+            if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
+                if (!ArtifactMemoryForcedByLayer0()) {
+                    internal_artifact_memory_enabled_ =
+                        (IsDlgButtonChecked(scroll_content_host_, kInternalArtifactMemoryEnabled) == BST_CHECKED);
+                }
+                RefreshInternalToolsList(1);
             }
             break;
         case kRagServicesList:
@@ -1642,6 +1655,50 @@ private:
         }
     }
 
+    bool ArtifactMemoryForcedByLayer0() const {
+        if (selected_compression_config_id_.empty()) return false;
+        const auto it = std::find_if(options_.compression_configs.begin(), options_.compression_configs.end(),
+            [&](const ContextCompressionConfig& cfg) { return cfg.id == selected_compression_config_id_; });
+        return it != options_.compression_configs.end() &&
+            it->strategy == ContextCompressionStrategy::HierarchicalStructured &&
+            it->layers.layer0.enabled;
+    }
+
+    bool ArtifactMemoryEffectiveEnabled() const {
+        return internal_artifact_memory_enabled_ || ArtifactMemoryForcedByLayer0();
+    }
+
+    void RefreshInternalToolsList(int selection = 0) {
+        if (!internal_tools_list_) return;
+        toggling_internal_tool_ = true;
+        ListBox_ResetContent(internal_tools_list_);
+
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(internal_powershell_enabled_ ? L"[✓] " : L"[ ] ") + L"PowerShell command execution").c_str());
+
+        const bool memory_forced = ArtifactMemoryForcedByLayer0();
+        const bool memory_enabled = ArtifactMemoryEffectiveEnabled();
+        std::wstring memory_label = (memory_enabled ? L"[✓] " : L"[ ] ");
+        memory_label += L"Artifact/Code Memory";
+        if (memory_forced) {
+            memory_label += L" (forced by L0)";
+        }
+        ListBox_AddString(internal_tools_list_, memory_label.c_str());
+
+        if (selection < 0 || selection > 1) selection = 0;
+        ListBox_SetCurSel(internal_tools_list_, selection);
+        CheckDlgButton(scroll_content_host_, kInternalPowerShellEnabled,
+            internal_powershell_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(scroll_content_host_, kInternalArtifactMemoryEnabled,
+            memory_enabled ? BST_CHECKED : BST_UNCHECKED);
+        EnableWindow(internal_artifact_memory_enabled_check_, memory_forced ? FALSE : TRUE);
+        SetWindowTextW(internal_artifact_memory_note_label_,
+            memory_forced
+                ? L"Forced on because the selected context compression has Layer 0 enabled."
+                : L"Stores versioned artifacts and code under project memory when enabled.");
+        toggling_internal_tool_ = false;
+    }
+
     void OnCompressionConfigChanged() {
         int sel = ComboBox_GetCurSel(context_window_combo_);
         if (sel <= 0) {
@@ -1649,6 +1706,7 @@ private:
         } else if ((sel - 1) < static_cast<int>(options_.compression_configs.size())) {
             selected_compression_config_id_ = options_.compression_configs[sel - 1].id;
         }
+        RefreshInternalToolsList(1);
     }
 
     void RefreshRagList() {
@@ -2120,6 +2178,7 @@ private:
         if (result.built_in_powershell_working_directory.empty()) {
             result.built_in_powershell_working_directory = "$ProjectFolder$";
         }
+        result.built_in_artifact_memory_enabled = internal_artifact_memory_enabled_;
         const std::wstring timeout_text = TrimWide(GetWindowTextString(model_timeout_edit_));
         if (!timeout_text.empty()) {
             result.model_timeout_seconds = std::stoi(timeout_text);
@@ -2653,7 +2712,10 @@ private:
     HWND internal_powershell_workdir_label_ = nullptr;
     HWND internal_powershell_workdir_edit_ = nullptr;
     HWND internal_powershell_risk_label_ = nullptr;
+    HWND internal_artifact_memory_enabled_check_ = nullptr;
+    HWND internal_artifact_memory_note_label_ = nullptr;
     bool internal_powershell_enabled_ = false;
+    bool internal_artifact_memory_enabled_ = false;
     bool toggling_internal_tool_ = false;
     std::vector<bool> agentic_mode_enabled_;
     bool toggling_agentic_mode_ = false;

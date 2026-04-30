@@ -645,5 +645,6 @@ struct ProjectSettings {
     bool serve_web_links_inline = false;            // Serve /data and /rag file links inline instead of forced downloads
     bool built_in_powershell_enabled = false;      // Enable high-risk built-in PowerShell execution tool
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
+    bool built_in_artifact_memory_enabled = false;  // Enable versioned Artifact/Code Memory tools without requiring L0 compression
     int model_timeout_seconds = 0;                  // 0 = wait forever (default), otherwise max seconds per model request
 };

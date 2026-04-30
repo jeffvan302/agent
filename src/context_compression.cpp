@@ -203,6 +203,414 @@ std::vector<std::string> JsonStringArray(const json& value, const char* key) {
     return out;
 }
 
+std::string NormalizeArtifactType(std::string type, std::string language);
+std::string NormalizeArtifactLanguage(std::string language, const std::string& type);
+
+std::string LowerAsciiCopy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+std::string FileNameFromText(const std::string& text) {
+    try {
+        const std::regex file_re(
+            R"(([A-Za-z0-9_$@~.-]+\.(?:cpp|cc|cxx|c\+\+|c|h|hh|hpp|hxx|py|pyw|js|jsx|mjs|cjs|ts|tsx|java|html|htm|svg|json|md|markdown|css)))",
+            std::regex_constants::icase);
+        std::smatch match;
+        if (std::regex_search(text, match, file_re) && match.size() > 1) {
+            return match[1].str();
+        }
+    } catch (...) {
+    }
+    return {};
+}
+
+std::string ExtensionFromPathText(const std::string& text) {
+    std::string file_name = FileNameFromText(text);
+    if (file_name.empty()) {
+        file_name = text;
+        std::replace(file_name.begin(), file_name.end(), '\\', '/');
+        const size_t slash = file_name.find_last_of('/');
+        if (slash != std::string::npos) {
+            file_name = file_name.substr(slash + 1);
+        }
+    }
+    const size_t dot = file_name.find_last_of('.');
+    if (dot == std::string::npos || dot + 1 >= file_name.size()) {
+        return {};
+    }
+    return LowerAsciiCopy(file_name.substr(dot + 1));
+}
+
+std::string LanguageFromPathText(const std::string& text) {
+    const std::string ext = ExtensionFromPathText(text);
+    if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "c++" ||
+        ext == "hpp" || ext == "hxx" || ext == "hh") return "cpp";
+    if (ext == "c" || ext == "h") return "c";
+    if (ext == "py" || ext == "pyw") return "python";
+    if (ext == "js" || ext == "jsx" || ext == "mjs" || ext == "cjs") return "javascript";
+    if (ext == "ts" || ext == "tsx") return "typescript";
+    if (ext == "java") return "java";
+    if (ext == "htm" || ext == "html") return "html";
+    if (ext == "svg") return "svg";
+    if (ext == "json") return "json";
+    if (ext == "md" || ext == "markdown") return "markdown";
+    if (ext == "css") return "css";
+    return {};
+}
+
+bool LooksLikeArtifactContent(const std::string& value) {
+    const std::string trimmed = TrimStr(value);
+    if (trimmed.empty()) return false;
+    const std::string lower = LowerAsciiCopy(trimmed.substr(0, std::min<size_t>(trimmed.size(), 512)));
+    if (lower.find("<svg") != std::string::npos || lower.find("<html") != std::string::npos ||
+        lower.find("<!doctype html") != std::string::npos) {
+        return true;
+    }
+    if (trimmed.find("```") != std::string::npos) return true;
+    if (trimmed.size() < 40) return false;
+    if (trimmed.find('\n') != std::string::npos) return true;
+    return (trimmed.front() == '{' || trimmed.front() == '[') && trimmed.size() > 80;
+}
+
+bool KeyImpliesArtifactContent(const std::string& key) {
+    const std::string lower = LowerAsciiCopy(NormalizeArtifactKey(key));
+    if (lower.find("path") != std::string::npos || lower.find("file_name") != std::string::npos ||
+        lower.find("filename") != std::string::npos || lower.find("description") != std::string::npos ||
+        lower.find("instructions") != std::string::npos) {
+        return false;
+    }
+    return lower.find("content") != std::string::npos ||
+           lower.find("code") != std::string::npos ||
+           lower.find("source") != std::string::npos ||
+           lower.find("body") != std::string::npos ||
+           lower.find("html") != std::string::npos ||
+           lower.find("svg") != std::string::npos ||
+           lower == "text" ||
+           lower == "replacement" ||
+           lower == "new_text" ||
+           lower == "new_content";
+}
+
+std::string FindPathLikeValue(const json& value) {
+    if (value.is_object()) {
+        for (auto it = value.begin(); it != value.end(); ++it) {
+            const std::string key = LowerAsciiCopy(NormalizeArtifactKey(it.key()));
+            if ((key.find("path") != std::string::npos || key.find("file") != std::string::npos ||
+                 key.find("filename") != std::string::npos) && it.value().is_string()) {
+                const std::string text = it.value().get<std::string>();
+                if (!FileNameFromText(text).empty() || !LanguageFromPathText(text).empty()) {
+                    return text;
+                }
+            }
+        }
+        for (auto it = value.begin(); it != value.end(); ++it) {
+            const std::string nested = FindPathLikeValue(it.value());
+            if (!nested.empty()) return nested;
+        }
+    } else if (value.is_array()) {
+        for (const auto& item : value) {
+            const std::string nested = FindPathLikeValue(item);
+            if (!nested.empty()) return nested;
+        }
+    }
+    return {};
+}
+
+size_t FindCaseInsensitive(const std::string& haystack_lower,
+                           const std::string& needle_lower,
+                           size_t start = 0) {
+    return haystack_lower.find(needle_lower, start);
+}
+
+std::string ShortHash(const std::string& value) {
+    const std::string hash = Fnv1aHashHex(value);
+    return hash.substr(0, std::min<size_t>(hash.size(), 8));
+}
+
+std::string StripMarkdownDecorators(std::string line) {
+    line = TrimStr(std::move(line));
+    while (!line.empty() && (line.front() == '#' || line.front() == '-' ||
+                             line.front() == '*' || line.front() == ':' ||
+                             std::isspace(static_cast<unsigned char>(line.front())))) {
+        line.erase(line.begin());
+        line = TrimStr(std::move(line));
+    }
+    if (!line.empty() && line.back() == ':') {
+        line.pop_back();
+    }
+    return TrimStr(std::move(line));
+}
+
+std::string LastMeaningfulLineBefore(const std::string& text, size_t offset) {
+    size_t line_end = std::min(offset, text.size());
+    int inspected = 0;
+    while (line_end > 0 && inspected < 12) {
+        const size_t search_from = line_end == 0 ? 0 : line_end - 1;
+        const size_t line_start_pos = text.rfind('\n', search_from);
+        const size_t line_start = line_start_pos == std::string::npos ? 0 : line_start_pos + 1;
+        std::string line = StripMarkdownDecorators(text.substr(line_start, line_end - line_start));
+        if (!line.empty() && line.rfind("```", 0) != 0) {
+            if (line.size() > 90) line.resize(90);
+            return line;
+        }
+        if (line_start_pos == std::string::npos) break;
+        line_end = line_start_pos;
+        ++inspected;
+    }
+    return {};
+}
+
+std::string RegexFirstCapture(const std::string& text,
+                              const std::string& pattern,
+                              std::regex_constants::syntax_option_type flags = std::regex_constants::ECMAScript) {
+    try {
+        const std::regex re(pattern, flags);
+        std::smatch match;
+        if (std::regex_search(text, match, re) && match.size() > 1) {
+            return TrimStr(match[1].str());
+        }
+    } catch (...) {
+    }
+    return {};
+}
+
+std::string InferArtifactSymbol(const std::string& content, const std::string& type) {
+    if (type == "html") {
+        const std::string title = RegexFirstCapture(
+            content, R"(<title[^>]*>([^<]+)</title>)", std::regex_constants::icase);
+        if (!title.empty()) return title;
+    }
+    const std::string named_decl = RegexFirstCapture(
+        content,
+        R"(\b(?:class|struct|interface|enum|function|def)\s+([A-Za-z_][A-Za-z0-9_\-]*))");
+    if (!named_decl.empty()) return named_decl;
+    const std::string variable_decl = RegexFirstCapture(
+        content,
+        R"(\b(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_\-]*)\s*=)");
+    if (!variable_decl.empty()) return variable_decl;
+    const std::string c_style_function = RegexFirstCapture(
+        content,
+        R"(\b(?:[A-Za-z_][A-Za-z0-9_:<>~\*&]*\s+)+([A-Za-z_][A-Za-z0-9_:~]*)\s*\([^;{}]*\)\s*(?:const\s*)?\{)");
+    if (!c_style_function.empty()) return c_style_function;
+    const std::string id_attr = RegexFirstCapture(
+        content, R"(\bid\s*=\s*["']([^"']+)["'])", std::regex_constants::icase);
+    if (!id_attr.empty()) return id_attr;
+    return {};
+}
+
+json MakeFallbackArtifactCandidate(const std::string& content,
+                                   const std::string& raw_language,
+                                   const std::string& context_hint,
+                                   const std::string& role) {
+    std::string type = NormalizeArtifactType(raw_language, raw_language);
+    if (type == "html" || content.find("<html") != std::string::npos ||
+        content.find("<!DOCTYPE html") != std::string::npos) {
+        type = "html";
+    } else if (type == "svg" || content.find("<svg") != std::string::npos) {
+        type = "svg";
+    }
+    std::string language_seed = raw_language;
+    const std::string file_name = FileNameFromText(context_hint);
+    if (!file_name.empty()) {
+        const std::string path_language = LanguageFromPathText(file_name);
+        if (!path_language.empty() && NormalizeArtifactKey(language_seed) == "code") {
+            language_seed = path_language;
+            type = NormalizeArtifactType(path_language, path_language);
+        }
+    }
+    if (NormalizeArtifactKey(language_seed) == "code" && type != "code") {
+        language_seed.clear();
+    }
+    const std::string language = NormalizeArtifactLanguage(language_seed, type);
+    const std::string symbol = InferArtifactSymbol(content, type);
+
+    std::string key_seed;
+    if (!context_hint.empty()) key_seed += context_hint + " ";
+    if (!file_name.empty()) key_seed += file_name + " ";
+    if (!symbol.empty()) key_seed += symbol + " ";
+    key_seed += type;
+    std::string artifact_key = SlugFromText(key_seed, type + "_" + ShortHash(content));
+    if (artifact_key == type || artifact_key.empty()) {
+        artifact_key = type + "_" + ShortHash(content);
+    }
+
+    std::string summary = context_hint.empty()
+        ? ("Preserved " + type + " artifact from a " + role + " message.")
+        : ("Preserved " + type + " artifact: " + context_hint + ".");
+    if (!symbol.empty() && summary.find(symbol) == std::string::npos) {
+        summary += " Symbol: " + symbol + ".";
+    }
+    if (!file_name.empty() && summary.find(file_name) == std::string::npos) {
+        summary += " File: " + file_name + ".";
+    }
+
+    return json{
+        {"artifact_key", artifact_key},
+        {"type", type},
+        {"language", language},
+        {"summary", summary},
+        {"user_intent", context_hint},
+        {"problem_it_solves", "Preserves exact generated artifact content for later version-aware recall."},
+        {"tags", json::array({type, "fallback_capture"})},
+        {"content", content},
+    };
+}
+
+void AppendToolArgumentArtifacts(const json& value,
+                                 const std::string& key,
+                                 const std::string& tool_name,
+                                 const std::string& path_hint,
+                                 const std::string& role,
+                                 std::vector<json>* artifacts) {
+    if (!artifacts) return;
+    if (value.is_string()) {
+        std::string content = NormalizeMultilineText(value.get<std::string>());
+        content = TrimStr(std::move(content));
+        if (!KeyImpliesArtifactContent(key) || !LooksLikeArtifactContent(content)) {
+            return;
+        }
+
+        std::string language = LanguageFromPathText(path_hint);
+        if (language.empty()) language = LanguageFromPathText(key);
+        if (language.empty()) language = "code";
+
+        std::string context_hint = tool_name;
+        const std::string file_name = FileNameFromText(path_hint);
+        if (!file_name.empty()) {
+            context_hint += " " + file_name;
+        } else if (!key.empty()) {
+            context_hint += " " + key;
+        }
+        artifacts->push_back(MakeFallbackArtifactCandidate(content, language, context_hint, role));
+        return;
+    }
+
+    if (value.is_object()) {
+        for (auto it = value.begin(); it != value.end(); ++it) {
+            AppendToolArgumentArtifacts(it.value(), it.key(), tool_name, path_hint, role, artifacts);
+        }
+    } else if (value.is_array()) {
+        for (const auto& item : value) {
+            AppendToolArgumentArtifacts(item, key, tool_name, path_hint, role, artifacts);
+        }
+    }
+}
+
+void AppendArtifactsFromToolCalls(const MessageRecord& turn, std::vector<json>* artifacts) {
+    if (!artifacts || TrimStr(turn.tool_calls_json).empty()) {
+        return;
+    }
+
+    json calls;
+    try {
+        calls = json::parse(turn.tool_calls_json);
+    } catch (...) {
+        return;
+    }
+    if (!calls.is_array()) {
+        return;
+    }
+
+    for (const auto& call : calls) {
+        if (!call.is_object()) continue;
+        const auto function_it = call.find("function");
+        if (function_it == call.end() || !function_it->is_object()) continue;
+        const std::string tool_name = function_it->value("name", "tool_call");
+        const std::string arguments_text = function_it->value("arguments", "");
+        if (TrimStr(arguments_text).empty()) continue;
+
+        json args;
+        try {
+            args = json::parse(arguments_text);
+        } catch (...) {
+            continue;
+        }
+        const std::string path_hint = FindPathLikeValue(args);
+        AppendToolArgumentArtifacts(args, {}, tool_name, path_hint, turn.role, artifacts);
+    }
+}
+
+void AppendDelimitedArtifactBlocks(const std::string& text,
+                                   const std::string& start_token,
+                                   const std::string& end_token,
+                                   const std::string& language,
+                                   const std::string& role,
+                                   std::vector<json>* artifacts) {
+    if (!artifacts || text.empty()) return;
+    const std::string lower = LowerAsciiCopy(text);
+    const std::string start_lower = LowerAsciiCopy(start_token);
+    const std::string end_lower = LowerAsciiCopy(end_token);
+
+    size_t pos = 0;
+    while (pos < text.size()) {
+        const size_t start = FindCaseInsensitive(lower, start_lower, pos);
+        if (start == std::string::npos) break;
+        const size_t end_start = FindCaseInsensitive(lower, end_lower, start + start_lower.size());
+        if (end_start == std::string::npos) break;
+        const size_t end = end_start + end_token.size();
+        std::string content = TrimStr(NormalizeMultilineText(text.substr(start, end - start)));
+        if (!content.empty()) {
+            artifacts->push_back(MakeFallbackArtifactCandidate(
+                content,
+                language,
+                LastMeaningfulLineBefore(text, start),
+                role));
+        }
+        pos = end;
+    }
+}
+
+std::vector<json> ExtractFallbackArtifactCandidates(const std::vector<MessageRecord>& new_turns) {
+    std::vector<json> artifacts;
+    for (const auto& turn : new_turns) {
+        const std::string& text = turn.content;
+        size_t pos = 0;
+        while (pos < text.size()) {
+            const size_t fence = text.find("```", pos);
+            if (fence == std::string::npos) break;
+            const size_t language_start = fence + 3;
+            const size_t language_end = text.find_first_of("\r\n", language_start);
+            if (language_end == std::string::npos) break;
+            std::string raw_language = TrimStr(text.substr(language_start, language_end - language_start));
+            const size_t body_start = text.find('\n', language_end);
+            if (body_start == std::string::npos) break;
+            const size_t content_start = body_start + 1;
+            const size_t closing = text.find("```", content_start);
+            if (closing == std::string::npos) break;
+
+            std::string content = NormalizeMultilineText(text.substr(content_start, closing - content_start));
+            content = TrimStr(std::move(content));
+            if (!content.empty()) {
+                artifacts.push_back(MakeFallbackArtifactCandidate(
+                    content,
+                    raw_language.empty() ? "code" : raw_language,
+                    LastMeaningfulLineBefore(text, fence),
+                    turn.role));
+            }
+            pos = closing + 3;
+        }
+
+        AppendArtifactsFromToolCalls(turn, &artifacts);
+
+        const std::string trimmed = TrimStr(text);
+        const std::string lower_trimmed = LowerAsciiCopy(trimmed);
+        if (lower_trimmed.find("<svg") != std::string::npos && lower_trimmed.find("</svg>") != std::string::npos) {
+            AppendDelimitedArtifactBlocks(text, "<svg", "</svg>", "svg", turn.role, &artifacts);
+        }
+        if (lower_trimmed.find("</html>") != std::string::npos) {
+            if (lower_trimmed.find("<!doctype html") != std::string::npos) {
+                AppendDelimitedArtifactBlocks(text, "<!doctype html", "</html>", "html", turn.role, &artifacts);
+            } else if (lower_trimmed.find("<html") != std::string::npos) {
+                AppendDelimitedArtifactBlocks(text, "<html", "</html>", "html", turn.role, &artifacts);
+            }
+        }
+    }
+    return artifacts;
+}
+
 std::optional<json> ParseLooseJson(const std::string& text) {
     const std::string trimmed = TrimStr(text);
     if (trimmed.empty()) return std::nullopt;
@@ -233,22 +641,45 @@ std::optional<json> ParseLooseJson(const std::string& text) {
     return std::nullopt;
 }
 
+std::string NormalizeArtifactAlias(std::string value) {
+    const std::string raw = LowerAsciiCopy(TrimStr(value));
+    if (raw == "c++" || raw == "cpp" || raw == "cxx" || raw == "cc" ||
+        raw == "hpp" || raw == "hxx" || raw == "hh") return "cpp";
+    if (raw == "c" || raw == "h") return "c";
+    if (raw == "py" || raw == "pyw" || raw == "python3") return "python";
+    if (raw == "js" || raw == "jsx" || raw == "mjs" || raw == "cjs" ||
+        raw == "node" || raw == "nodejs" || raw == "ecmascript") return "javascript";
+    if (raw == "ts" || raw == "tsx") return "typescript";
+    if (raw == "java") return "java";
+
+    std::string normalized = NormalizeArtifactKey(raw);
+    if (normalized == "c_plus_plus" || normalized == "cplusplus" ||
+        normalized == "cxx" || normalized == "cc" || normalized == "hpp" ||
+        normalized == "hxx" || normalized == "hh") return "cpp";
+    if (normalized == "py" || normalized == "pyw" || normalized == "python3") return "python";
+    if (normalized == "js" || normalized == "jsx" || normalized == "mjs" ||
+        normalized == "cjs" || normalized == "node" || normalized == "nodejs" ||
+        normalized == "ecmascript") return "javascript";
+    if (normalized == "ts" || normalized == "tsx") return "typescript";
+    if (normalized == "vegalite" || normalized == "vega_lite") return "vega-lite";
+    if (normalized == "cytoscapejs" || normalized == "cytoscape_js") return "cytoscape";
+    if (normalized == "md") return "markdown";
+    if (normalized == "htm") return "html";
+    return normalized;
+}
+
 std::string NormalizeArtifactType(std::string type, std::string language) {
-    type = NormalizeArtifactKey(std::move(type));
-    language = NormalizeArtifactKey(std::move(language));
+    type = NormalizeArtifactAlias(std::move(type));
+    language = NormalizeArtifactAlias(std::move(language));
     if (type.empty()) type = language;
-    if (type == "js") type = "javascript";
-    if (type == "ts") type = "typescript";
     if (type == "yml") type = "yaml";
-    if (type == "cplusplus" || type == "cxx" || type == "cc") type = "cpp";
-    if (type == "vegalite" || type == "vega_lite") type = "vega-lite";
-    if (type == "cytoscapejs" || type == "cytoscape_js") type = "cytoscape";
     if (type.empty()) type = "code";
     return type;
 }
 
 std::string NormalizeArtifactLanguage(std::string language, const std::string& type) {
-    language = NormalizeArtifactKey(std::move(language));
+    language = NormalizeArtifactAlias(std::move(language));
+    if (language == "source") language.clear();
     if (!language.empty()) return language;
     if (type == "vega-lite") return "json";
     if (type == "cytoscape") return "json";
@@ -523,14 +954,21 @@ std::vector<json> ExtractArtifactCandidates(
     const Layer0Config& config,
     std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller) {
     std::vector<json> artifacts;
-    if (!config.enabled || config.capture_model_id.empty() || config.capture_model_provider_id.empty() || new_turns.empty()) {
+    if (!config.enabled || new_turns.empty()) {
         return artifacts;
+    }
+
+    const auto fallback_artifacts = ExtractFallbackArtifactCandidates(new_turns);
+    if (config.capture_model_id.empty() || config.capture_model_provider_id.empty()) {
+        return fallback_artifacts;
     }
 
     ChatRequestOptions opts;
     opts.model.id = config.capture_model_id;
     if (auto provider = OpenAIClient::LookupProvider(config.capture_model_provider_id)) {
         opts.provider = *provider;
+    } else {
+        return fallback_artifacts;
     }
     opts.max_tokens = 4096;
     opts.temperature = 0.1;
@@ -551,7 +989,7 @@ std::vector<json> ExtractArtifactCandidates(
            << "  \"artifacts\": [\n"
            << "    {\n"
            << "      \"artifact_key\": \"stable_key\",\n"
-           << "      \"type\": \"html|svg|mermaid|vega-lite|cytoscape|cpp|python|json|markdown|code|...\",\n"
+           << "      \"type\": \"html|svg|mermaid|vega-lite|cytoscape|c|cpp|python|javascript|typescript|java|json|markdown|code|...\",\n"
            << "      \"language\": \"language tag for fenced block\",\n"
            << "      \"summary\": \"short summary\",\n"
            << "      \"user_intent\": \"what the user wanted\",\n"
@@ -571,17 +1009,17 @@ std::vector<json> ExtractArtifactCandidates(
 
     const auto result = model_caller(opts);
     if (!result || !result->success || TrimStr(result->message.content).empty()) {
-        return artifacts;
+        return fallback_artifacts;
     }
 
     const auto payload = ParseLooseJson(result->message.content);
-    if (!payload) return artifacts;
+    if (!payload) return fallback_artifacts;
 
     if (payload->is_array()) {
         for (const auto& item : *payload) {
             if (item.is_object()) artifacts.push_back(item);
         }
-        return artifacts;
+        return artifacts.empty() ? fallback_artifacts : artifacts;
     }
 
     if (payload->is_object() && payload->contains("artifacts") && (*payload)["artifacts"].is_array()) {
@@ -589,7 +1027,7 @@ std::vector<json> ExtractArtifactCandidates(
             if (item.is_object()) artifacts.push_back(item);
         }
     }
-    return artifacts;
+    return artifacts.empty() ? fallback_artifacts : artifacts;
 }
 
 void PersistArtifactCandidates(
@@ -1025,6 +1463,11 @@ std::string ContextCompressionService::Layer2_Summarize(
 
     ChatRequestOptions opts;
     opts.model.id = config.model_id;
+    if (auto provider = OpenAIClient::LookupProvider(config.model_provider_id)) {
+        opts.provider = *provider;
+    } else {
+        return prior_summary;
+    }
     opts.messages.push_back(MessageRecord{});
     opts.messages.back().role = "user";
     opts.messages.back().content = prompt.str();
@@ -1078,6 +1521,11 @@ std::string ContextCompressionService::Layer3_ExtractState(
 
     ChatRequestOptions opts;
     opts.model.id = config.model_id;
+    if (auto provider = OpenAIClient::LookupProvider(config.model_provider_id)) {
+        opts.provider = *provider;
+    } else {
+        return prior_state_json;
+    }
     opts.messages.push_back(MessageRecord{});
     opts.messages.back().role = "user";
     opts.messages.back().content = prompt.str();
@@ -1403,22 +1851,30 @@ std::string ContextCompressionService::CompressHierarchical(
                 artifact_index = EmptyArtifactIndex(project_id, chat_id);
             }
 
+            SaveTextFile(index_path, artifact_index.dump(2));
+            SaveTextFile(storage_root / "INDEX.md", BuildArtifactIndexMarkdown(artifact_index));
+
             if (!layer0_turns.empty()) {
-                const auto candidates = ExtractArtifactCandidates(
-                    layer0_turns,
-                    artifact_index,
-                    project_id,
-                    chat_id,
-                    config.layers.layer0,
-                    model_caller);
-                PersistArtifactCandidates(
-                    artifact_index,
-                    candidates,
-                    storage_root,
-                    project_id,
-                    chat_id,
-                    layer0_last_idx,
-                    messages.empty() ? 0 : messages.size() - 1);
+                try {
+                    const auto candidates = ExtractArtifactCandidates(
+                        layer0_turns,
+                        artifact_index,
+                        project_id,
+                        chat_id,
+                        config.layers.layer0,
+                        model_caller);
+                    PersistArtifactCandidates(
+                        artifact_index,
+                        candidates,
+                        storage_root,
+                        project_id,
+                        chat_id,
+                        layer0_last_idx,
+                        messages.empty() ? 0 : messages.size() - 1);
+                } catch (...) {
+                    // Keep the index files usable even if the capture model or
+                    // fallback extraction fails for a specific compression pass.
+                }
             }
 
             SaveTextFile(index_path, artifact_index.dump(2));

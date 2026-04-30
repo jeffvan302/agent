@@ -6,6 +6,7 @@
 
 #include "mcp_manager.h"
 #include "mcp_server_manager.h"
+#include "message_sanitizer.h"
 #include "openai_client.h"
 #include "prompt_dialog.h"
 #include "project_setup_dialog.h"
@@ -25,6 +26,7 @@
 #include "web_user_store.h"
 #include "web_config_dialog.h"
 #include "admin_config_dialog.h"
+#include "artifact_memory_tool_bridge.h"
 #include "built_in_tools.h"
 #include "storage.h"
 #include "util.h"
@@ -184,15 +186,7 @@ size_t EstimateMessageTokens(const MessageRecord& message) {
 }
 
 std::vector<MessageRecord> ModelVisibleMessages(const std::vector<MessageRecord>& messages) {
-    std::vector<MessageRecord> filtered;
-    filtered.reserve(messages.size());
-    for (const auto& message : messages) {
-        if (message.role == "file" || message.role == "compression") {
-            continue;
-        }
-        filtered.push_back(message);
-    }
-    return filtered;
+    return message_sanitizer::SanitizeModelVisibleMessages(messages);
 }
 
 std::wstring FormatFileUploadForTranscript(const std::string& content) {
@@ -2849,6 +2843,10 @@ private:
     std::vector<ProjectMcpVariableValue> BuildRuntimeVariablesForChat(
         const std::string& project_id,
         const std::string& chat_id) const;
+    std::vector<ProjectMcpVariableValue> BuildResolvedVariablesForChat(
+        const std::string& project_id,
+        const std::string& chat_id,
+        const ProjectSettings& project_settings) const;
     ProjectRecord* FindProject(const std::string& project_id);
     ChatInfo* FindChat(const std::string& project_id, const std::string& chat_id);
 
@@ -3516,6 +3514,7 @@ void MainWindow::EditProjectSettings() {
     options.serve_web_links_inline = project_settings.serve_web_links_inline;
     options.built_in_powershell_enabled = project_settings.built_in_powershell_enabled;
     options.built_in_powershell_working_directory = project_settings.built_in_powershell_working_directory;
+    options.built_in_artifact_memory_enabled = project_settings.built_in_artifact_memory_enabled;
 
     // Pre-seed ProjectFolder from MCP global binding values if not already set.
     for (const auto& gv : mcp_manager_.global_variables()) {
@@ -3562,6 +3561,7 @@ void MainWindow::EditProjectSettings() {
     saved_settings.serve_web_links_inline = result->serve_web_links_inline;
     saved_settings.built_in_powershell_enabled = result->built_in_powershell_enabled;
     saved_settings.built_in_powershell_working_directory = result->built_in_powershell_working_directory;
+    saved_settings.built_in_artifact_memory_enabled = result->built_in_artifact_memory_enabled;
     storage_.SaveProjectSettings(active_project_id_, saved_settings);
     storage_.SaveProjectCompressionSettings(active_project_id_, ProjectCompressionSettings{
         !result->selected_compression_config_id.empty(),
@@ -4206,22 +4206,8 @@ void MainWindow::SendCurrentMessage() {
     std::string compressed_context;
     auto proj_settings = storage_.LoadProjectSettings(active_project_id_);
     const auto runtime_variables = BuildRuntimeVariablesForChat(active_project_id_, active_chat_id_);
-    std::vector<ProjectMcpVariableValue> resolved_prompt_variables;
-    for (const auto& binding : mcp_manager_.GetProjectBindings(active_project_id_)) {
-        for (const auto& variable : binding.variables) {
-            variable_resolver::UpsertValue(resolved_prompt_variables, variable.name, variable.value);
-        }
-    }
-    for (const auto& variable : proj_settings.project_variables) {
-        variable_resolver::UpsertValue(resolved_prompt_variables, variable);
-    }
-    for (const auto& variable : runtime_variables) {
-        variable_resolver::UpsertValue(resolved_prompt_variables, variable.name, variable.value);
-    }
-    resolved_prompt_variables = variable_resolver::ResolveValues(resolved_prompt_variables);
-    variable_resolver::EnsureFolderVariables(
-        resolved_prompt_variables,
-        mcp_manager_.global_variables());
+    const auto resolved_prompt_variables = BuildResolvedVariablesForChat(
+        active_project_id_, active_chat_id_, proj_settings);
     std::optional<ContextCompressionConfig> selected_compression_config;
     if (!proj_settings.selected_compression_config_id.empty()) {
         selected_compression_config = compression_service_.GetGlobalConfig(proj_settings.selected_compression_config_id);
@@ -4233,7 +4219,14 @@ void MainWindow::SendCurrentMessage() {
                     return result.success ? std::make_optional(result) : std::nullopt;
                 };
                 compressed_context = compression_service_.CompressConversation(
-                    compression_messages, active_project_id_, active_chat_id_, proj_settings.selected_compression_config_id, model_caller);
+                    compression_messages,
+                    active_project_id_,
+                    active_chat_id_,
+                    proj_settings.selected_compression_config_id,
+                    model_caller,
+                    false,
+                    "automatic",
+                    resolved_prompt_variables);
             }
 
             auto compression_state = compression_service_.LoadChatState(active_project_id_, active_chat_id_);
@@ -4243,6 +4236,7 @@ void MainWindow::SendCurrentMessage() {
             if (!compressed_context.empty() && compression_state.last_compression_message_index > 0) {
                 const size_t first_uncompressed = std::min(compression_state.last_compression_message_index, request_history.size());
                 request_history.erase(request_history.begin(), request_history.begin() + first_uncompressed);
+                request_history = message_sanitizer::SanitizeModelVisibleMessages(request_history);
             }
         }
     }
@@ -4311,6 +4305,17 @@ void MainWindow::SendCurrentMessage() {
         }
         request.system_prompt += rag_context;
         system_prompt_sections.push_back({"RAG Project Context", rag_context});
+    }
+
+    if (artifact_memory_tools::ShouldExposeArtifactMemoryTools(
+            selected_compression_config,
+            proj_settings.built_in_artifact_memory_enabled)) {
+        const std::string artifact_context = artifact_memory_tools::BuildArtifactMemoryUsageContext();
+        if (!request.system_prompt.empty()) {
+            request.system_prompt += "\n\n";
+        }
+        request.system_prompt += artifact_context;
+        system_prompt_sections.push_back({"Artifact Memory Restore Rules", artifact_context});
     }
 
     // Lazy-load per-chat working set from disk if not already in memory.
@@ -4384,6 +4389,15 @@ void MainWindow::SendCurrentMessage() {
     const auto project_settings_for_tools = storage_.LoadProjectSettings(project_id);
     const auto& enabled_tool_ids = project_settings_for_tools.model_tool_ids;
     const auto project_variables = resolved_prompt_variables;
+    const auto artifact_tool_set = request.model.supports_tools
+        ? artifact_memory_tools::BuildArtifactMemoryToolSet(
+            selected_compression_config,
+            project_id,
+            chat_id,
+            project_variables,
+            project_settings_for_tools.built_in_artifact_memory_enabled)
+        : artifact_memory_tools::ArtifactMemoryToolSet{};
+    const auto artifact_tool_definitions = artifact_tool_set.definitions;
     std::vector<ModelToolConfig> model_tools;
     for (const auto& mt : all_model_tools) {
         // If the project has an explicit enabled list, only include listed tools.
@@ -4480,6 +4494,7 @@ void MainWindow::SendCurrentMessage() {
     }
     const auto built_in_tool_definitions = built_in_tools::BuildDefinitions(project_settings_for_tools);
     std::vector<ChatToolDefinition> extra_tool_definitions = rag_tool_definitions;
+    extra_tool_definitions.insert(extra_tool_definitions.end(), artifact_tool_definitions.begin(), artifact_tool_definitions.end());
     extra_tool_definitions.insert(extra_tool_definitions.end(), model_tool_definitions.begin(), model_tool_definitions.end());
     extra_tool_definitions.insert(extra_tool_definitions.end(), built_in_tool_definitions.begin(), built_in_tool_definitions.end());
 
@@ -4567,12 +4582,12 @@ void MainWindow::SendCurrentMessage() {
         return;
     }
 
-    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
+    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
         constexpr int kMaxToolRounds = 8;
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
         std::vector<ChatToolDefinition> tool_definitions;
-        tool_definitions.reserve(exposed_tools.size() + rag_tool_definitions.size() + model_tool_definitions.size() + built_in_tool_definitions.size());
+        tool_definitions.reserve(exposed_tools.size() + rag_tool_definitions.size() + artifact_tool_definitions.size() + model_tool_definitions.size() + built_in_tool_definitions.size());
         std::unordered_map<std::string, McpExposedTool> tool_lookup;
         for (const auto& exposed : exposed_tools) {
             ChatToolDefinition definition;
@@ -4588,6 +4603,7 @@ void MainWindow::SendCurrentMessage() {
             tool_lookup[exposed.alias] = exposed;
         }
         tool_definitions.insert(tool_definitions.end(), rag_tool_definitions.begin(), rag_tool_definitions.end());
+        tool_definitions.insert(tool_definitions.end(), artifact_tool_definitions.begin(), artifact_tool_definitions.end());
         tool_definitions.insert(tool_definitions.end(), model_tool_definitions.begin(), model_tool_definitions.end());
         tool_definitions.insert(tool_definitions.end(), built_in_tool_definitions.begin(), built_in_tool_definitions.end());
 
@@ -4701,7 +4717,12 @@ void MainWindow::SendCurrentMessage() {
                     for (size_t pi = 0; pi < pending.size(); ++pi) {
                         if (!pending[pi].tool_call.arguments_valid) continue;
                         if (IsModelToolAlias(pending[pi].tool_call.name)) continue;
-                        if (rag_tools::IsRagToolName(pending[pi].tool_call.name, &rag_tool_routes)) {
+                        if (artifact_memory_tools::IsArtifactMemoryToolName(pending[pi].tool_call.name)) {
+                            pending[pi].result = artifact_memory_tools::CallArtifactMemoryTool(
+                                artifact_runtime,
+                                pending[pi].tool_call.name,
+                                pending[pi].tool_call.arguments_json);
+                        } else if (rag_tools::IsRagToolName(pending[pi].tool_call.name, &rag_tool_routes)) {
                             pending[pi].result = rag_tools::CallRagTool(
                                 rag_service,
                                 mcp_manager,
@@ -4733,7 +4754,12 @@ void MainWindow::SendCurrentMessage() {
                     // No model tools â€” run all calls serially
                     for (auto& p : pending) {
                         if (!p.tool_call.arguments_valid) continue;
-                        if (rag_tools::IsRagToolName(p.tool_call.name, &rag_tool_routes)) {
+                        if (artifact_memory_tools::IsArtifactMemoryToolName(p.tool_call.name)) {
+                            p.result = artifact_memory_tools::CallArtifactMemoryTool(
+                                artifact_runtime,
+                                p.tool_call.name,
+                                p.tool_call.arguments_json);
+                        } else if (rag_tools::IsRagToolName(p.tool_call.name, &rag_tool_routes)) {
                             p.result = rag_tools::CallRagTool(
                                 rag_service,
                                 mcp_manager,
@@ -4769,6 +4795,8 @@ void MainWindow::SendCurrentMessage() {
                         trace_payload->entry.title = tool_it->second.server_name + " / " + tool_it->second.tool_name;
                     } else if (rag_tools::IsRagToolName(p.tool_call.name, &rag_tool_routes)) {
                         trace_payload->entry.title = rag_tools::TraceTitleForRagTool(p.tool_call.name, rag_tool_routes);
+                    } else if (artifact_memory_tools::IsArtifactMemoryToolName(p.tool_call.name)) {
+                        trace_payload->entry.title = artifact_memory_tools::TraceTitleForArtifactMemoryTool(p.tool_call.name);
                     } else if (IsModelToolAlias(p.tool_call.name)) {
                         trace_payload->entry.title = "Agent / " + p.tool_call.name;
                     } else if (built_in_tools::IsBuiltInToolName(p.tool_call.name)) {
@@ -4913,9 +4941,18 @@ void MainWindow::CompressCurrentContext() {
         auto result = OpenAIClient::CreateSimpleCompletion(opts);
         return result.success ? std::make_optional(result) : std::nullopt;
     };
+    const auto resolved_prompt_variables = BuildResolvedVariablesForChat(
+        active_project_id_, active_chat_id_, proj_settings);
 
     std::string compressed = compression_service_.CompressConversation(
-        messages, active_project_id_, active_chat_id_, proj_settings.selected_compression_config_id, model_caller, true, "manual");
+        messages,
+        active_project_id_,
+        active_chat_id_,
+        proj_settings.selected_compression_config_id,
+        model_caller,
+        true,
+        "manual",
+        resolved_prompt_variables);
 
     // Load the updated state to show in preview
     auto state = compression_service_.LoadChatState(active_project_id_, active_chat_id_);
@@ -5106,6 +5143,28 @@ std::vector<ProjectMcpVariableValue> MainWindow::BuildRuntimeVariablesForChat(
     variable_resolver::UpsertValue(values, "USEREMAIL", "");
     variable_resolver::UpsertValue(values, "UserName", "");
     return values;
+}
+
+std::vector<ProjectMcpVariableValue> MainWindow::BuildResolvedVariablesForChat(
+    const std::string& project_id,
+    const std::string& chat_id,
+    const ProjectSettings& project_settings) const {
+    std::vector<ProjectMcpVariableValue> resolved;
+    for (const auto& binding : mcp_manager_.GetProjectBindings(project_id)) {
+        for (const auto& variable : binding.variables) {
+            variable_resolver::UpsertValue(resolved, variable.name, variable.value);
+        }
+    }
+    for (const auto& variable : project_settings.project_variables) {
+        variable_resolver::UpsertValue(resolved, variable);
+    }
+    for (const auto& variable : BuildRuntimeVariablesForChat(project_id, chat_id)) {
+        variable_resolver::UpsertValue(resolved, variable.name, variable.value);
+    }
+
+    resolved = variable_resolver::ResolveValues(resolved);
+    variable_resolver::EnsureFolderVariables(resolved, mcp_manager_.global_variables());
+    return resolved;
 }
 
 void MainWindow::RenderTranscript() {

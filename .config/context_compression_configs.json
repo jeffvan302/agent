@@ -52,56 +52,6 @@
     },
     {
       "context_window_trigger_percent": 70,
-      "frequency_every_n_prompts": 10,
-      "id": "cc_1775990991086_8",
-      "layers": {
-        "layer0": {
-          "capture_model_id": "",
-          "capture_model_provider_id": "",
-          "capture_prompt_template": "",
-          "enabled": false,
-          "max_injected_rows": 12,
-          "selection_model_id": "",
-          "selection_model_provider_id": "",
-          "selection_prompt_template": "",
-          "storage_folder_template": "$ProjectFolder$\\.agent\\.memory\\$CHATID$"
-        },
-        "layer1": {
-          "enabled": true,
-          "max_pins": 10,
-          "pin_code_blocks": true,
-          "pin_explicit_instructions": true,
-          "pin_first_message": true,
-          "pin_numbers": true,
-          "pin_urls": true,
-          "pin_user_flagged": false
-        },
-        "layer2": {
-          "enabled": true,
-          "max_tokens": 500,
-          "model_id": "",
-          "model_provider_id": "",
-          "prompt_template": "",
-          "trigger_threshold_turns": 8
-        },
-        "layer3": {
-          "enabled": true,
-          "max_tokens": 800,
-          "model_id": "",
-          "model_provider_id": "",
-          "prompt_template": ""
-        },
-        "layer4": {
-          "enabled": true,
-          "min_recent_turns": 2
-        }
-      },
-      "name": "small_roll",
-      "strategy": "truncate_top",
-      "truncate_top_keep_messages": 2
-    },
-    {
-      "context_window_trigger_percent": 70,
       "frequency_every_n_prompts": 0,
       "id": "cc_1776744536752_9",
       "layers": {

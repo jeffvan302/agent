@@ -38,6 +38,7 @@ struct ProjectSettingsOptions {
     bool serve_web_links_inline = false;                  // serve web file links inline instead of forced downloads
     bool built_in_powershell_enabled = false;
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
+    bool built_in_artifact_memory_enabled = false;
     int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 
@@ -60,6 +61,7 @@ struct ProjectSettingsResult {
     bool serve_web_links_inline = false;            // serve web file links inline instead of forced downloads
     bool built_in_powershell_enabled = false;
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
+    bool built_in_artifact_memory_enabled = false;
     int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 

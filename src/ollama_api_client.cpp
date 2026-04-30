@@ -1,4 +1,5 @@
 #include "ollama_api_client.h"
+#include "message_sanitizer.h"
 #include "openai_client.h"
 #include "ollama_local_server.h"
 #include "provider_profiles.h"
@@ -90,7 +91,9 @@ json BuildOllamaApiBody(const ChatRequestOptions& request, bool stream, const st
     if (!request.system_prompt.empty()) {
         messages.push_back({{"role", "system"}, {"content", request.system_prompt}});
     }
-    for (const auto& m : request.messages) {
+    const auto sanitized_messages =
+        message_sanitizer::SanitizeModelVisibleMessages(request.messages);
+    for (const auto& m : sanitized_messages) {
         json msg{{"role", m.role}};
         if (!m.content.empty() || m.role != "assistant") msg["content"] = m.content;
         if (!m.tool_calls_json.empty()) { try { msg["tool_calls"] = json::parse(m.tool_calls_json); } catch (...) {} }
