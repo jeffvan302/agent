@@ -1,9 +1,0 @@
-{
-  "id": "chat_1776842178449_25",
-  "max_tokens": 1024,
-  "model_id": "gpt-5.4",
-  "name": "Tester",
-  "provider_id": "provider_1776841321761_9",
-  "system_prompt": "",
-  "temperature": 0.2
-}

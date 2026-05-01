@@ -96,7 +96,31 @@ json BuildOllamaApiBody(const ChatRequestOptions& request, bool stream, const st
     for (const auto& m : sanitized_messages) {
         json msg{{"role", m.role}};
         if (!m.content.empty() || m.role != "assistant") msg["content"] = m.content;
-        if (!m.tool_calls_json.empty()) { try { msg["tool_calls"] = json::parse(m.tool_calls_json); } catch (...) {} }
+        if (m.role == "assistant" && m.content.empty() && !m.tool_calls_json.empty()) {
+            msg["content"] = m.content;
+        }
+        if (!m.name.empty()) msg["name"] = m.name;
+        if (!m.tool_call_id.empty()) msg["tool_call_id"] = m.tool_call_id;
+        if (!m.tool_calls_json.empty()) {
+            try {
+                auto tool_calls = json::parse(m.tool_calls_json);
+                for (auto& tc : tool_calls) {
+                    if (tc.contains("function") && tc["function"].contains("arguments") && tc["function"]["arguments"].is_string()) {
+                        const std::string args_str = tc["function"]["arguments"].get<std::string>();
+                        if (!args_str.empty()) {
+                            try {
+                                tc["function"]["arguments"] = json::parse(args_str);
+                            } catch (...) {
+                                tc["function"]["arguments"] = json::object();
+                            }
+                        } else {
+                            tc["function"]["arguments"] = json::object();
+                        }
+                    }
+                }
+                msg["tool_calls"] = std::move(tool_calls);
+            } catch (...) {}
+        }
         messages.push_back(std::move(msg));
     }
     body["messages"] = messages;
@@ -653,6 +677,9 @@ ToolArgsNorm NormalizeToolArgs(const std::string& arguments_json) {
 }
 
 void NormalizeCallArgs(ChatToolCall& call) {
+    if (call.id.empty()) {
+        call.id = MakeId("call");
+    }
     call.original_arguments_json = call.arguments_json;
     const auto norm = NormalizeToolArgs(call.arguments_json);
     call.arguments_json = norm.normalized_json;

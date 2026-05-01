@@ -646,5 +646,13 @@ struct ProjectSettings {
     bool built_in_powershell_enabled = false;      // Enable high-risk built-in PowerShell execution tool
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
     bool built_in_artifact_memory_enabled = false;  // Enable versioned Artifact/Code Memory tools without requiring L0 compression
+    bool built_in_planner_enabled = false;          // Enable persistent planner/task decomposition tool
+    std::string built_in_planner_storage_folder = "$ProjectFolder$\\.agent";
+    bool built_in_completion_driver_enabled = false;  // Enable completion-loop driver tool for selected modes
+    std::vector<std::string> completion_driver_allowed_mode_ids; // Agentic mode IDs allowed to use Completion Driver
+    bool built_in_questionnaire_enabled = false;      // Enable user questionnaire built-in tool
+    int questionnaire_max_options = 8;                // Max options the questionnaire tool can offer
+    bool questionnaire_restrict_by_mode = false;      // Only allow questionnaire in a specific agentic mode
+    std::string questionnaire_allowed_mode_id;          // Agentic mode ID that triggers questionnaire availability
     int model_timeout_seconds = 0;                  // 0 = wait forever (default), otherwise max seconds per model request
 };

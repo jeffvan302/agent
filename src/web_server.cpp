@@ -44,6 +44,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -2555,6 +2556,69 @@ void WebServer::HandleSetChatAgenticMode(const void* req_ptr, void* res_ptr) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// HandleQuestionnaireResponse — POST /api/questionnaire-response
+// Body: { chat_id, tool_call_id, selected_indices: [int] }
+// ──────────────────────────────────────────────────────────────────────────────
+void WebServer::HandleQuestionnaireResponse(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    json body_j;
+    try { body_j = json::parse(req->body); } catch (...) {
+        SendError(res_ptr, 400, "Invalid JSON"); return;
+    }
+    const std::string chat_id = body_j.value("chat_id", "");
+    const std::string tool_call_id = body_j.value("tool_call_id", "");
+    if (chat_id.empty() || tool_call_id.empty()) {
+        SendError(res_ptr, 400, "chat_id and tool_call_id required"); return;
+    }
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+    const std::string qkey = *project_id + ":" + chat_id;
+    std::shared_ptr<PendingQuestionnaire> pending;
+    {
+        std::lock_guard<std::mutex> lk(questionnaire_mutex_);
+        auto it = pending_questionnaires_.find(qkey);
+        if (it == pending_questionnaires_.end() || !it->second) {
+            SendError(res_ptr, 404, "Questionnaire not found or already answered"); return;
+        }
+        pending = it->second;
+    }
+    if (pending->tool_call_id != tool_call_id) {
+        SendError(res_ptr, 404, "Questionnaire tool_call_id mismatch"); return;
+    }
+    std::vector<int> selected_indices;
+    if (body_j.contains("selected_indices") && body_j["selected_indices"].is_array()) {
+        for (const auto& v : body_j["selected_indices"]) {
+            if (v.is_number_integer() || v.is_number_unsigned()) {
+                selected_indices.push_back(v.get<int>());
+            }
+        }
+    }
+    json selected_labels = json::array();
+    for (int idx : selected_indices) {
+        if (idx >= 0 && static_cast<size_t>(idx) < pending->options.size()) {
+            selected_labels.push_back(pending->options[idx]);
+        }
+    }
+    json result_json = {
+        {"success", true},
+        {"tool", built_in_tools::kQuestionnaireToolName},
+        {"question", pending->question},
+        {"selected_indices", selected_indices},
+        {"selected_labels", selected_labels},
+    };
+    std::string result_str = result_json.dump();
+    {
+        std::lock_guard<std::mutex> lk(pending->mtx);
+        pending->answer_result = result_str;
+        pending->answered = true;
+    }
+    pending->cv.notify_one();
+    SendJson(res_ptr, 200, R"({"ok":true})");
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // HandleRenameChat — PATCH /api/chats/:id
 // Body: { "name": "new title" }
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2649,6 +2713,116 @@ void WebServer::HandleCompressChat(const void* req_ptr, void* res_ptr) {
         {"compressed_through", compressed_through},
     };
     SendJson(res_ptr, 200, resp.dump());
+}
+
+void WebServer::HandleGetPlanner(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string chat_id = req->path_params.at("id");
+
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    const auto proj_settings = storage_->LoadProjectSettings(*project_id);
+    if (!proj_settings.built_in_planner_enabled) {
+        SendJson(res_ptr, 200, R"({"enabled":false,"plan":null})");
+        return;
+    }
+
+    const auto runtime_variables = BuildWebRuntimeVariables(
+        storage_, user_store_, *project_id, chat_id, session->username, proj_settings);
+    const auto resolved_prompt_variables = BuildResolvedProjectVariables(
+        mcp_manager_, storage_, *project_id, runtime_variables);
+
+    const auto result = built_in_tools::CallPlanner(
+        R"({"action":"get"})", proj_settings, resolved_prompt_variables);
+    if (!result.success) {
+        SendError(res_ptr, 500, result.content_text.empty()
+            ? "Could not load planner"
+            : result.content_text);
+        return;
+    }
+
+    try {
+        json payload = json::parse(result.raw_result_json.empty() ? "{}" : result.raw_result_json);
+        payload["enabled"] = true;
+        SendJson(res_ptr, 200, payload.dump());
+    } catch (...) {
+        SendError(res_ptr, 500, "Planner returned an invalid response");
+    }
+}
+
+void WebServer::HandleUpdatePlannerItem(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string chat_id = req->path_params.at("id");
+    const std::string item_id = req->path_params.at("item_id");
+    if (item_id.empty()) {
+        SendError(res_ptr, 400, "Planner item id is required");
+        return;
+    }
+
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    const auto body_opt = ParseJsonOrFormBody(*req);
+    if (!body_opt || !body_opt->is_object()) {
+        SendError(res_ptr, 400, "Invalid planner update request");
+        return;
+    }
+    const json& body_j = *body_opt;
+
+    std::string status = Trim(body_j.value("status", ""));
+    if (status.empty() && body_j.contains("completed") && body_j["completed"].is_boolean()) {
+        status = body_j["completed"].get<bool>() ? "completed" : "pending";
+    }
+    const auto valid_status = [](const std::string& value) {
+        return value == "pending" || value == "in_progress" ||
+               value == "completed" || value == "blocked" ||
+               value == "cancelled";
+    };
+    if (!valid_status(status)) {
+        SendError(res_ptr, 400, "Planner status must be pending, in_progress, completed, blocked, or cancelled");
+        return;
+    }
+
+    const auto proj_settings = storage_->LoadProjectSettings(*project_id);
+    if (!proj_settings.built_in_planner_enabled) {
+        SendError(res_ptr, 403, "Planner is not enabled for this project");
+        return;
+    }
+
+    const auto runtime_variables = BuildWebRuntimeVariables(
+        storage_, user_store_, *project_id, chat_id, session->username, proj_settings);
+    const auto resolved_prompt_variables = BuildResolvedProjectVariables(
+        mcp_manager_, storage_, *project_id, runtime_variables);
+
+    json args = {
+        {"action", "update_item"},
+        {"section", "all"},
+        {"id", item_id},
+        {"item", {{"status", status}}},
+    };
+    const auto result = built_in_tools::CallPlanner(
+        args.dump(), proj_settings, resolved_prompt_variables);
+    if (!result.success) {
+        SendError(res_ptr, 400, result.content_text.empty()
+            ? "Could not update planner item"
+            : result.content_text);
+        return;
+    }
+
+    try {
+        json payload = json::parse(result.raw_result_json.empty() ? "{}" : result.raw_result_json);
+        payload["enabled"] = true;
+        SendJson(res_ptr, 200, payload.dump());
+    } catch (...) {
+        SendError(res_ptr, 500, "Planner returned an invalid response");
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -3172,6 +3346,17 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
         }
     }
 
+    if (built_in_tools::IsCompletionDriverEnabled(project_settings, mode_id)) {
+        const std::string driver_context = built_in_tools::CompletionDriverSystemPrompt();
+        AppendPromptSection(built.full_prompt, driver_context);
+        built.sections.push_back({"Completion Driver", driver_context});
+    }
+    if (built_in_tools::IsQuestionnaireEnabled(project_settings, mode_id)) {
+        const std::string q_context = built_in_tools::QuestionnaireSystemPrompt();
+        AppendPromptSection(built.full_prompt, q_context);
+        built.sections.push_back({"User Questionnaire", q_context});
+    }
+
     if (mcp_manager) {
         EnsureProjectMcpConnections(
             mcp_manager, project_id, runtime_variables);
@@ -3297,6 +3482,9 @@ WebServer::CallModel(const std::string& project_id,
     std::string chat_selected_agentic_mode_id;
     const auto chat_info = FindChatInProject(project_id, chat_id);
     if (chat_info) chat_selected_agentic_mode_id = chat_info->selected_agentic_mode_id;
+    const std::string effective_agentic_mode_id = chat_selected_agentic_mode_id.empty()
+        ? proj_settings.selected_agentic_mode_id
+        : chat_selected_agentic_mode_id;
 
     // Load existing message history and prepare any compressed request view.
     const auto stored_messages = storage_->LoadMessages(project_id, chat_id);
@@ -3376,7 +3564,7 @@ WebServer::CallModel(const std::string& project_id,
             proj_settings.built_in_artifact_memory_enabled)
         : artifact_memory_tools::ArtifactMemoryToolSet{};
     const auto built_in_tool_definitions = selected_model.supports_tools
-        ? built_in_tools::BuildDefinitions(proj_settings)
+        ? built_in_tools::BuildDefinitions(proj_settings, effective_agentic_mode_id)
         : std::vector<ChatToolDefinition>{};
     tool_definitions.insert(
         tool_definitions.end(),
@@ -3400,10 +3588,15 @@ WebServer::CallModel(const std::string& project_id,
 
     if (!tool_definitions.empty()) {
         constexpr int kMaxToolRounds = 8;
+        constexpr int kMaxCompletionDriverRounds = 64;
+        const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
+            proj_settings, effective_agentic_mode_id);
+        const int max_rounds = completion_driver_enabled ? kMaxCompletionDriverRounds : kMaxToolRounds;
         std::vector<MessageRecord> working_messages = opts.messages;
+        bool completion_driver_done = !completion_driver_enabled;
         bool success = false;
 
-        for (int round = 0; round < kMaxToolRounds; ++round) {
+        for (int round = 0; round < max_rounds; ++round) {
             ChatRequestOptions loop_opts = opts;
             loop_opts.messages = working_messages;
 
@@ -3449,7 +3642,12 @@ WebServer::CallModel(const std::string& project_id,
                             tool_call.name,
                             tool_call.arguments_json,
                             proj_settings,
-                            resolved_prompt_variables);
+                            resolved_prompt_variables,
+                            effective_agentic_mode_id);
+                        if (tool_call.name == built_in_tools::kCompletionDriverToolName &&
+                            built_in_tools::IsCompletionDriverCompletedResult(tool_result)) {
+                            completion_driver_done = true;
+                        }
                     } else if (mcp_manager_) {
                         tool_result = mcp_manager_->CallExposedTool(
                             project_id,
@@ -3473,6 +3671,11 @@ WebServer::CallModel(const std::string& project_id,
                 messages.push_back(asst_msg);
                 working_messages.push_back(asst_msg);
                 result.assistant_text = completion.assistant_text;
+            }
+            if (completion_driver_enabled && !completion_driver_done) {
+                working_messages.push_back(
+                    built_in_tools::MakeCompletionDriverContinuationMessage(round + 1));
+                continue;
             }
             success = true;
             break;
@@ -3613,10 +3816,16 @@ std::string WebServer::StreamModel(const std::string& project_id,
                                    const std::function<void(const std::string&, const std::string&)>& on_status,
                                    const std::function<void(const ProviderQueueStatus&)>& on_queue_status,
                                    const std::function<void(const std::string&, const std::string&)>& on_activity_status,
-                                    const std::function<void(const std::string&, const std::string&, const std::string&, const std::string&, const std::string&)>& on_tool_status,
-                                    bool web_debug_requested,
-                                    const std::function<void(const std::string&, const std::string&, const std::vector<MessageRecord>&)>& on_prompt_debug)
+                                     const std::function<void(const std::string&, const std::string&, const std::string&, const std::string&, const std::string&)>& on_tool_status,
+                                     bool web_debug_requested,
+                                     const std::function<void(const std::string&, const std::string&, const std::vector<MessageRecord>&)>& on_prompt_debug,
+                                     const std::function<void(const std::string& tool_call_id, const std::string& question, const std::vector<std::string>& options, bool allow_multiple)>& on_questionnaire,
+                                     const std::function<bool()>& should_cancel)
 {
+    auto cancelled = [&]() -> bool {
+        return should_cancel && should_cancel();
+    };
+
     // Load providers
     const auto providers = storage_->LoadProviders();
     if (providers.empty()) return "No AI providers configured.";
@@ -3670,6 +3879,9 @@ std::string WebServer::StreamModel(const std::string& project_id,
     std::string chat_selected_agentic_mode_id;
     const auto chat_info2 = FindChatInProject(project_id, chat_id);
     if (chat_info2) chat_selected_agentic_mode_id = chat_info2->selected_agentic_mode_id;
+    const std::string effective_agentic_mode_id = chat_selected_agentic_mode_id.empty()
+        ? proj_settings.selected_agentic_mode_id
+        : chat_selected_agentic_mode_id;
 
     const auto prepared_history = PrepareWebRequestHistory(
         storage_,
@@ -3747,7 +3959,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
             proj_settings.built_in_artifact_memory_enabled)
         : artifact_memory_tools::ArtifactMemoryToolSet{};
     const auto built_in_tool_definitions = selected_model.supports_tools
-        ? built_in_tools::BuildDefinitions(proj_settings)
+        ? built_in_tools::BuildDefinitions(proj_settings, effective_agentic_mode_id)
         : std::vector<ChatToolDefinition>{};
     tool_definitions.insert(
         tool_definitions.end(),
@@ -3792,18 +4004,27 @@ std::string WebServer::StreamModel(const std::string& project_id,
 
     if (!tool_definitions.empty()) {
         constexpr int kMaxToolRounds = 8;
+        constexpr int kMaxCompletionDriverRounds = 64;
+        const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
+            proj_settings, effective_agentic_mode_id);
+        const int max_rounds = completion_driver_enabled ? kMaxCompletionDriverRounds : kMaxToolRounds;
         std::vector<MessageRecord> working_messages = opts.messages;
+        bool completion_driver_done = !completion_driver_enabled;
         std::string accumulated;
         bool aborted = false;
         bool success = false;
 
-        for (int round = 0; round < kMaxToolRounds; ++round) {
+        for (int round = 0; round < max_rounds; ++round) {
             ChatRequestOptions loop_opts = opts;
             loop_opts.messages = working_messages;
 
             const auto completion = OpenAIClient::StreamToolAwareCompletion(
                 loop_opts, tool_definitions,
                 [&](const std::string& delta) {
+                    if (cancelled()) {
+                        aborted = true;
+                        return;
+                    }
                     accumulated += delta;
                     if (!on_delta(delta)) {
                         aborted = true;
@@ -3858,6 +4079,10 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 AppendAssistantToolRequest(messages, completion);
                 AppendAssistantToolRequest(working_messages, completion);
                 for (const auto& tool_call : completion.tool_calls) {
+                    if (cancelled()) {
+                        aborted = true;
+                        break;
+                    }
                     if (on_tool_status) {
                         on_tool_status(
                             tool_call.id,
@@ -3885,11 +4110,69 @@ std::string WebServer::StreamModel(const std::string& project_id,
                             nullptr,
                             resolved_prompt_variables);
                     } else if (built_in_tools::IsBuiltInToolName(tool_call.name)) {
-                        tool_result = built_in_tools::CallTool(
-                            tool_call.name,
-                            tool_call.arguments_json,
-                            proj_settings,
-                            resolved_prompt_variables);
+                        if (tool_call.name == built_in_tools::kQuestionnaireToolName &&
+                            built_in_tools::IsQuestionnaireEnabled(proj_settings, effective_agentic_mode_id)) {
+                            std::string question;
+                            std::vector<std::string> options;
+                            bool allow_multiple = false;
+                            try {
+                                json qargs = json::parse(tool_call.arguments_json.empty() ? "{}" : tool_call.arguments_json);
+                                question = Trim(qargs.value("question", ""));
+                                if (qargs.contains("options") && qargs["options"].is_array()) {
+                                    for (const auto& o : qargs["options"]) {
+                                        if (o.is_string()) options.push_back(o.get<std::string>());
+                                    }
+                                }
+                                allow_multiple = qargs.value("allow_multiple", false);
+                            } catch (...) {}
+                            if (question.empty() || options.empty()) {
+                                tool_result = InvalidToolArgumentsResult(tool_call);
+                            } else {
+                                storage_->SaveMessages(project_id, chat_id, messages);
+                                NotifyContentChanged();
+                                auto pending = std::make_shared<PendingQuestionnaire>();
+                                pending->tool_call_id = tool_call.id;
+                                pending->question = question;
+                                pending->options = options;
+                                pending->allow_multiple = allow_multiple;
+                                const std::string qkey = project_id + ":" + chat_id;
+                                {
+                                    std::lock_guard<std::mutex> lk(questionnaire_mutex_);
+                                    pending_questionnaires_[qkey] = pending;
+                                }
+                                if (on_questionnaire) {
+                                    on_questionnaire(tool_call.id, question, options, allow_multiple);
+                                }
+                                std::unique_lock<std::mutex> qlk(pending->mtx);
+                                pending->cv.wait(qlk, [&] { return pending->answered || pending->abandoned || cancelled(); });
+                                if (cancelled()) {
+                                    pending->abandoned = true;
+                                    aborted = true;
+                                }
+                                {
+                                    std::lock_guard<std::mutex> lk(questionnaire_mutex_);
+                                    pending_questionnaires_.erase(qkey);
+                                }
+                                if (pending->abandoned) {
+                                    tool_result = ToolUnavailableResult(tool_call);
+                                } else {
+                                    tool_result.success = true;
+                                    tool_result.content_text = pending->answer_result;
+                                    tool_result.raw_result_json = pending->answer_result;
+                                }
+                            }
+                        } else {
+                            tool_result = built_in_tools::CallTool(
+                                tool_call.name,
+                                tool_call.arguments_json,
+                                proj_settings,
+                                resolved_prompt_variables,
+                                effective_agentic_mode_id);
+                        }
+                        if (tool_call.name == built_in_tools::kCompletionDriverToolName &&
+                            built_in_tools::IsCompletionDriverCompletedResult(tool_result)) {
+                            completion_driver_done = true;
+                        }
                     } else if (mcp_manager_) {
                         tool_result = mcp_manager_->CallExposedTool(
                             project_id,
@@ -3914,6 +4197,11 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     AppendToolResultMessage(messages, tool_call, tool_result);
                     AppendToolResultMessage(working_messages, tool_call, tool_result);
                 }
+                if (aborted) {
+                    storage_->SaveMessages(project_id, chat_id, messages);
+                    NotifyContentChanged();
+                    return {};
+                }
                 storage_->SaveMessages(project_id, chat_id, messages);
                 NotifyContentChanged();
                 continue;
@@ -3928,6 +4216,15 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 working_messages.push_back(asst_msg);
                 storage_->SaveMessages(project_id, chat_id, messages);
                 NotifyContentChanged();
+            }
+            if (completion_driver_enabled && !completion_driver_done) {
+                if (on_activity_status) {
+                    on_activity_status("completion_driver_continue", "Completion Driver is continuing the task...");
+                }
+                working_messages.push_back(
+                    built_in_tools::MakeCompletionDriverContinuationMessage(round + 1));
+                accumulated.clear();
+                continue;
             }
             success = true;
             if (logging) {
@@ -3954,6 +4251,10 @@ std::string WebServer::StreamModel(const std::string& project_id,
             const auto final_result = OpenAIClient::StreamChat(
                 final_opts,
                 [&](const std::string& delta) {
+                    if (cancelled()) {
+                        final_aborted = true;
+                        return;
+                    }
                     final_text += delta;
                     if (!on_delta(delta)) {
                         final_aborted = true;
@@ -4003,8 +4304,16 @@ std::string WebServer::StreamModel(const std::string& project_id,
     std::string accumulated;
     bool aborted = false;
 
+    if (cancelled()) {
+        return {};
+    }
+
     const auto stream_result = OpenAIClient::StreamChat(opts,
         [&](const std::string& delta) {
+            if (cancelled()) {
+                aborted = true;
+                return;
+            }
             accumulated += delta;
             // on_delta returns false to signal the client disconnected
             if (!on_delta(delta)) {
@@ -4096,6 +4405,16 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
 
     const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
     if (!project_id) return;
+    const std::string stream_key = *project_id + ":" + chat_id;
+    auto cancel_token = std::make_shared<ActiveStreamCancellation>();
+    {
+        std::lock_guard<std::mutex> lk(active_streams_mutex_);
+        auto existing = active_streams_.find(stream_key);
+        if (existing != active_streams_.end() && existing->second) {
+            existing->second->cancelled.store(true);
+        }
+        active_streams_[stream_key] = cancel_token;
+    }
 
     // ── Shared state between producer (model thread) and consumer (HTTP thread) ──
     struct StreamPipe {
@@ -4116,13 +4435,14 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
 
     // ── Producer thread — runs the model, enqueues SSE events ─────────────────
     std::thread producer([this, pipe, proj_id, chat_id, content, sess_user,
-                          encode_sse, attachments, web_debug_requested]() {
+                          encode_sse, attachments, web_debug_requested,
+                          cancel_token, stream_key]() {
         const std::string err = StreamModel(
             proj_id, chat_id, content, sess_user,
             [&](const std::string& delta) -> bool {
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
-                    if (pipe->abort) return false;
+                    if (pipe->abort || cancel_token->cancelled.load()) return false;
                     json ev = {{"delta", delta}};
                     pipe->pending += encode_sse(ev.dump());
                 }
@@ -4133,7 +4453,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             [&](size_t used_tokens, size_t total_tokens) {
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
-                    if (pipe->abort) return;
+                    if (pipe->abort || cancel_token->cancelled.load()) return;
                     json ev = {
                         {"ctx_used", used_tokens},
                         {"ctx_total", total_tokens},
@@ -4145,7 +4465,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             [&](const std::string& status, const std::string& message) {
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
-                    if (pipe->abort) return;
+                    if (pipe->abort || cancel_token->cancelled.load()) return;
                     json ev = {
                         {"compression_status", status},
                         {"compression_message", message},
@@ -4157,7 +4477,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             [&](const ProviderQueueStatus& status) {
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
-                    if (pipe->abort) return;
+                    if (pipe->abort || cancel_token->cancelled.load()) return;
                     json ev = {
                         {"queue_state", status.state},
                         {"queue_provider", status.provider_name},
@@ -4174,7 +4494,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             [&](const std::string& status, const std::string& message) {
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
-                    if (pipe->abort) return;
+                    if (pipe->abort || cancel_token->cancelled.load()) return;
                     json ev = {
                         {"activity_status", status},
                         {"activity_message", message},
@@ -4190,7 +4510,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 const std::string& tool_status) {
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
-                    if (pipe->abort) return;
+                    if (pipe->abort || cancel_token->cancelled.load()) return;
                     json ev = {
                         {"tool_event", tool_status == "live" ? "start" : "finish"},
                         {"tool_call_id", tool_call_id},
@@ -4216,7 +4536,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 }
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
-                    if (pipe->abort) return;
+                    if (pipe->abort || cancel_token->cancelled.load()) return;
                     json ev = {
                         {"web_debug", true},
                         {"system_prompt", system_prompt},
@@ -4226,18 +4546,48 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                     pipe->pending += encode_sse(ev.dump());
                 }
                 pipe->cv.notify_one();
+            },
+            [&](const std::string& tool_call_id,
+                const std::string& question,
+                const std::vector<std::string>& options,
+                bool allow_multiple) {
+                {
+                    std::lock_guard<std::mutex> lk(pipe->mtx);
+                    if (pipe->abort || cancel_token->cancelled.load()) return;
+                    json ev = {
+                        {"questionnaire", true},
+                        {"tool_call_id", tool_call_id},
+                        {"question", question},
+                        {"options", options},
+                        {"allow_multiple", allow_multiple},
+                    };
+                    pipe->pending += encode_sse(ev.dump());
+                }
+                pipe->cv.notify_one();
+            },
+            [cancel_token]() {
+                return cancel_token->cancelled.load();
             });
 
         // Enqueue final event
         {
             std::lock_guard<std::mutex> lk(pipe->mtx);
-            if (!err.empty()) {
+            if (cancel_token->cancelled.load()) {
+                pipe->pending += encode_sse(R"({"cancelled":true,"done":true})");
+            } else if (!err.empty()) {
                 json ev = {{"error", err}};
                 pipe->pending += encode_sse(ev.dump());
             } else {
                 pipe->pending += encode_sse(R"({"done":true})");
             }
             pipe->done = true;
+        }
+        {
+            std::lock_guard<std::mutex> lk(active_streams_mutex_);
+            auto it = active_streams_.find(stream_key);
+            if (it != active_streams_.end() && it->second == cancel_token) {
+                active_streams_.erase(it);
+            }
         }
         pipe->cv.notify_one();
     });
@@ -4287,6 +4637,42 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
 
             return true;  // keep-alive poll
         });
+}
+
+void WebServer::HandleCancelStream(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string chat_id = req->path_params.at("id");
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    const std::string key = *project_id + ":" + chat_id;
+    bool cancelled = false;
+    {
+        std::lock_guard<std::mutex> lk(active_streams_mutex_);
+        auto it = active_streams_.find(key);
+        if (it != active_streams_.end() && it->second) {
+            it->second->cancelled.store(true);
+            cancelled = true;
+        }
+    }
+    {
+        std::shared_ptr<PendingQuestionnaire> pending;
+        {
+            std::lock_guard<std::mutex> lk(questionnaire_mutex_);
+            auto it = pending_questionnaires_.find(key);
+            if (it != pending_questionnaires_.end()) pending = it->second;
+        }
+        if (pending) {
+            std::lock_guard<std::mutex> lk(pending->mtx);
+            pending->abandoned = true;
+            pending->cv.notify_one();
+        }
+    }
+
+    SendJson(res_ptr, 200, json{{"ok", true}, {"cancelled", cancelled}}.dump());
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -4727,12 +5113,9 @@ void WebServer::RegisterRoutes() {
         HandleStreamMessage(&req, &res);
     });
     // DELETE /api/chats/:id/stream — abort in-progress streaming (sent by stop button)
-    srv.Delete(R"(/api/chats/([^/]+)/stream)", [](const httplib::Request& req, httplib::Response& res) {
-        // The actual abort is handled via AbortController on the client side.
-        // This endpoint exists to allow the server to track that a cancellation occurred
-        // and for future use (e.g., logging, metrics).
-        res.status = 200;
-        res.set_content("{}", "application/json");
+    srv.Delete(R"(/api/chats/([^/]+)/stream)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleCancelStream(&req, &res);
     });
     // File upload
     srv.Post(R"(/api/chats/([^/]+)/upload)", [this](const httplib::Request& req, httplib::Response& res) {
@@ -4752,6 +5135,18 @@ void WebServer::RegisterRoutes() {
     srv.Post(R"(/api/chats/([^/]+)/compress)", [this](const httplib::Request& req, httplib::Response& res) {
         const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
         HandleCompressChat(&req, &res);
+    });
+    srv.Get(R"(/api/chats/([^/]+)/planner)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleGetPlanner(&req, &res);
+    });
+    srv.Patch(R"(/api/chats/([^/]+)/planner/items/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        const_cast<httplib::Request&>(req).path_params["item_id"] = DecodeUrlPathComponent(req.matches[2].str());
+        HandleUpdatePlannerItem(&req, &res);
+    });
+    srv.Post("/api/questionnaire-response", [this](const httplib::Request& req, httplib::Response& res) {
+        HandleQuestionnaireResponse(&req, &res);
     });
 
     srv.Get(R"(/data/([^/]+)/([^/]+)/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
@@ -4829,7 +5224,6 @@ void WebServer::EnsureDefaultWebAssets() const {
         { "css/base.css",                  DefaultWebAssets::kBaseCss            },
         { "js/login.js",                   DefaultWebAssets::kLoginJs            },
         { "js/change-password.js",         DefaultWebAssets::kChangePasswordJs   },
-        { "js/app.js",                     DefaultWebAssets::kAppJs              },
         { "themes/default/style.css",      DefaultWebAssets::kThemeDefaultCss    },
         { "themes/default/theme.json",     DefaultWebAssets::kThemeDefaultJson   },
         { "themes/dark/style.css",         DefaultWebAssets::kThemeDarkCss       },
@@ -4854,6 +5248,26 @@ void WebServer::EnsureDefaultWebAssets() const {
         fs::create_directories(dest.parent_path());
         std::ofstream f(dest, std::ios::binary | std::ios::trunc);
         if (f) f << a.content;
+    }
+
+    std::string app_js;
+    for (std::size_t i = 0; i < DefaultWebAssets::kAppJsPartCount; ++i) {
+        app_js += DefaultWebAssets::kAppJsParts[i];
+    }
+    const fs::path app_dest = root / "js/app.js";
+    bool should_write_app = !fs::exists(app_dest);
+    if (!should_write_app && managed_default_root) {
+        std::ifstream in(app_dest, std::ios::binary);
+        std::ostringstream existing;
+        if (in) {
+            existing << in.rdbuf();
+        }
+        should_write_app = existing.str() != app_js;
+    }
+    if (should_write_app) {
+        fs::create_directories(app_dest.parent_path());
+        std::ofstream f(app_dest, std::ios::binary | std::ios::trunc);
+        if (f) f << app_js;
     }
 }
 
@@ -5255,8 +5669,9 @@ bool WebServer::Start()
     impl_->server->set_write_timeout(std::chrono::hours(12));
     impl_->server->set_keep_alive_timeout(static_cast<time_t>(3600));
 
-    // Thread-pool size
-    const int pool = std::max(1, config_.thread_pool_size);
+    // Streaming tool flows can require a second request while the stream is open
+    // (for example, answering a questionnaire), so one worker can deadlock.
+    const int pool = std::max(2, config_.thread_pool_size);
     impl_->server->new_task_queue = [pool]() {
         return new httplib::ThreadPool(pool);
     };

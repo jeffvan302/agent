@@ -8,6 +8,7 @@
 #include "mcp_server_manager.h"
 #include "message_sanitizer.h"
 #include "openai_client.h"
+#include "questionnaire_dialog.h"
 #include "prompt_dialog.h"
 #include "project_setup_dialog.h"
 #include "chat_request_logger.h"
@@ -3515,6 +3516,15 @@ void MainWindow::EditProjectSettings() {
     options.built_in_powershell_enabled = project_settings.built_in_powershell_enabled;
     options.built_in_powershell_working_directory = project_settings.built_in_powershell_working_directory;
     options.built_in_artifact_memory_enabled = project_settings.built_in_artifact_memory_enabled;
+    options.built_in_planner_enabled = project_settings.built_in_planner_enabled;
+    options.built_in_planner_storage_folder = project_settings.built_in_planner_storage_folder;
+    options.built_in_completion_driver_enabled = project_settings.built_in_completion_driver_enabled;
+    options.completion_driver_allowed_mode_ids = project_settings.completion_driver_allowed_mode_ids;
+    options.built_in_questionnaire_enabled = project_settings.built_in_questionnaire_enabled;
+    options.questionnaire_max_options = project_settings.questionnaire_max_options;
+    options.questionnaire_restrict_by_mode = project_settings.questionnaire_restrict_by_mode;
+    options.questionnaire_allowed_mode_id = project_settings.questionnaire_allowed_mode_id;
+    options.model_timeout_seconds = project_settings.model_timeout_seconds;
 
     // Pre-seed ProjectFolder from MCP global binding values if not already set.
     for (const auto& gv : mcp_manager_.global_variables()) {
@@ -3562,6 +3572,15 @@ void MainWindow::EditProjectSettings() {
     saved_settings.built_in_powershell_enabled = result->built_in_powershell_enabled;
     saved_settings.built_in_powershell_working_directory = result->built_in_powershell_working_directory;
     saved_settings.built_in_artifact_memory_enabled = result->built_in_artifact_memory_enabled;
+    saved_settings.built_in_planner_enabled = result->built_in_planner_enabled;
+    saved_settings.built_in_planner_storage_folder = result->built_in_planner_storage_folder;
+    saved_settings.built_in_completion_driver_enabled = result->built_in_completion_driver_enabled;
+    saved_settings.completion_driver_allowed_mode_ids = result->completion_driver_allowed_mode_ids;
+    saved_settings.built_in_questionnaire_enabled = result->built_in_questionnaire_enabled;
+    saved_settings.questionnaire_max_options = result->questionnaire_max_options;
+    saved_settings.questionnaire_restrict_by_mode = result->questionnaire_restrict_by_mode;
+    saved_settings.questionnaire_allowed_mode_id = result->questionnaire_allowed_mode_id;
+    saved_settings.model_timeout_seconds = result->model_timeout_seconds;
     storage_.SaveProjectSettings(active_project_id_, saved_settings);
     storage_.SaveProjectCompressionSettings(active_project_id_, ProjectCompressionSettings{
         !result->selected_compression_config_id.empty(),
@@ -4134,6 +4153,49 @@ std::string MainWindow::BuildMcpProjectContext() const {
     return stream.str();
 }
 
+static McpToolCallResult RunDesktopQuestionnaire(const std::string& arguments_json) {
+    nlohmann::json args;
+    try {
+        args = nlohmann::json::parse(arguments_json.empty() ? "{}" : arguments_json);
+    } catch (...) {
+        return built_in_tools::ErrorResult("Invalid questionnaire arguments: not valid JSON.");
+    }
+    const std::string question = Trim(args.value("question", ""));
+    const auto opts_j = args.value("options", nlohmann::json::array());
+    const bool allow_multiple = args.value("allow_multiple", false);
+    if (question.empty() || !opts_j.is_array() || opts_j.empty()) {
+        return built_in_tools::ErrorResult("Questionnaire requires a non-empty question and at least one option.");
+    }
+    QuestionnaireOptions dlg;
+    dlg.question = Utf8ToWide(question);
+    for (const auto& item : opts_j) {
+        if (item.is_string()) dlg.labels.push_back(Utf8ToWide(item.get<std::string>()));
+    }
+    dlg.allow_multiple = allow_multiple;
+    const auto selected = ShowQuestionnaireDialog(nullptr, dlg);
+    if (!selected || selected->empty()) {
+        return built_in_tools::ErrorResult("User cancelled the questionnaire.");
+    }
+    nlohmann::json payload = {
+        {"success", true},
+        {"tool", "user_questionnaire"},
+        {"question", question},
+        {"selected_indices", nlohmann::json::array()},
+        {"selected_labels", nlohmann::json::array()},
+    };
+    for (int index : *selected) {
+        payload["selected_indices"].push_back(index);
+        if (index >= 0 && static_cast<size_t>(index) < dlg.labels.size()) {
+            payload["selected_labels"].push_back(WideToUtf8(dlg.labels[index]));
+        }
+    }
+    McpToolCallResult result;
+    result.success = true;
+    result.raw_result_json = payload.dump(2);
+    result.content_text = result.raw_result_json;
+    return result;
+}
+
 void MainWindow::SendCurrentMessage() {
     if (IsChatInFlight(active_chat_id_)) {
         return;
@@ -4286,6 +4348,22 @@ void MainWindow::SendCurrentMessage() {
                     system_prompt_sections.push_back({"Agentic Mode: " + it->name, mode_instructions});
                 }
             }
+        }
+        if (built_in_tools::IsCompletionDriverEnabled(proj_settings, proj_settings.selected_agentic_mode_id)) {
+            const std::string driver_context = built_in_tools::CompletionDriverSystemPrompt();
+            if (!request.system_prompt.empty()) {
+                request.system_prompt += "\n\n";
+            }
+            request.system_prompt += driver_context;
+            system_prompt_sections.push_back({"Completion Driver", driver_context});
+        }
+        if (built_in_tools::IsQuestionnaireEnabled(proj_settings, proj_settings.selected_agentic_mode_id)) {
+            const std::string q_context = built_in_tools::QuestionnaireSystemPrompt();
+            if (!request.system_prompt.empty()) {
+                request.system_prompt += "\n\n";
+            }
+            request.system_prompt += q_context;
+            system_prompt_sections.push_back({"User Questionnaire", q_context});
         }
     }
 
@@ -4492,7 +4570,8 @@ void MainWindow::SendCurrentMessage() {
 
         model_tool_definitions.push_back(std::move(def));
     }
-    const auto built_in_tool_definitions = built_in_tools::BuildDefinitions(project_settings_for_tools);
+    const auto built_in_tool_definitions = built_in_tools::BuildDefinitions(
+        project_settings_for_tools, proj_settings.selected_agentic_mode_id);
     std::vector<ChatToolDefinition> extra_tool_definitions = rag_tool_definitions;
     extra_tool_definitions.insert(extra_tool_definitions.end(), artifact_tool_definitions.begin(), artifact_tool_definitions.end());
     extra_tool_definitions.insert(extra_tool_definitions.end(), model_tool_definitions.begin(), model_tool_definitions.end());
@@ -4582,7 +4661,7 @@ void MainWindow::SendCurrentMessage() {
         return;
     }
 
-    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
+    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, proj_settings, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
         constexpr int kMaxToolRounds = 8;
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
@@ -4609,9 +4688,14 @@ void MainWindow::SendCurrentMessage() {
 
         std::vector<MessageRecord> working_messages = request.messages;
         std::string error;
+        constexpr int kMaxCompletionDriverRounds = 64;
+        const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
+            project_settings_for_tools, proj_settings.selected_agentic_mode_id);
+        const int max_rounds = completion_driver_enabled ? kMaxCompletionDriverRounds : kMaxToolRounds;
+        bool completion_driver_done = !completion_driver_enabled;
         bool success = false;
 
-        for (int round = 0; round < kMaxToolRounds; ++round) {
+        for (int round = 0; round < max_rounds; ++round) {
             ChatRequestOptions loop_request = request;
             loop_request.messages = working_messages;
 
@@ -4733,11 +4817,18 @@ void MainWindow::SendCurrentMessage() {
                                 working_set_additions.get(),
                                 project_variables);
                         } else if (built_in_tools::IsBuiltInToolName(pending[pi].tool_call.name)) {
-                            pending[pi].result = built_in_tools::CallTool(
-                                pending[pi].tool_call.name,
-                                pending[pi].tool_call.arguments_json,
-                                project_settings_for_tools,
-                                project_variables);
+                            if (pending[pi].tool_call.name == built_in_tools::kQuestionnaireToolName &&
+                                built_in_tools::IsQuestionnaireEnabled(project_settings_for_tools, proj_settings.selected_agentic_mode_id)) {
+                                pending[pi].result = RunDesktopQuestionnaire(
+                                    pending[pi].tool_call.arguments_json);
+                            } else {
+                                pending[pi].result = built_in_tools::CallTool(
+                                    pending[pi].tool_call.name,
+                                    pending[pi].tool_call.arguments_json,
+                                    project_settings_for_tools,
+                                    project_variables,
+                                    proj_settings.selected_agentic_mode_id);
+                            }
                         } else {
                             pending[pi].result = mcp_manager->CallExposedTool(
                                 project_id,
@@ -4774,7 +4865,8 @@ void MainWindow::SendCurrentMessage() {
                                 p.tool_call.name,
                                 p.tool_call.arguments_json,
                                 project_settings_for_tools,
-                                project_variables);
+                                project_variables,
+                                proj_settings.selected_agentic_mode_id);
                         } else {
                             p.result = mcp_manager->CallExposedTool(
                                 project_id,
@@ -4782,6 +4874,13 @@ void MainWindow::SendCurrentMessage() {
                                 p.tool_call.arguments_json,
                                 runtime_variables);
                         }
+                    }
+                }
+
+                for (const auto& p : pending) {
+                    if (p.tool_call.name == built_in_tools::kCompletionDriverToolName &&
+                        built_in_tools::IsCompletionDriverCompletedResult(p.result)) {
+                        completion_driver_done = true;
                     }
                 }
 
@@ -4800,7 +4899,7 @@ void MainWindow::SendCurrentMessage() {
                     } else if (IsModelToolAlias(p.tool_call.name)) {
                         trace_payload->entry.title = "Agent / " + p.tool_call.name;
                     } else if (built_in_tools::IsBuiltInToolName(p.tool_call.name)) {
-                        trace_payload->entry.title = "Built-in / PowerShell";
+                        trace_payload->entry.title = built_in_tools::TraceTitleForBuiltInTool(p.tool_call.name);
                     } else {
                         trace_payload->entry.title = p.tool_call.name;
                     }
@@ -4826,6 +4925,11 @@ void MainWindow::SendCurrentMessage() {
                 assistant_message.content = completion.assistant_text;
                 assistant_message.created_at = CurrentTimestampUtc();
                 working_messages.push_back(std::move(assistant_message));
+            }
+            if (completion_driver_enabled && !completion_driver_done) {
+                working_messages.push_back(
+                    built_in_tools::MakeCompletionDriverContinuationMessage(round + 1));
+                continue;
             }
             success = true;
             break;
@@ -4884,6 +4988,9 @@ void MainWindow::SendCurrentMessage() {
         final_payload->chat_id = chat_id;
         final_payload->error = error;
         for (size_t i = existing_count; i < working_messages.size(); ++i) {
+            if (built_in_tools::IsCompletionDriverContinuationMessage(working_messages[i])) {
+                continue;
+            }
             final_payload->appended_messages.push_back(working_messages[i]);
         }
         final_payload->rag_working_set_additions = std::move(*working_set_additions);

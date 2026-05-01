@@ -39,6 +39,14 @@ struct ProjectSettingsOptions {
     bool built_in_powershell_enabled = false;
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
     bool built_in_artifact_memory_enabled = false;
+    bool built_in_planner_enabled = false;
+    std::string built_in_planner_storage_folder = "$ProjectFolder$\\.agent";
+    bool built_in_completion_driver_enabled = false;
+    std::vector<std::string> completion_driver_allowed_mode_ids;
+    bool built_in_questionnaire_enabled = false;
+    int questionnaire_max_options = 8;
+    bool questionnaire_restrict_by_mode = false;
+    std::string questionnaire_allowed_mode_id;
     int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 
@@ -62,6 +70,14 @@ struct ProjectSettingsResult {
     bool built_in_powershell_enabled = false;
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
     bool built_in_artifact_memory_enabled = false;
+    bool built_in_planner_enabled = false;
+    std::string built_in_planner_storage_folder = "$ProjectFolder$\\.agent";
+    bool built_in_completion_driver_enabled = false;
+    std::vector<std::string> completion_driver_allowed_mode_ids;
+    bool built_in_questionnaire_enabled = false;
+    int questionnaire_max_options = 8;
+    bool questionnaire_restrict_by_mode = false;
+    std::string questionnaire_allowed_mode_id;
     int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 

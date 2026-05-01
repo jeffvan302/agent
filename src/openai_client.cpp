@@ -237,6 +237,9 @@ ToolArgumentsNormalization NormalizeToolArgumentsJson(const std::string& argumen
 }
 
 void NormalizeToolCall(ChatToolCall& tool_call) {
+    if (tool_call.id.empty()) {
+        tool_call.id = MakeId("call");
+    }
     tool_call.original_arguments_json = tool_call.arguments_json;
     const auto normalization = NormalizeToolArgumentsJson(tool_call.arguments_json);
     tool_call.arguments_json = normalization.normalized_json;

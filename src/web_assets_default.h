@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Default web asset content, embedded as string literals.
 // Used by WebServer::EnsureDefaultWebAssets() to bootstrap a fresh web_root.
@@ -14,6 +16,8 @@ namespace DefaultWebAssets {
     extern const char kLoginJs[];
     extern const char kChangePasswordJs[];
     extern const char kAppJs[];
+    extern const char* const kAppJsParts[];
+    extern const std::size_t kAppJsPartCount;
     extern const char kThemeDefaultCss[];
     extern const char kThemeDefaultJson[];
     extern const char kThemeDarkCss[];

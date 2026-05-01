@@ -1,5 +1,6 @@
 #include "project_settings_dialog.h"
 
+#include "built_in_tools.h"
 #include "prompt_dialog.h"
 #include "rag_tool_bridge.h"
 #include "remote_worker_setup_dialog.h"
@@ -125,6 +126,22 @@ enum ControlId : int {
     kInternalPowerShellRiskLabel = 6475,
     kInternalArtifactMemoryEnabled = 6477,
     kInternalArtifactMemoryNoteLabel = 6478,
+
+    // User Questionnaire built-in tool settings
+    kQuestionnaireEnabledCheck = 6479,
+    kQuestionnaireMaxOptionsLabel = 6481,
+    kQuestionnaireMaxOptionsEdit = 6482,
+    kQuestionnaireRestrictModeCheck = 6483,
+    kQuestionnaireModeLabel = 6484,
+    kQuestionnaireModeCombo = 6485,
+    kPlannerEnabledCheck = 6486,
+    kPlannerStorageFolderLabel = 6487,
+    kPlannerStorageFolderEdit = 6488,
+    kPlannerNoteLabel = 6489,
+    kCompletionDriverEnabledCheck = 6490,
+    kCompletionDriverModesLabel = 6491,
+    kCompletionDriverModesList = 6492,
+    kCompletionDriverNoteLabel = 6493,
 
     // Right panel scrollable host
     kSettingsScrollPanel = 6480,
@@ -651,6 +668,125 @@ private:
         return self->HandleScrollPanelMessage(hwnd, message, w_param, l_param);
     }
 
+    static LRESULT CALLBACK InternalToolsListProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        auto* self = reinterpret_cast<ProjectSettingsDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (self) {
+            switch (message) {
+            case WM_LBUTTONDOWN: {
+                const int x = GET_X_LPARAM(l_param);
+                const int y = GET_Y_LPARAM(l_param);
+                const LRESULT item_info = SendMessageW(hwnd, LB_ITEMFROMPOINT, 0, MAKELPARAM(x, y));
+                const int index = LOWORD(item_info);
+                const bool outside = HIWORD(item_info) != 0;
+                if (!outside && index >= 0 && index <= 4) {
+                    SetFocus(hwnd);
+                    if (x <= Scale(hwnd, 42)) {
+                        self->ToggleInternalToolEnabled(index);
+                        return 0;
+                    }
+                    self->SelectInternalTool(index);
+                    return 0;
+                }
+                break;
+            }
+            case WM_KEYDOWN:
+                if (w_param == VK_SPACE) {
+                    const int index = ListBox_GetCurSel(hwnd);
+                    if (index >= 0 && index <= 4) {
+                        self->ToggleInternalToolEnabled(index);
+                        return 0;
+                    }
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        if (self && self->internal_tools_list_prev_proc_) {
+            return CallWindowProcW(self->internal_tools_list_prev_proc_, hwnd, message, w_param, l_param);
+        }
+        return DefWindowProcW(hwnd, message, w_param, l_param);
+    }
+
+    static LRESULT CALLBACK AgenticModesListProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        auto* self = reinterpret_cast<ProjectSettingsDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (self) {
+            switch (message) {
+            case WM_LBUTTONDOWN: {
+                const int x = GET_X_LPARAM(l_param);
+                const int y = GET_Y_LPARAM(l_param);
+                const LRESULT item_info = SendMessageW(hwnd, LB_ITEMFROMPOINT, 0, MAKELPARAM(x, y));
+                const int index = LOWORD(item_info);
+                const bool outside = HIWORD(item_info) != 0;
+                if (!outside && index >= 0 && index < static_cast<int>(self->agentic_mode_enabled_.size())) {
+                    SetFocus(hwnd);
+                    ListBox_SetCurSel(hwnd, index);
+                    if (x <= Scale(hwnd, 42)) {
+                        self->ToggleAgenticModeEnabled(index);
+                        return 0;
+                    }
+                    return 0;
+                }
+                break;
+            }
+            case WM_KEYDOWN:
+                if (w_param == VK_SPACE) {
+                    const int index = ListBox_GetCurSel(hwnd);
+                    if (index >= 0 && index < static_cast<int>(self->agentic_mode_enabled_.size())) {
+                        self->ToggleAgenticModeEnabled(index);
+                        return 0;
+                    }
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        if (self && self->agentic_modes_list_prev_proc_) {
+            return CallWindowProcW(self->agentic_modes_list_prev_proc_, hwnd, message, w_param, l_param);
+        }
+        return DefWindowProcW(hwnd, message, w_param, l_param);
+    }
+
+    static LRESULT CALLBACK CompletionDriverModesListProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        auto* self = reinterpret_cast<ProjectSettingsDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (self) {
+            switch (message) {
+            case WM_LBUTTONDOWN: {
+                const int x = GET_X_LPARAM(l_param);
+                const int y = GET_Y_LPARAM(l_param);
+                const LRESULT item_info = SendMessageW(hwnd, LB_ITEMFROMPOINT, 0, MAKELPARAM(x, y));
+                const int index = LOWORD(item_info);
+                const bool outside = HIWORD(item_info) != 0;
+                if (!outside && index >= 0 && index < static_cast<int>(self->completion_driver_mode_allowed_.size())) {
+                    SetFocus(hwnd);
+                    ListBox_SetCurSel(hwnd, index);
+                    if (x <= Scale(hwnd, 42)) {
+                        self->ToggleCompletionDriverModeAllowed(index);
+                    }
+                    return 0;
+                }
+                break;
+            }
+            case WM_KEYDOWN:
+                if (w_param == VK_SPACE) {
+                    const int index = ListBox_GetCurSel(hwnd);
+                    if (index >= 0 && index < static_cast<int>(self->completion_driver_mode_allowed_.size())) {
+                        self->ToggleCompletionDriverModeAllowed(index);
+                        return 0;
+                    }
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        if (self && self->completion_driver_modes_list_prev_proc_) {
+            return CallWindowProcW(self->completion_driver_modes_list_prev_proc_, hwnd, message, w_param, l_param);
+        }
+        return DefWindowProcW(hwnd, message, w_param, l_param);
+    }
+
     LRESULT HandleScrollPanelMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
         switch (message) {
         case WM_ERASEBKGND: {
@@ -826,6 +962,9 @@ private:
         internal_tools_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalToolsList), nullptr, nullptr);
+        SetWindowLongPtrW(internal_tools_list_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+        internal_tools_list_prev_proc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+            internal_tools_list_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&ProjectSettingsDialog::InternalToolsListProc)));
         internal_tool_settings_panel_ = CreateWindowExW(0, L"BUTTON", L"Tool Settings", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalToolSettingsPanel), nullptr, nullptr);
         internal_powershell_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable PowerShell command execution",
@@ -847,6 +986,54 @@ private:
             L"Layer 0 compression forces this on for artifact restore and code memory.",
             WS_CHILD | WS_VISIBLE,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInternalArtifactMemoryNoteLabel), nullptr, nullptr);
+
+        planner_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable Planner / Task Decomposition",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kPlannerEnabledCheck), nullptr, nullptr);
+        planner_storage_folder_label_ = CreateWindowExW(0, L"STATIC", L"Storage folder:", WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kPlannerStorageFolderLabel), nullptr, nullptr);
+        planner_storage_folder_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"$ProjectFolder$\\.agent",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kPlannerStorageFolderEdit), nullptr, nullptr);
+        planner_note_label_ = CreateWindowExW(0, L"STATIC",
+            L"Stores planner.json here so the model can track nested goals, subgoals, steps, statuses, completion criteria, blockers, and tool hints across the complete interaction.",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kPlannerNoteLabel), nullptr, nullptr);
+
+        completion_driver_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable Completion Driver",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverEnabledCheck), nullptr, nullptr);
+        completion_driver_modes_label_ = CreateWindowExW(0, L"STATIC", L"Allowed agentic modes:", WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverModesLabel), nullptr, nullptr);
+        completion_driver_modes_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverModesList), nullptr, nullptr);
+        SetWindowLongPtrW(completion_driver_modes_list_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+        completion_driver_modes_list_prev_proc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+            completion_driver_modes_list_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&ProjectSettingsDialog::CompletionDriverModesListProc)));
+        completion_driver_note_label_ = CreateWindowExW(0, L"STATIC",
+            L"Only checked modes can use completion_driver. The host continues those modes until the tool reports completed/done.",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverNoteLabel), nullptr, nullptr);
+
+        questionnaire_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable User Questionnaire",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kQuestionnaireEnabledCheck), nullptr, nullptr);
+        questionnaire_max_options_label_ = CreateWindowExW(0, L"STATIC", L"Max options:",
+            WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_,
+            reinterpret_cast<HMENU>(kQuestionnaireMaxOptionsLabel), nullptr, nullptr);
+        questionnaire_max_options_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"8",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kQuestionnaireMaxOptionsEdit), nullptr, nullptr);
+        questionnaire_restrict_mode_check_ = CreateWindowExW(0, L"BUTTON", L"Only when in this agentic mode",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kQuestionnaireRestrictModeCheck), nullptr, nullptr);
+        questionnaire_mode_label_ = CreateWindowExW(0, L"STATIC", L"Mode:",
+            WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_,
+            reinterpret_cast<HMENU>(kQuestionnaireModeLabel), nullptr, nullptr);
+        questionnaire_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kQuestionnaireModeCombo), nullptr, nullptr);
 
         // RAG services section
         rag_services_header_ = CreateWindowExW(0, L"STATIC", L"RAG Services:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagServicesHeader), nullptr, nullptr);
@@ -897,6 +1084,9 @@ private:
         agentic_modes_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kAgenticModesList), nullptr, nullptr);
+        SetWindowLongPtrW(agentic_modes_list_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+        agentic_modes_list_prev_proc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+            agentic_modes_list_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&ProjectSettingsDialog::AgenticModesListProc)));
         chat_logging_check_ = CreateWindowExW(0, L"BUTTON", L"Enable detailed chat logging",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kChatLoggingCheck), nullptr, nullptr);
@@ -940,6 +1130,10 @@ private:
             internal_powershell_enabled_check_, internal_powershell_workdir_label_,
             internal_powershell_workdir_edit_, internal_powershell_risk_label_,
             internal_artifact_memory_enabled_check_, internal_artifact_memory_note_label_,
+            planner_enabled_check_, planner_storage_folder_label_, planner_storage_folder_edit_, planner_note_label_,
+            completion_driver_enabled_check_, completion_driver_modes_label_, completion_driver_modes_list_, completion_driver_note_label_,
+            questionnaire_enabled_check_, questionnaire_max_options_label_, questionnaire_max_options_edit_,
+            questionnaire_restrict_mode_check_, questionnaire_mode_label_, questionnaire_mode_combo_,
             rag_services_header_, rag_services_list_, rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_check_,
             rag_priority_label_, rag_priority_edit_, rag_max_chunks_label_, rag_max_chunks_edit_,
@@ -1000,21 +1194,24 @@ private:
 
         // Populate agentic modes
         agentic_mode_enabled_.clear();
+        completion_driver_mode_allowed_.clear();
         ComboBox_AddString(agentic_mode_combo_, L"(none)");
         for (const auto& mode : options_.agentic_modes) {
             const int idx = ComboBox_AddString(agentic_mode_combo_, Utf8ToWide(mode.name).c_str());
             bool enabled = std::find(options_.enabled_agentic_mode_ids.begin(),
                 options_.enabled_agentic_mode_ids.end(), mode.id) != options_.enabled_agentic_mode_ids.end();
+            if (mode.id == options_.selected_agentic_mode_id) {
+                enabled = true;  // default must be checked
+            }
             agentic_mode_enabled_.push_back(enabled);
+            completion_driver_mode_allowed_.push_back(
+                std::find(options_.completion_driver_allowed_mode_ids.begin(),
+                          options_.completion_driver_allowed_mode_ids.end(),
+                          mode.id) != options_.completion_driver_allowed_mode_ids.end());
             std::wstring label = (enabled ? L"[✓] " : L"[ ] ") + Utf8ToWide(mode.name);
             ListBox_AddString(agentic_modes_list_, label.c_str());
             if (mode.id == options_.selected_agentic_mode_id) {
                 ComboBox_SetCurSel(agentic_mode_combo_, idx);
-                enabled = true;  // default must be checked
-                agentic_mode_enabled_.back() = true;
-                // refresh list label
-                ListBox_DeleteString(agentic_modes_list_, static_cast<int>(agentic_mode_enabled_.size()) - 1);
-                ListBox_InsertString(agentic_modes_list_, static_cast<int>(agentic_mode_enabled_.size()) - 1, label.c_str());
             }
         }
         if (options_.selected_agentic_mode_id.empty() || ComboBox_GetCurSel(agentic_mode_combo_) < 0) {
@@ -1034,11 +1231,30 @@ private:
         }
         internal_powershell_enabled_ = options_.built_in_powershell_enabled;
         internal_artifact_memory_enabled_ = options_.built_in_artifact_memory_enabled;
-        const std::string workdir = Trim(options_.built_in_powershell_working_directory).empty()
+        planner_enabled_ = options_.built_in_planner_enabled;
+        completion_driver_enabled_ = options_.built_in_completion_driver_enabled;
+        workdir_ = Trim(options_.built_in_powershell_working_directory).empty()
             ? std::string("$ProjectFolder$")
             : options_.built_in_powershell_working_directory;
-        SetWindowTextW(internal_powershell_workdir_edit_, Utf8ToWide(workdir).c_str());
-        RefreshInternalToolsList(0);
+        planner_storage_folder_ = Trim(options_.built_in_planner_storage_folder).empty()
+            ? std::string("$ProjectFolder$\\.agent")
+            : options_.built_in_planner_storage_folder;
+
+        questionnaire_enabled_ = options_.built_in_questionnaire_enabled;
+        if (completion_driver_enabled_) {
+            CheckDlgButton(scroll_content_host_, kCompletionDriverEnabledCheck, BST_CHECKED);
+        }
+        RefreshCompletionDriverModesList();
+        if (questionnaire_enabled_) {
+            CheckDlgButton(scroll_content_host_, kQuestionnaireEnabledCheck, BST_CHECKED);
+        }
+        SetWindowTextW(questionnaire_max_options_edit_, std::to_wstring(options_.questionnaire_max_options).c_str());
+        if (options_.questionnaire_restrict_by_mode) {
+            CheckDlgButton(scroll_content_host_, kQuestionnaireRestrictModeCheck, BST_CHECKED);
+        }
+        PopulateQuestionnaireModeCombo(options_.questionnaire_allowed_mode_id);
+        RefreshQuestionnaireControls();
+        RefreshInternalToolsList(false);
 
         SetWindowTextW(model_timeout_edit_, std::to_wstring(options_.model_timeout_seconds).c_str());
     }
@@ -1122,19 +1338,44 @@ private:
         y += Scale(hwnd_, 26) + gutter;
         MoveWindow(internal_tools_header_, 0, y, right_width, label_height, TRUE);
         y += label_height + gutter;
-        const int internal_list_w = std::max(Scale(hwnd_, 180), (right_width - gutter) / 2);
+        const int internal_available_w = std::max(0, right_width - GetSystemMetrics(SM_CXVSCROLL));
+        const int internal_list_w = std::max(Scale(hwnd_, 180), (internal_available_w - gutter) / 2);
         const int internal_settings_x =  internal_list_w + gutter;
-        const int internal_settings_w = right_width - internal_list_w - gutter;
-        const int internal_h = Scale(hwnd_, 136);
+        const int internal_settings_w = internal_available_w - internal_list_w - gutter;
+        const int internal_h = Scale(hwnd_, 200);
         MoveWindow(internal_tools_list_, 0, y, internal_list_w, internal_h, TRUE);
         MoveWindow(internal_tool_settings_panel_, internal_settings_x, y, internal_settings_w, internal_h, TRUE);
         const int panel_pad = Scale(hwnd_, 10);
-        MoveWindow(internal_powershell_enabled_check_, internal_settings_x + panel_pad, y + Scale(hwnd_, 18), internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
-        MoveWindow(internal_powershell_workdir_label_, internal_settings_x + panel_pad, y + Scale(hwnd_, 43), Scale(hwnd_, 90), label_height, TRUE);
-        MoveWindow(internal_powershell_workdir_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 90), y + Scale(hwnd_, 40), internal_settings_w - panel_pad * 2 - Scale(hwnd_, 90), Scale(hwnd_, 22), TRUE);
-        MoveWindow(internal_powershell_risk_label_, internal_settings_x + panel_pad, y + Scale(hwnd_, 66), internal_settings_w - panel_pad * 2, label_height, TRUE);
-        MoveWindow(internal_artifact_memory_enabled_check_, internal_settings_x + panel_pad, y + Scale(hwnd_, 88), internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
-        MoveWindow(internal_artifact_memory_note_label_, internal_settings_x + panel_pad, y + Scale(hwnd_, 112), internal_settings_w - panel_pad * 2, label_height, TRUE);
+        const int tool_y = y + Scale(hwnd_, 18);
+        MoveWindow(internal_powershell_enabled_check_, internal_settings_x + panel_pad, tool_y, internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(internal_powershell_workdir_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), Scale(hwnd_, 90), label_height, TRUE);
+        MoveWindow(internal_powershell_workdir_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 90), tool_y + Scale(hwnd_, 22), internal_settings_w - panel_pad * 2 - Scale(hwnd_, 90), Scale(hwnd_, 22), TRUE);
+        MoveWindow(internal_powershell_risk_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 48), internal_settings_w - panel_pad * 2, label_height, TRUE);
+
+        MoveWindow(internal_artifact_memory_enabled_check_, internal_settings_x + panel_pad, tool_y, internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(internal_artifact_memory_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), internal_settings_w - panel_pad * 2, label_height, TRUE);
+
+        MoveWindow(planner_enabled_check_, internal_settings_x + panel_pad, tool_y, internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(planner_storage_folder_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), Scale(hwnd_, 92), label_height, TRUE);
+        MoveWindow(planner_storage_folder_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 94), tool_y + Scale(hwnd_, 22), internal_settings_w - panel_pad * 2 - Scale(hwnd_, 94), Scale(hwnd_, 22), TRUE);
+        MoveWindow(planner_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 50), internal_settings_w - panel_pad * 2, Scale(hwnd_, 56), TRUE);
+
+        MoveWindow(completion_driver_enabled_check_, internal_settings_x + panel_pad, tool_y, internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(completion_driver_modes_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), internal_settings_w - panel_pad * 2, label_height, TRUE);
+        MoveWindow(completion_driver_modes_list_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 45), internal_settings_w - panel_pad * 2, Scale(hwnd_, 72), TRUE);
+        MoveWindow(completion_driver_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 122), internal_settings_w - panel_pad * 2, Scale(hwnd_, 44), TRUE);
+
+        MoveWindow(questionnaire_enabled_check_, internal_settings_x + panel_pad, tool_y, internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(questionnaire_max_options_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), Scale(hwnd_, 80), Scale(hwnd_, 20), TRUE);
+        MoveWindow(questionnaire_max_options_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 82), tool_y + Scale(hwnd_, 22), Scale(hwnd_, 50), Scale(hwnd_, 22), TRUE);
+        MoveWindow(questionnaire_restrict_mode_check_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 50), internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        const int questionnaire_mode_label_w = Scale(hwnd_, 48);
+        const int questionnaire_mode_combo_w = std::max(
+            Scale(hwnd_, 120),
+            internal_settings_w - panel_pad * 2 - questionnaire_mode_label_w - gutter);
+        MoveWindow(questionnaire_mode_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 75), questionnaire_mode_label_w, label_height, TRUE);
+        MoveWindow(questionnaire_mode_combo_, internal_settings_x + panel_pad + questionnaire_mode_label_w + gutter, tool_y + Scale(hwnd_, 72), questionnaire_mode_combo_w, Scale(hwnd_, 180), TRUE);
+        SendMessageW(questionnaire_mode_combo_, CB_SETDROPPEDWIDTH, questionnaire_mode_combo_w, 0);
 
         // RAG services section
         y += internal_h + gutter * 2;
@@ -1288,21 +1529,24 @@ private:
                 OnCompressionConfigChanged();
             }
             break;
+        case kAgenticModeCombo:
+            if (notification_code == CBN_SELCHANGE &&
+                IsDlgButtonChecked(scroll_content_host_, kQuestionnaireRestrictModeCheck) == BST_CHECKED &&
+                CurrentQuestionnaireModeId().empty()) {
+                PopulateQuestionnaireModeCombo(FallbackQuestionnaireModeId());
+                RefreshQuestionnaireControls();
+            }
+            break;
         case kInternalToolsList:
             if (notification_code == LBN_SELCHANGE && !toggling_internal_tool_) {
                 const int sel = ListBox_GetCurSel(internal_tools_list_);
-                if (sel == 0) {
-                    internal_powershell_enabled_ = !internal_powershell_enabled_;
-                } else if (sel == 1 && !ArtifactMemoryForcedByLayer0()) {
-                    internal_artifact_memory_enabled_ = !internal_artifact_memory_enabled_;
-                }
-                RefreshInternalToolsList(sel >= 0 ? sel : 0);
+                SelectInternalTool(sel);
             }
             break;
         case kInternalPowerShellEnabled:
             if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
                 internal_powershell_enabled_ = (IsDlgButtonChecked(scroll_content_host_, kInternalPowerShellEnabled) == BST_CHECKED);
-                RefreshInternalToolsList(0);
+                RefreshInternalToolsList();
             }
             break;
         case kInternalArtifactMemoryEnabled:
@@ -1311,9 +1555,41 @@ private:
                     internal_artifact_memory_enabled_ =
                         (IsDlgButtonChecked(scroll_content_host_, kInternalArtifactMemoryEnabled) == BST_CHECKED);
                 }
-                RefreshInternalToolsList(1);
+                RefreshInternalToolsList();
             }
             break;
+        case kPlannerEnabledCheck:
+            if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
+                planner_enabled_ = (IsDlgButtonChecked(scroll_content_host_, kPlannerEnabledCheck) == BST_CHECKED);
+                RefreshInternalToolsList();
+            }
+            break;
+        case kCompletionDriverEnabledCheck:
+            if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
+                completion_driver_enabled_ = (IsDlgButtonChecked(scroll_content_host_, kCompletionDriverEnabledCheck) == BST_CHECKED);
+                RefreshInternalToolsList();
+            }
+            break;
+        case kCompletionDriverModesList:
+            break;
+        case kQuestionnaireEnabledCheck:
+            if (notification_code == BN_CLICKED) {
+                questionnaire_enabled_ = (IsDlgButtonChecked(scroll_content_host_, kQuestionnaireEnabledCheck) == BST_CHECKED);
+                RefreshInternalToolsList();
+            }
+            break;
+        case kQuestionnaireRestrictModeCheck:
+            if (notification_code == BN_CLICKED) {
+                if (IsDlgButtonChecked(scroll_content_host_, kQuestionnaireRestrictModeCheck) == BST_CHECKED) {
+                    PopulateQuestionnaireModeCombo(FallbackQuestionnaireModeId());
+                }
+                RefreshQuestionnaireControls();
+            }
+            break;
+        case kQuestionnaireModeCombo:
+            break;
+        case kQuestionnaireMaxOptionsEdit:
+            break; // ignore EN_CHANGE
         case kRagServicesList:
             if (notification_code == LBN_SELCHANGE) {
                 OnRagSelectionChanged();
@@ -1391,20 +1667,7 @@ private:
             }
             break;
         case kAgenticModesList:
-            if (notification_code == LBN_SELCHANGE && !toggling_agentic_mode_) {
-                const int sel = ListBox_GetCurSel(agentic_modes_list_);
-                if (sel >= 0 && sel < static_cast<int>(agentic_mode_enabled_.size())) {
-                    toggling_agentic_mode_ = true;
-                    agentic_mode_enabled_[sel] = !agentic_mode_enabled_[sel];
-                    const auto& mode = options_.agentic_modes[sel];
-                    std::wstring label = (agentic_mode_enabled_[sel] ? L"[✓] " : L"[ ] ") +
-                        Utf8ToWide(mode.name.empty() ? "(unnamed)" : mode.name);
-                    ListBox_DeleteString(agentic_modes_list_, sel);
-                    ListBox_InsertString(agentic_modes_list_, sel, label.c_str());
-                    ListBox_SetCurSel(agentic_modes_list_, sel);
-                    toggling_agentic_mode_ = false;
-                }
-            }
+            // Selection is handled by the listbox subclass. Only the prefix/Space toggles.
             break;
         case kImportInstructions:
             ImportInstructions();
@@ -1668,8 +1931,196 @@ private:
         return internal_artifact_memory_enabled_ || ArtifactMemoryForcedByLayer0();
     }
 
-    void RefreshInternalToolsList(int selection = 0) {
+    std::string CurrentDefaultAgenticModeId() const {
+        if (!agentic_mode_combo_) return {};
+        const int sel = ComboBox_GetCurSel(agentic_mode_combo_);
+        if (sel > 0 && static_cast<size_t>(sel - 1) < options_.agentic_modes.size()) {
+            return options_.agentic_modes[static_cast<size_t>(sel - 1)].id;
+        }
+        return {};
+    }
+
+    std::string FallbackQuestionnaireModeId() const {
+        std::string mode_id = CurrentDefaultAgenticModeId();
+        if (!mode_id.empty()) return mode_id;
+        if (!options_.agentic_modes.empty()) return options_.agentic_modes.front().id;
+        return {};
+    }
+
+    void RefreshQuestionnaireControls() {
+        questionnaire_enabled_ = (IsDlgButtonChecked(scroll_content_host_, kQuestionnaireEnabledCheck) == BST_CHECKED);
+        const bool restrict_mode = (IsDlgButtonChecked(scroll_content_host_, kQuestionnaireRestrictModeCheck) == BST_CHECKED);
+        if (questionnaire_enabled_ && restrict_mode && CurrentQuestionnaireModeId().empty()) {
+            PopulateQuestionnaireModeCombo(FallbackQuestionnaireModeId());
+        }
+        const bool can_choose_mode = questionnaire_enabled_ && restrict_mode && !options_.agentic_modes.empty();
+        EnableWindow(questionnaire_max_options_label_, questionnaire_enabled_ ? TRUE : FALSE);
+        EnableWindow(questionnaire_max_options_edit_, questionnaire_enabled_ ? TRUE : FALSE);
+        EnableWindow(questionnaire_restrict_mode_check_, questionnaire_enabled_ ? TRUE : FALSE);
+        EnableWindow(questionnaire_mode_label_, can_choose_mode ? TRUE : FALSE);
+        EnableWindow(questionnaire_mode_combo_, can_choose_mode ? TRUE : FALSE);
+    }
+
+    std::string CurrentQuestionnaireModeId() const {
+        if (!questionnaire_mode_combo_) return {};
+        const int sel = ComboBox_GetCurSel(questionnaire_mode_combo_);
+        if (sel > 0 && static_cast<size_t>(sel) <= options_.agentic_modes.size()) {
+            return options_.agentic_modes[static_cast<size_t>(sel - 1)].id;
+        }
+        return {};
+    }
+
+    void PopulateQuestionnaireModeCombo(const std::string& preferred_mode_id = {}) {
+        if (!questionnaire_mode_combo_) return;
+        std::string selected_id = !preferred_mode_id.empty()
+            ? preferred_mode_id
+            : CurrentQuestionnaireModeId();
+        const bool restrict_mode = (IsDlgButtonChecked(scroll_content_host_, kQuestionnaireRestrictModeCheck) == BST_CHECKED);
+        if (selected_id.empty() && restrict_mode) {
+            selected_id = FallbackQuestionnaireModeId();
+        }
+        ComboBox_ResetContent(questionnaire_mode_combo_);
+        ComboBox_AddString(questionnaire_mode_combo_, L"(none)");
+        int selected_index = 0;
+        for (const auto& mode : options_.agentic_modes) {
+            const int idx = ComboBox_AddString(questionnaire_mode_combo_, Utf8ToWide(mode.name).c_str());
+            if (mode.id == selected_id) {
+                selected_index = idx;
+            }
+        }
+        if (selected_index == 0 && restrict_mode && !options_.agentic_modes.empty()) {
+            selected_index = 1;
+        }
+        ComboBox_SetCurSel(questionnaire_mode_combo_, selected_index);
+    }
+
+    void RedrawInternalToolSettingsPanel() {
+        if (!scroll_content_host_) return;
+        RedrawWindow(scroll_content_host_, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    }
+
+    void SaveCurrentInternalToolSettings() {
+        if (selected_internal_tool_index_ == 0 && internal_powershell_workdir_edit_) {
+            workdir_ = Trim(WideToUtf8(GetWindowTextString(internal_powershell_workdir_edit_)));
+            if (workdir_.empty()) {
+                workdir_ = "$ProjectFolder$";
+            }
+        }
+        if (selected_internal_tool_index_ == 0 && internal_powershell_enabled_check_) {
+            internal_powershell_enabled_ =
+                (IsDlgButtonChecked(scroll_content_host_, kInternalPowerShellEnabled) == BST_CHECKED);
+        }
+        if (selected_internal_tool_index_ == 1 && internal_artifact_memory_enabled_check_ && !ArtifactMemoryForcedByLayer0()) {
+            internal_artifact_memory_enabled_ =
+                (IsDlgButtonChecked(scroll_content_host_, kInternalArtifactMemoryEnabled) == BST_CHECKED);
+        }
+        if (selected_internal_tool_index_ == 2 && planner_enabled_check_) {
+            planner_enabled_ =
+                (IsDlgButtonChecked(scroll_content_host_, kPlannerEnabledCheck) == BST_CHECKED);
+        }
+        if (selected_internal_tool_index_ == 2 && planner_storage_folder_edit_) {
+            planner_storage_folder_ = Trim(WideToUtf8(GetWindowTextString(planner_storage_folder_edit_)));
+            if (planner_storage_folder_.empty()) {
+                planner_storage_folder_ = "$ProjectFolder$\\.agent";
+            }
+        }
+        if (selected_internal_tool_index_ == 4 && completion_driver_enabled_check_) {
+            completion_driver_enabled_ =
+                (IsDlgButtonChecked(scroll_content_host_, kCompletionDriverEnabledCheck) == BST_CHECKED);
+        }
+        if (selected_internal_tool_index_ == 3 && questionnaire_enabled_check_) {
+            questionnaire_enabled_ =
+                (IsDlgButtonChecked(scroll_content_host_, kQuestionnaireEnabledCheck) == BST_CHECKED);
+        }
+    }
+
+    void ToggleInternalToolEnabled(int index) {
+        if (index < 0 || index > 4) return;
+        SaveCurrentInternalToolSettings();
+        selected_internal_tool_index_ = index;
+        if (index == 0) {
+            internal_powershell_enabled_ = !internal_powershell_enabled_;
+        } else if (index == 1) {
+            if (!ArtifactMemoryForcedByLayer0()) {
+                internal_artifact_memory_enabled_ = !internal_artifact_memory_enabled_;
+            }
+        } else if (index == 2) {
+            planner_enabled_ = !planner_enabled_;
+        } else if (index == 3) {
+            questionnaire_enabled_ = !questionnaire_enabled_;
+        } else if (index == 4) {
+            completion_driver_enabled_ = !completion_driver_enabled_;
+        }
+        RefreshInternalToolsList(false);
+    }
+
+    void SelectInternalTool(int index) {
+        if (index < 0 || index > 4) return;
+        SaveCurrentInternalToolSettings();
+        selected_internal_tool_index_ = index;
+        ListBox_SetCurSel(internal_tools_list_, index);
+        ShowInternalToolSettings(index);
+    }
+
+    void ToggleAgenticModeEnabled(int index) {
+        if (index < 0 || index >= static_cast<int>(agentic_mode_enabled_.size()) ||
+            index >= static_cast<int>(options_.agentic_modes.size())) {
+            return;
+        }
+
+        toggling_agentic_mode_ = true;
+        agentic_mode_enabled_[index] = !agentic_mode_enabled_[index];
+        const auto& mode = options_.agentic_modes[index];
+        std::wstring label = (agentic_mode_enabled_[index] ? L"[✓] " : L"[ ] ") +
+            Utf8ToWide(mode.name.empty() ? "(unnamed)" : mode.name);
+        ListBox_DeleteString(agentic_modes_list_, index);
+        ListBox_InsertString(agentic_modes_list_, index, label.c_str());
+        ListBox_SetCurSel(agentic_modes_list_, index);
+        toggling_agentic_mode_ = false;
+    }
+
+    void ToggleCompletionDriverModeAllowed(int index) {
+        if (index < 0 || index >= static_cast<int>(completion_driver_mode_allowed_.size()) ||
+            index >= static_cast<int>(options_.agentic_modes.size())) {
+            return;
+        }
+        completion_driver_mode_allowed_[index] = !completion_driver_mode_allowed_[index];
+        RefreshCompletionDriverModesList(index);
+    }
+
+    void RefreshCompletionDriverModesList(int select_index = -1) {
+        if (!completion_driver_modes_list_) return;
+        const int current = select_index >= 0 ? select_index : ListBox_GetCurSel(completion_driver_modes_list_);
+        ListBox_ResetContent(completion_driver_modes_list_);
+        for (size_t i = 0; i < options_.agentic_modes.size(); ++i) {
+            const bool allowed = i < completion_driver_mode_allowed_.size() && completion_driver_mode_allowed_[i];
+            std::wstring label = (allowed ? L"[✓] " : L"[ ] ") +
+                Utf8ToWide(options_.agentic_modes[i].name.empty() ? "(unnamed)" : options_.agentic_modes[i].name);
+            ListBox_AddString(completion_driver_modes_list_, label.c_str());
+        }
+        if (!options_.agentic_modes.empty()) {
+            const int bounded = std::clamp(current, 0, static_cast<int>(options_.agentic_modes.size()) - 1);
+            ListBox_SetCurSel(completion_driver_modes_list_, bounded);
+        }
+    }
+
+    bool InternalToolListChecked(int index, bool fallback) const {
+        if (!internal_tools_list_ || index < 0) return fallback;
+        const LRESULT len = SendMessageW(internal_tools_list_, LB_GETTEXTLEN, index, 0);
+        if (len == LB_ERR || len < 3) return fallback;
+        std::vector<wchar_t> text(static_cast<size_t>(len) + 1, L'\0');
+        if (SendMessageW(internal_tools_list_, LB_GETTEXT, index, reinterpret_cast<LPARAM>(text.data())) == LB_ERR) {
+            return fallback;
+        }
+        return text[0] == L'[' && text[1] != L' ' && text[2] == L']';
+    }
+
+    void RefreshInternalToolsList(bool save_current = true) {
         if (!internal_tools_list_) return;
+        if (save_current) {
+            SaveCurrentInternalToolSettings();
+        }
         toggling_internal_tool_ = true;
         ListBox_ResetContent(internal_tools_list_);
 
@@ -1685,18 +2136,119 @@ private:
         }
         ListBox_AddString(internal_tools_list_, memory_label.c_str());
 
-        if (selection < 0 || selection > 1) selection = 0;
-        ListBox_SetCurSel(internal_tools_list_, selection);
-        CheckDlgButton(scroll_content_host_, kInternalPowerShellEnabled,
-            internal_powershell_enabled_ ? BST_CHECKED : BST_UNCHECKED);
-        CheckDlgButton(scroll_content_host_, kInternalArtifactMemoryEnabled,
-            memory_enabled ? BST_CHECKED : BST_UNCHECKED);
-        EnableWindow(internal_artifact_memory_enabled_check_, memory_forced ? FALSE : TRUE);
-        SetWindowTextW(internal_artifact_memory_note_label_,
-            memory_forced
-                ? L"Forced on because the selected context compression has Layer 0 enabled."
-                : L"Stores versioned artifacts and code under project memory when enabled.");
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(planner_enabled_ ? L"[✓] " : L"[ ] ") + L"Planner / Task Decomposition").c_str());
+
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(questionnaire_enabled_ ? L"[✓] " : L"[ ] ") + L"User Questionnaire").c_str());
+
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(completion_driver_enabled_ ? L"[✓] " : L"[ ] ") + L"Completion Driver").c_str());
+
+        int sel = selected_internal_tool_index_;
+        if (sel < 0 || sel > 4) sel = 0;
+        ListBox_SetCurSel(internal_tools_list_, sel);
         toggling_internal_tool_ = false;
+        ShowInternalToolSettings(sel);
+    }
+
+    void ShowInternalToolSettings(int index) {
+        // Hide all tool-specific controls first
+        ShowWindow(internal_powershell_enabled_check_, SW_HIDE);
+        ShowWindow(internal_powershell_workdir_label_, SW_HIDE);
+        ShowWindow(internal_powershell_workdir_edit_, SW_HIDE);
+        ShowWindow(internal_powershell_risk_label_, SW_HIDE);
+        ShowWindow(internal_artifact_memory_enabled_check_, SW_HIDE);
+        ShowWindow(internal_artifact_memory_note_label_, SW_HIDE);
+        ShowWindow(planner_enabled_check_, SW_HIDE);
+        ShowWindow(planner_storage_folder_label_, SW_HIDE);
+        ShowWindow(planner_storage_folder_edit_, SW_HIDE);
+        ShowWindow(planner_note_label_, SW_HIDE);
+        ShowWindow(completion_driver_enabled_check_, SW_HIDE);
+        ShowWindow(completion_driver_modes_label_, SW_HIDE);
+        ShowWindow(completion_driver_modes_list_, SW_HIDE);
+        ShowWindow(completion_driver_note_label_, SW_HIDE);
+        ShowWindow(questionnaire_enabled_check_, SW_HIDE);
+        ShowWindow(questionnaire_max_options_label_, SW_HIDE);
+        ShowWindow(questionnaire_max_options_edit_, SW_HIDE);
+        ShowWindow(questionnaire_restrict_mode_check_, SW_HIDE);
+        ShowWindow(questionnaire_mode_label_, SW_HIDE);
+        ShowWindow(questionnaire_mode_combo_, SW_HIDE);
+
+        bool panel_has_content = false;
+        if (index == 0) {
+            panel_has_content = true;
+            ShowWindow(internal_powershell_enabled_check_, SW_SHOW);
+            ShowWindow(internal_powershell_workdir_label_, SW_SHOW);
+            ShowWindow(internal_powershell_workdir_edit_, SW_SHOW);
+            ShowWindow(internal_powershell_risk_label_, SW_SHOW);
+            CheckDlgButton(scroll_content_host_, kInternalPowerShellEnabled,
+                internal_powershell_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+            SetWindowTextW(internal_powershell_workdir_edit_,
+                Utf8ToWide(workdir_).c_str());
+        }
+        if (index == 1) {
+            panel_has_content = true;
+            ShowWindow(internal_artifact_memory_enabled_check_, SW_SHOW);
+            ShowWindow(internal_artifact_memory_note_label_, SW_SHOW);
+            CheckDlgButton(scroll_content_host_, kInternalArtifactMemoryEnabled,
+                ArtifactMemoryEffectiveEnabled() ? BST_CHECKED : BST_UNCHECKED);
+            EnableWindow(internal_artifact_memory_enabled_check_,
+                ArtifactMemoryForcedByLayer0() ? FALSE : TRUE);
+            SetWindowTextW(internal_artifact_memory_note_label_,
+                ArtifactMemoryForcedByLayer0()
+                    ? L"Forced on because the selected context compression has Layer 0 enabled."
+                    : L"Stores versioned artifacts and code under project memory when enabled.");
+        }
+        if (index == 2) {
+            panel_has_content = true;
+            ShowWindow(planner_enabled_check_, SW_SHOW);
+            ShowWindow(planner_storage_folder_label_, SW_SHOW);
+            ShowWindow(planner_storage_folder_edit_, SW_SHOW);
+            ShowWindow(planner_note_label_, SW_SHOW);
+            CheckDlgButton(scroll_content_host_, kPlannerEnabledCheck,
+                planner_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+            SetWindowTextW(planner_storage_folder_edit_, Utf8ToWide(planner_storage_folder_).c_str());
+        }
+        if (index == 3) {
+            panel_has_content = true;
+            PopulateQuestionnaireModeCombo();
+            ShowWindow(questionnaire_enabled_check_, SW_SHOW);
+            ShowWindow(questionnaire_max_options_label_, SW_SHOW);
+            ShowWindow(questionnaire_max_options_edit_, SW_SHOW);
+            ShowWindow(questionnaire_restrict_mode_check_, SW_SHOW);
+            ShowWindow(questionnaire_mode_label_, SW_SHOW);
+            ShowWindow(questionnaire_mode_combo_, SW_SHOW);
+            CheckDlgButton(scroll_content_host_, kQuestionnaireEnabledCheck,
+                questionnaire_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+            // sub-control enabling handled by RefreshQuestionnaireControls
+            RefreshQuestionnaireControls();
+        }
+        if (index == 4) {
+            panel_has_content = true;
+            ShowWindow(completion_driver_enabled_check_, SW_SHOW);
+            ShowWindow(completion_driver_modes_label_, SW_SHOW);
+            ShowWindow(completion_driver_modes_list_, SW_SHOW);
+            ShowWindow(completion_driver_note_label_, SW_SHOW);
+            CheckDlgButton(scroll_content_host_, kCompletionDriverEnabledCheck,
+                completion_driver_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+            RefreshCompletionDriverModesList();
+            EnableWindow(completion_driver_modes_label_, completion_driver_enabled_ ? TRUE : FALSE);
+            EnableWindow(completion_driver_modes_list_, completion_driver_enabled_ ? TRUE : FALSE);
+        }
+        if (panel_has_content) {
+            std::wstring title;
+            switch (index) {
+            case 0: title = L"PowerShell Settings"; break;
+            case 1: title = L"Artifact/Code Memory Settings"; break;
+            case 2: title = L"Planner Settings"; break;
+            case 3: title = L"Questionnaire Settings"; break;
+            case 4: title = L"Completion Driver Settings"; break;
+            default: title = L"Tool Settings"; break;
+            }
+            SetWindowTextW(internal_tool_settings_panel_, title.c_str());
+        }
+        RedrawInternalToolSettingsPanel();
     }
 
     void OnCompressionConfigChanged() {
@@ -1706,7 +2258,7 @@ private:
         } else if ((sel - 1) < static_cast<int>(options_.compression_configs.size())) {
             selected_compression_config_id_ = options_.compression_configs[sel - 1].id;
         }
-        RefreshInternalToolsList(1);
+        RefreshInternalToolsList();
     }
 
     void RefreshRagList() {
@@ -1739,6 +2291,8 @@ private:
     void OnRagSelectionChanged() {
         const int sel = ListBox_GetCurSel(rag_services_list_);
         SaveSelectedRagControls();
+
+        SaveCurrentInternalToolSettings();
         RefreshRagList();
         if (sel >= 0 && sel < static_cast<int>(rag_rows_.size())) {
             ListBox_SetCurSel(rag_services_list_, sel);
@@ -2050,6 +2604,8 @@ private:
 
         SaveSelectedRagControls();
 
+        SaveCurrentInternalToolSettings();
+
         // Ensure selected_compression_config_id is current from combo
         int sel = ComboBox_GetCurSel(context_window_combo_);
         if (sel <= 0) {
@@ -2144,10 +2700,7 @@ private:
         std::string selected_agentic_mode_id;
         std::vector<std::string> enabled_agentic_mode_ids;
         {
-            const int mode_sel = ComboBox_GetCurSel(agentic_mode_combo_);
-            if (mode_sel > 0 && static_cast<size_t>(mode_sel - 1) < options_.agentic_modes.size()) {
-                selected_agentic_mode_id = options_.agentic_modes[static_cast<size_t>(mode_sel - 1)].id;
-            }
+            selected_agentic_mode_id = CurrentDefaultAgenticModeId();
             for (size_t i = 0; i < agentic_mode_enabled_.size(); ++i) {
                 if (agentic_mode_enabled_[i] && i < options_.agentic_modes.size()) {
                     enabled_agentic_mode_ids.push_back(options_.agentic_modes[i].id);
@@ -2173,12 +2726,40 @@ private:
         result.allow_manual_context_compression = (IsDlgButtonChecked(scroll_content_host_, kManualContextCompressionCheck) == BST_CHECKED);
         result.enable_web_debugging = (IsDlgButtonChecked(scroll_content_host_, kWebDebuggingCheck) == BST_CHECKED);
         result.serve_web_links_inline = (IsDlgButtonChecked(scroll_content_host_, kInlineWebLinksCheck) == BST_CHECKED);
-        result.built_in_powershell_enabled = internal_powershell_enabled_;
-        result.built_in_powershell_working_directory = Trim(WideToUtf8(GetWindowTextString(internal_powershell_workdir_edit_)));
+        result.built_in_powershell_enabled = InternalToolListChecked(0, internal_powershell_enabled_);
+        result.built_in_powershell_working_directory = workdir_;
         if (result.built_in_powershell_working_directory.empty()) {
             result.built_in_powershell_working_directory = "$ProjectFolder$";
         }
         result.built_in_artifact_memory_enabled = internal_artifact_memory_enabled_;
+        result.built_in_planner_enabled = InternalToolListChecked(2, planner_enabled_);
+        result.built_in_planner_storage_folder = planner_storage_folder_;
+        if (result.built_in_planner_storage_folder.empty()) {
+            result.built_in_planner_storage_folder = "$ProjectFolder$\\.agent";
+        }
+        result.built_in_completion_driver_enabled = InternalToolListChecked(4, completion_driver_enabled_);
+        for (size_t i = 0; i < completion_driver_mode_allowed_.size() && i < options_.agentic_modes.size(); ++i) {
+            if (completion_driver_mode_allowed_[i]) {
+                result.completion_driver_allowed_mode_ids.push_back(options_.agentic_modes[i].id);
+            }
+        }
+        const std::wstring max_opts_text = TrimWide(GetWindowTextString(questionnaire_max_options_edit_));
+        result.built_in_questionnaire_enabled = questionnaire_enabled_;
+        if (!max_opts_text.empty()) {
+            result.questionnaire_max_options = std::stoi(max_opts_text);
+            if (result.questionnaire_max_options < 2) result.questionnaire_max_options = 2;
+            if (result.questionnaire_max_options > 50) result.questionnaire_max_options = 50;
+        } else {
+            result.questionnaire_max_options = 8;
+        }
+        result.questionnaire_restrict_by_mode = (IsDlgButtonChecked(scroll_content_host_, kQuestionnaireRestrictModeCheck) == BST_CHECKED);
+        {
+            std::string q_mode_id = CurrentQuestionnaireModeId();
+            if (result.questionnaire_restrict_by_mode && q_mode_id.empty()) {
+                q_mode_id = FallbackQuestionnaireModeId();
+            }
+            result.questionnaire_allowed_mode_id = std::move(q_mode_id);
+        }
         const std::wstring timeout_text = TrimWide(GetWindowTextString(model_timeout_edit_));
         if (!timeout_text.empty()) {
             result.model_timeout_seconds = std::stoi(timeout_text);
@@ -2428,6 +3009,14 @@ private:
                     context += mode_instructions;
                 }
             }
+        }
+
+        ProjectSettings preview_settings;
+        preview_settings.built_in_completion_driver_enabled = settings.built_in_completion_driver_enabled;
+        preview_settings.completion_driver_allowed_mode_ids = settings.completion_driver_allowed_mode_ids;
+        if (built_in_tools::IsCompletionDriverEnabled(preview_settings, settings.selected_agentic_mode_id)) {
+            if (!context.empty()) context += "\n\n";
+            context += built_in_tools::CompletionDriverSystemPrompt();
         }
 
         const std::string mcp_context =
@@ -2701,12 +3290,14 @@ private:
     HWND agentic_mode_combo_ = nullptr;
     HWND agentic_modes_list_label_ = nullptr;
     HWND agentic_modes_list_ = nullptr;
+    WNDPROC agentic_modes_list_prev_proc_ = nullptr;
     HWND chat_logging_check_ = nullptr;
     HWND manual_context_compression_check_ = nullptr;
     HWND web_debugging_check_ = nullptr;
     HWND inline_web_links_check_ = nullptr;
     HWND internal_tools_header_ = nullptr;
     HWND internal_tools_list_ = nullptr;
+    WNDPROC internal_tools_list_prev_proc_ = nullptr;
     HWND internal_tool_settings_panel_ = nullptr;
     HWND internal_powershell_enabled_check_ = nullptr;
     HWND internal_powershell_workdir_label_ = nullptr;
@@ -2714,11 +3305,34 @@ private:
     HWND internal_powershell_risk_label_ = nullptr;
     HWND internal_artifact_memory_enabled_check_ = nullptr;
     HWND internal_artifact_memory_note_label_ = nullptr;
+    HWND planner_enabled_check_ = nullptr;
+    HWND planner_storage_folder_label_ = nullptr;
+    HWND planner_storage_folder_edit_ = nullptr;
+    HWND planner_note_label_ = nullptr;
+    HWND completion_driver_enabled_check_ = nullptr;
+    HWND completion_driver_modes_label_ = nullptr;
+    HWND completion_driver_modes_list_ = nullptr;
+    HWND completion_driver_note_label_ = nullptr;
+    WNDPROC completion_driver_modes_list_prev_proc_ = nullptr;
+    HWND questionnaire_enabled_check_ = nullptr;
+    HWND questionnaire_max_options_label_ = nullptr;
+    HWND questionnaire_max_options_edit_ = nullptr;
+    HWND questionnaire_restrict_mode_check_ = nullptr;
+    HWND questionnaire_mode_label_ = nullptr;
+    HWND questionnaire_mode_combo_ = nullptr;
     bool internal_powershell_enabled_ = false;
     bool internal_artifact_memory_enabled_ = false;
+    bool planner_enabled_ = false;
+    bool completion_driver_enabled_ = false;
     bool toggling_internal_tool_ = false;
     std::vector<bool> agentic_mode_enabled_;
+    std::vector<bool> completion_driver_mode_allowed_;
     bool toggling_agentic_mode_ = false;
+
+    bool questionnaire_enabled_ = false;
+    int selected_internal_tool_index_ = 0;
+    std::string workdir_ = "$ProjectFolder$";
+    std::string planner_storage_folder_ = "$ProjectFolder$\\.agent";
 
     HWND scroll_panel_ = nullptr;
     HWND scroll_backdrop_ = nullptr;

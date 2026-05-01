@@ -1,9 +1,0 @@
-{
-  "id": "chat_1777015550841_22",
-  "max_tokens": 1024,
-  "model_id": "minimax-m2.7:cloud",
-  "name": "mms",
-  "provider_id": "provider_1777000661309_11",
-  "system_prompt": "",
-  "temperature": 0.2
-}

@@ -145,3 +145,21 @@ The user says: "Reply
 
 --- end connection test ---
 
+Provider Test Connection diagnostic log
+[2026-05-01T03:20:59Z] TestConnection called
+  provider=Ollama type=ollama_local
+  model=kimi-k2.6:cloud (kimi-k2.6-cloud) embedding=no
+  ollama_local non-embedding path
+[2026-05-01T03:20:59Z] IsOllamaModelAvailable START
+[2026-05-01T03:20:59Z]   provider=Ollama model=kimi-k2.6:cloud
+[2026-05-01T03:21:11Z]   cloud model id, skipping availability check
+  sending ping to Ollama /api/chat
+[2026-05-01T03:21:11Z] PostOllamaApiChat: POST http://127.0.0.1:12484/api/chat
+[2026-05-01T03:21:11Z]   body: {"keep_alive":300,"messages":[{"content":"Reply with the single word pong.","role":"user"}],"model":"kimi-k2.6:cloud","options":{"num_predict":8,"temperature":0.0},"stream":true}
+[2026-05-01T03:21:11Z]   stream=1
+[2026-05-01T03:21:11Z]   parsed host=127.0.0.1 port=12484 path=/api/chat
+[2026-05-01T03:21:11Z]   request created, sending...
+[2026-05-01T03:21:14Z]   HTTP status=200
+  ping result success=1 message=
+--- end connection test ---
+

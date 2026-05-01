@@ -1829,6 +1829,18 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     j["built_in_powershell_enabled"] = settings.built_in_powershell_enabled;
     j["built_in_powershell_working_directory"] = settings.built_in_powershell_working_directory;
     j["built_in_artifact_memory_enabled"] = settings.built_in_artifact_memory_enabled;
+    j["built_in_planner_enabled"] = settings.built_in_planner_enabled;
+    j["built_in_planner_storage_folder"] = settings.built_in_planner_storage_folder;
+    j["built_in_completion_driver_enabled"] = settings.built_in_completion_driver_enabled;
+    json cd_modes_arr = json::array();
+    for (const auto& id : settings.completion_driver_allowed_mode_ids) {
+        cd_modes_arr.push_back(id);
+    }
+    j["completion_driver_allowed_mode_ids"] = std::move(cd_modes_arr);
+    j["built_in_questionnaire_enabled"] = settings.built_in_questionnaire_enabled;
+    j["questionnaire_max_options"] = settings.questionnaire_max_options;
+    j["questionnaire_restrict_by_mode"] = settings.questionnaire_restrict_by_mode;
+    j["questionnaire_allowed_mode_id"] = settings.questionnaire_allowed_mode_id;
     j["model_timeout_seconds"] = settings.model_timeout_seconds;
 
     return j;
@@ -1902,6 +1914,26 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
         settings.built_in_powershell_working_directory = "$ProjectFolder$";
     }
     settings.built_in_artifact_memory_enabled = j.value("built_in_artifact_memory_enabled", false);
+    settings.built_in_planner_enabled = j.value("built_in_planner_enabled", false);
+    settings.built_in_planner_storage_folder = j.value(
+        "built_in_planner_storage_folder", "$ProjectFolder$\\.agent");
+    if (Trim(settings.built_in_planner_storage_folder).empty()) {
+        settings.built_in_planner_storage_folder = "$ProjectFolder$\\.agent";
+    }
+    settings.built_in_completion_driver_enabled = j.value("built_in_completion_driver_enabled", false);
+    if (j.contains("completion_driver_allowed_mode_ids") && j["completion_driver_allowed_mode_ids"].is_array()) {
+        for (const auto& item : j["completion_driver_allowed_mode_ids"]) {
+            if (item.is_string()) {
+                settings.completion_driver_allowed_mode_ids.push_back(item.get<std::string>());
+            }
+        }
+    }
+    settings.built_in_questionnaire_enabled = j.value("built_in_questionnaire_enabled", false);
+    settings.questionnaire_max_options = j.value("questionnaire_max_options", 8);
+    if (settings.questionnaire_max_options < 2) settings.questionnaire_max_options = 2;
+    if (settings.questionnaire_max_options > 50) settings.questionnaire_max_options = 50;
+    settings.questionnaire_restrict_by_mode = j.value("questionnaire_restrict_by_mode", false);
+    settings.questionnaire_allowed_mode_id = j.value("questionnaire_allowed_mode_id", "");
     settings.model_timeout_seconds = j.value("model_timeout_seconds", 0);
     if (settings.model_timeout_seconds < 0) {
         settings.model_timeout_seconds = 0;

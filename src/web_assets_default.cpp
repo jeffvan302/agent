@@ -41,6 +41,7 @@ R"ASSET(
         <!-- Populated by app.js -->
       </div>
       <button id="new-chat-btn" disabled>+ New Chat</button>
+      <div id="planner-panel" class="planner-panel" hidden></div>
     </nav>
 
     <!-- Main chat area -->
@@ -61,7 +62,10 @@ R"ASSET(
             <span id="agentic-mode-label" class="agentic-mode-none">Mode: None</span>
             <span id="compress-btn" title="Compress context window" style="display:none; margin-left:8px; cursor:pointer; font-size:var(--font-size-small); color:var(--color-accent-primary); user-select:none;">Compress</span>
           </div>
-          <button id="debug-btn" type="button" style="display:none">Enable debugging</button>
+          <div id="compose-top-actions">
+            <button id="cancel-agent-btn" type="button" style="display:none">Cancel Agent</button>
+            <button id="debug-btn" type="button" style="display:none">Enable debugging</button>
+          </div>
         </div>
         <div id="compose-bottom">
           <button id="attach-btn" title="Attach file" disabled>&#128206;</button>
@@ -297,6 +301,8 @@ html, body {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
   flex-shrink: 0;
 }
 #sidebar-header {
@@ -360,6 +366,170 @@ html, body {
 }
 #new-chat-btn:hover { background: var(--color-bg-button-hover); }
 #new-chat-btn:disabled { opacity: 0.4; cursor: default; }
+
+)ASSET"
+R"ASSET(
+
+.planner-panel {
+  margin: 0 10px 12px;
+  padding: 10px 0 0;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  color: var(--color-text-sidebar);
+  font-size: var(--font-size-small);
+}
+.planner-panel[hidden] { display: none; }
+.planner-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 8px;
+}
+.planner-panel-title {
+  font-weight: 700;
+  color: var(--color-text-sidebar-active);
+}
+.planner-refresh-btn {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--color-text-sidebar);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 6px;
+}
+.planner-refresh-btn:hover { background: var(--color-bg-sidebar-hover); }
+.planner-summary {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 0 2px 8px;
+}
+.planner-goal-text {
+  color: var(--color-text-sidebar-active);
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 7px 8px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-input);
+  background: rgba(255,255,255,0.04);
+  overflow-wrap: anywhere;
+}
+.planner-empty,
+.planner-error {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 6px 2px;
+}
+.planner-error { color: var(--color-accent-danger); }
+.planner-section { margin-bottom: 6px; }
+.planner-section-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-sidebar);
+  cursor: pointer;
+  font: inherit;
+  padding: 5px 2px;
+  text-align: left;
+}
+.planner-section-header:hover { background: var(--color-bg-sidebar-hover); }
+.planner-arrow {
+  width: 12px;
+  color: var(--color-text-muted);
+  transition: transform 0.15s;
+}
+.planner-arrow.open { transform: rotate(90deg); }
+.planner-section-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.planner-section-count {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.planner-items { padding-left: 2px; }
+.planner-child-group { margin: 4px 0 0 18px; }
+.planner-child-label {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 5px 0 2px;
+  text-transform: uppercase;
+}
+.planner-item { margin: 2px 0; }
+.planner-item-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 5px 4px;
+  border-radius: var(--radius-input);
+}
+.planner-item-row:hover { background: var(--color-bg-sidebar-hover); }
+.planner-item-expander,
+.planner-item-spacer {
+  flex: 0 0 13px;
+  width: 13px;
+  margin-top: 2px;
+}
+.planner-item-expander {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 0;
+}
+.planner-item-expander.open { transform: rotate(90deg); }
+.planner-checkbox {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+.planner-item-main {
+  flex: 1;
+  min-width: 0;
+}
+.planner-item-title {
+  color: var(--color-text-sidebar);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.planner-item.completed .planner-item-title {
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+}
+.planner-item-meta {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.3;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.planner-status {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 1px 6px;
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--color-text-sidebar-active);
+  background: rgba(255,255,255,0.10);
+}
+.planner-status.completed { background: rgba(34,197,94,0.30); }
+.planner-status.in_progress { background: rgba(59,130,246,0.32); }
+.planner-status.blocked { background: rgba(239,68,68,0.32); }
+.planner-status.cancelled { background: rgba(148,163,184,0.28); }
 
 /* ── Main area ────────────────────────────────────────────────────────── */
 #main {
@@ -1081,6 +1251,12 @@ vider-queue-status-icon {
   align-items: center;
   min-width: 0;
 }
+#compose-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
 #compose-bottom {
   display: flex;
   gap: 10px;
@@ -1110,7 +1286,8 @@ color-accent-primary);
   background: transparent;
   cursor: default;
 }
-#debug-btn {
+#debug-btn,
+#cancel-agent-btn {
   border: 1px solid var(--color-border-input);
   border-radius: var(--radius-button);
   background: var(--color-bg-input);
@@ -1126,6 +1303,11 @@ color-accent-primary);
   color: var(--color-accent-primary);
   background: rgba(0,150,255,0.08);
 }
+#cancel-agent-btn {
+  border-color: var(--color-accent-danger);
+  color: var(--color-accent-danger);
+}
+#cancel-agent-btn:disabled,
 #debug-btn:disabled {
   opacity: 0.45;
   cursor: default;
@@ -1483,7 +1665,8 @@ document.getElementById('cp-form').addEventListener('submit', async function(e) 
 });
 )ASSET";
 
-const char kAppJs[] =
+const char kAppJs[] = "";
+const char* const kAppJsParts[] = {
 R"ASSET(
 /* ─────────────────────────────────────────────────────────────────────────
    app.js — Web chat application
@@ -1548,12 +1731,20 @@ let state = {
   projectAllowManualCompress: false,
   projectEnableWebDebugging: false,
   webDebuggingActive: false,
+  plannerEnabled: false,
+  plannerPlan: null,
+  plannerPath: '',
+  plannerError: '',
+  plannerExpanded: {},
+  plannerRefreshTimer: null,
+  activeAbortController: null,
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const projectList  = $('project-list');
 const newChatBtn   = $('new-chat-btn');
+const plannerPanel = $('planner-panel');
 const chatTitle    = $('chat-title');
 const messagesEl   = $('messages');
 const emptyState   = $('empty-state');
@@ -1565,6 +1756,7 @@ const agenticModeLabel = $('agentic-mode-label');
 let   agenticModePicker = null;
 const compressBtn      = $('compress-btn');
 const debugBtn         = $('debug-btn');
+const cancelAgentBtn   = $('cancel-agent-btn');
 const attachBtn    = $('attach-btn');
 const fileInput    = $('file-input');
 const attachList   = $('attach-list');
@@ -1646,7 +1838,8 @@ async function saveAccountSettings(e) {
 
   const body = {
     display_name: accountDisplayNameInput.value.trim(),
-    email: accountEmailInput.value.trim(),
+    email: accountEmailInput.value.trim(),)ASSET",
+R"ASSET(
     current_password: accountCurrentPasswordInput.value,
     new_password: accountNewPasswordInput.value,
     confirm_password: accountConfirmPasswordInput.value,
@@ -1849,7 +2042,7 @@ function renderVegaBlocks(container) {
 
     let spec;
     try {
-      spec = JSON.parse(source);)ASSET"
+      spec = JSON.parse(source);)ASSET",
 R"ASSET(
       if (spec && typeof spec === 'object' && spec.spec !== undefined &&
           (spec.type === 'vega-lite' || spec.type === 'vega' || spec.type === 'vegalite')) {
@@ -2035,6 +2228,8 @@ function showDiagramError(host, kind, err, source) {
     '<div>' + escapeHtml(message) + '</div>' +
     '<pre><code>' + escapeHtml(source) + '</code></pre>';
 }
+)ASSET",
+R"ASSET(
 
 // ── Message rendering ─────────────────────────────────────────────────────
 function renderMessages(messages) {
@@ -2213,7 +2408,7 @@ function createFileUploadRow(input, initialStatus) {
   body.appendChild(links);
   body.appendChild(progress);
   card.appendChild(mark);
-  card.appendChild(body);)ASSET"
+  card.appendChild(body);)ASSET",
 R"ASSET(
   row.appendChild(lbl);
   row.appendChild(card);
@@ -2413,6 +2608,8 @@ function createCompressionRow(content) {
 function buildCompressionRow(content) {
   return createCompressionRow(content).row;
 }
+)ASSET",
+R"ASSET(
 
 function normalizeQueueRecord(content) {
   let record = content;
@@ -2590,7 +2787,7 @@ function normalizeAssistantTrace(trace, fallbackContent = '') {
 function prettyToolUsageText(value) {
   if (value == null) return '';
   if (typeof value === 'string') {
-    const trimmed = value.trim();)ASSET"
+    const trimmed = value.trim();)ASSET",
 R"ASSET(
     if (!trimmed) return '';
     try {
@@ -2787,6 +2984,8 @@ function createToolUsageRow(content) {
     },
   };
 }
+)ASSET",
+R"ASSET(
 
 function parseWebDebugRecord(content) {
   if (!content) return {};
@@ -2969,7 +3168,7 @@ function createAssistantTurnRow(initialTrace = []) {
   }
 
   function remove() {
-    row.remove();)ASSET"
+    row.remove();)ASSET",
 R"ASSET(
   }
 
@@ -3103,6 +3302,388 @@ function stripUserSuffix(name) {
   return m ? m[1] : name;
 }
 
+)ASSET",
+R"ASSET(
+
+const PLANNER_SECTIONS = [
+  { key: 'goals', label: 'Goals' },
+  { key: 'features', label: 'Features' },
+  { key: 'steps', label: 'Steps' },
+  { key: 'blockers', label: 'Blockers' },
+  { key: 'notes', label: 'Notes' },
+];
+
+const PLANNER_CHILD_SECTIONS = [
+  { key: 'subgoals', label: 'Subgoals' },
+  { key: 'goals', label: 'Goals' },
+  { key: 'features', label: 'Features' },
+  { key: 'steps', label: 'Steps' },
+  { key: 'blockers', label: 'Blockers' },
+  { key: 'notes', label: 'Notes' },
+];
+
+function plannerArray(value, key) {
+  return value && Array.isArray(value[key]) ? value[key] : [];
+}
+
+function plannerItemId(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+  if (item.id === undefined || item.id === null) return '';
+  return String(item.id);
+}
+
+function plannerItemTitle(item, fallback) {
+  if (item == null) return fallback;
+  if (typeof item !== 'object' || Array.isArray(item)) return String(item);
+  return String(
+    item.title || item.task || item.name || item.summary ||
+    item.text || item.description || item.content || fallback
+  );
+}
+
+function plannerItemStatus(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+  return String(item.status || '').trim();
+}
+
+function plannerStatusLabel(status) {
+  return (status || 'pending').replace(/_/g, ' ');
+}
+
+function plannerChildGroups(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+  return PLANNER_CHILD_SECTIONS
+    .map(section => ({ key: section.key, label: section.label, items: plannerArray(item, section.key) }))
+    .filter(group => group.items.length > 0);
+}
+
+function plannerHasContent(plan) {
+  if (!plan || typeof plan !== 'object') return false;
+  if (String(plan.goal || '').trim()) return true;
+  return PLANNER_SECTIONS.some(section => plannerArray(plan, section.key).length > 0);
+}
+
+function plannerStatsForItems(items, stats) {
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const status = plannerItemStatus(item);
+    if (status) {
+      stats.total += 1;
+      if (status === 'completed') stats.completed += 1;
+      if (status === 'in_progress') stats.inProgress += 1;
+      if (status === 'blocked') stats.blocked += 1;
+    }
+    for (const group of plannerChildGroups(item)) {
+      plannerStatsForItems(group.items, stats);
+    }
+  }
+}
+
+function plannerStats(plan) {
+  const stats = { total: 0, completed: 0, inProgress: 0, blocked: 0 };
+  if (!plan || typeof plan !== 'object') return stats;
+  for (const section of PLANNER_SECTIONS) {
+    plannerStatsForItems(plannerArray(plan, section.key), stats);
+  }
+  return stats;
+}
+
+function plannerIsExpanded(key, defaultOpen) {
+  if (Object.prototype.hasOwnProperty.call(state.plannerExpanded, key)) {
+    return !!state.plannerExpanded[key];
+  }
+  return !!defaultOpen;
+}
+
+function togglePlannerExpanded(key, defaultOpen) {
+  state.plannerExpanded[key] = !plannerIsExpanded(key, defaultOpen);
+  renderPlannerPanel();
+}
+
+function resetPlannerState() {
+  state.plannerEnabled = false;
+  state.plannerPlan = null;
+  state.plannerPath = '';
+  state.plannerError = '';
+  renderPlannerPanel();
+}
+
+function applyPlannerPayload(data) {
+  state.plannerEnabled = !!(data && data.enabled);
+  state.plannerPlan = data && data.plan ? data.plan : null;
+  state.plannerPath = data && data.path ? data.path : '';
+  state.plannerError = '';
+  renderPlannerPanel();
+}
+
+async function loadPlanner(projectId, chatId) {
+  if (!plannerPanel || !chatId) {
+    resetPlannerState();
+    return;
+  }
+  const requestedChatId = chatId;
+  try {
+    const resp = await api('GET', `/api/chats/${encodeURIComponent(chatId)}/planner`);
+    if (!resp || state.selectedChatId !== requestedChatId) return;
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      state.plannerEnabled = false;
+      state.plannerPlan = null;
+      state.plannerError = data.error || 'Could not load planner.';
+      renderPlannerPanel();
+      return;
+    }
+    applyPlannerPayload(await resp.json());
+  } catch (e) {
+    if (state.selectedChatId !== requestedChatId) return;
+    state.plannerEnabled = false;
+    state.plannerPlan = null;
+    state.plannerError = 'Could not load planner.';
+    renderPlannerPanel();
+  }
+}
+
+function schedulePlannerRefresh(delayMs = 250) {
+  if (!plannerPanel || !state.selectedChatId) return;
+  if (state.plannerRefreshTimer) clearTimeout(state.plannerRefreshTimer);
+  state.plannerRefreshTimer = setTimeout(() => {
+    state.plannerRefreshTimer = null;
+    if (state.selectedProjectId && state.selectedChatId) {
+      loadPlanner(state.selectedProjectId, state.selectedChatId);
+    }
+  }, delayMs);
+}
+)ASSET",
+R"ASSET(
+
+async function updatePlannerItemStatus(id, status, checkbox) {
+  if (!id || !state.selectedChatId) return;
+  const previousChecked = checkbox ? checkbox.checked : false;
+  if (checkbox) checkbox.disabled = true;
+  try {
+    const resp = await api('PATCH', `/api/chats/${encodeURIComponent(state.selectedChatId)}/planner/items/${encodeURIComponent(id)}`, {
+      status,
+    });
+    if (!resp || !resp.ok) {
+      const data = resp ? await resp.json().catch(() => ({})) : {};
+      throw new Error(data.error || 'Could not update planner item.');
+    }
+    applyPlannerPayload(await resp.json());
+  } catch (e) {
+    if (checkbox) checkbox.checked = !previousChecked;
+    state.plannerError = e && e.message ? e.message : 'Could not update planner item.';
+    renderPlannerPanel();
+  }
+}
+
+function renderPlannerPanel() {
+  if (!plannerPanel) return;
+  plannerPanel.innerHTML = '';
+
+  if (!state.selectedChatId) {
+    plannerPanel.hidden = true;
+    return;
+  }
+
+  const hasContent = plannerHasContent(state.plannerPlan);
+  if (!state.plannerEnabled && !state.plannerError) {
+    plannerPanel.hidden = true;
+    return;
+  }
+  if (state.plannerEnabled && !hasContent && !state.plannerError) {
+    plannerPanel.hidden = true;
+    return;
+  }
+
+  plannerPanel.hidden = false;
+
+  const header = document.createElement('div');
+  header.className = 'planner-panel-header';
+  const title = document.createElement('div');
+  title.className = 'planner-panel-title';
+  title.textContent = 'Plan';
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.className = 'planner-refresh-btn';
+  refresh.textContent = 'Refresh';
+  refresh.addEventListener('click', () => loadPlanner(state.selectedProjectId, state.selectedChatId));
+  header.appendChild(title);
+  header.appendChild(refresh);
+  plannerPanel.appendChild(header);
+
+  if (state.plannerError) {
+    const error = document.createElement('div');
+    error.className = 'planner-error';
+    error.textContent = state.plannerError;
+    plannerPanel.appendChild(error);
+    return;
+  }
+
+  const stats = plannerStats(state.plannerPlan);
+  if (stats.total > 0) {
+    const summary = document.createElement('div');
+    summary.className = 'planner-summary';
+    const parts = [`${stats.completed}/${stats.total} completed`];
+    if (stats.inProgress) parts.push(`${stats.inProgress} active`);
+    if (stats.blocked) parts.push(`${stats.blocked} blocked`);
+    summary.textContent = parts.join(' · ');
+    plannerPanel.appendChild(summary);
+  }
+
+  const goal = String((state.plannerPlan && state.plannerPlan.goal) || '').trim();
+  if (goal) {
+    const goalEl = document.createElement('div');
+    goalEl.className = 'planner-goal-text';
+    goalEl.textContent = goal;
+    plannerPanel.appendChild(goalEl);
+  }
+
+  if (!hasContent) {
+    const empty = document.createElement('div');
+    empty.className = 'planner-empty';
+    empty.textContent = 'No plan items yet.';
+    plannerPanel.appendChild(empty);
+    return;
+  }
+
+  for (const section of PLANNER_SECTIONS) {
+    const items = plannerArray(state.plannerPlan, section.key);
+    if (!items.length) continue;
+    renderPlannerSection(section, items, plannerPanel);
+  }
+}
+
+function renderPlannerSection(section, items, container) {
+  const key = `section:${section.key}`;
+  const open = plannerIsExpanded(key, true);
+  const sectionEl = document.createElement('div');
+  sectionEl.className = 'planner-section';
+
+  const header = document.createElement('button');
+  header.type = 'button';
+  header.className = 'planner-section-header';
+  header.addEventListener('click', () => togglePlannerExpanded(key, true));
+
+  const arrow = document.createElement('span');
+  arrow.className = 'planner-arrow' + (open ? ' open' : '');
+  arrow.textContent = '▶';
+  const name = document.createElement('span');
+  name.className = 'planner-section-name';
+  name.textContent = section.label;
+  const count = document.createElement('span');
+  count.className = 'planner-section-count';
+  count.textContent = String(items.length);
+
+  header.appendChild(arrow);
+  header.appendChild(name);
+  header.appendChild(count);
+  sectionEl.appendChild(header);
+
+  if (open) {
+    const list = document.createElement('div');
+    list.className = 'planner-items';
+    renderPlannerItems(items, list, `${section.key}`, 0);
+    sectionEl.appendChild(list);
+  }
+
+  container.appendChild(sectionEl);
+}
+
+function renderPlannerItems(items, container, path, depth) {
+  items.forEach((item, index) => {
+    const id = plannerItemId(item);
+    const status = plannerItemStatus(item);
+    const completed = status === 'completed';
+    const children = plannerChildGroups(item);
+    const itemKey = id ? `item:${id}` : `item:${path}:${index}`;
+    const defaultOpen = status === 'in_progress' || depth === 0;
+    const open = children.length ? plannerIsExpanded(itemKey, defaultOpen) : false;
+
+    const itemEl = document.createElement('div');
+    itemEl.className = 'planner-item' + (completed ? ' completed' : '') + (status ? ` ${status}` : '');
+
+    const row = document.createElement('div');
+    row.className = 'planner-item-row';
+    row.style.paddingLeft = `${Math.min(depth, 4) * 8 + 4}px`;
+
+    if (children.length) {
+      const expander = document.createElement('button');
+      expander.type = 'button';
+      expander.className = 'planner-item-expander' + (open ? ' open' : '');
+      expander.textContent = '▶';
+      expander.addEventListener('click', e => {
+        e.stopPropagation();
+        togglePlannerExpanded(itemKey, defaultOpen);
+      });
+      row.appendChild(expander);
+    } else {
+      const spacer = document.createElement('span');
+      spacer.className = 'planner-item-spacer';
+      row.appendChild(spacer);
+    }
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'planner-checkbox';
+    checkbox.checked = completed;
+    checkbox.disabled = !id;
+    checkbox.title = id ? 'Mark completed' : 'Planner item has no id';
+    checkbox.addEventListener('click', e => e.stopPropagation());
+    checkbox.addEventListener('change', () => {
+      updatePlannerItemStatus(id, checkbox.checked ? 'completed' : 'pending', checkbox);
+    });
+    row.appendChild(checkbox);
+
+    const main = document.createElement('div');
+    main.className = 'planner-item-main';
+
+    const title = document.createElement('div');
+    title.className = 'planner-item-title';
+    title.textContent = plannerItemTitle(item, `Item ${index + 1}`);
+    main.appendChild(title);
+
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      const metaParts = [];
+      if (item.done_when) metaParts.push(`Done: ${item.done_when}`);
+      if (item.tool_hint) metaParts.push(`Tool: ${item.tool_hint}`);
+      if (metaParts.length) {
+        const meta = document.createElement('div');
+        meta.className = 'planner-item-meta';
+        meta.textContent = metaParts.join(' · ');
+        main.appendChild(meta);
+      }
+    }
+
+    if (status) {
+      const badge = document.createElement('span');
+      badge.className = 'planner-status ' + status;
+      badge.textContent = plannerStatusLabel(status);
+      main.appendChild(badge);
+    }
+
+    row.appendChild(main);
+    itemEl.appendChild(row);
+
+    if (children.length && open) {
+      for (const group of children) {
+        const childGroup = document.createElement('div');
+        childGroup.className = 'planner-child-group';
+        const label = document.createElement('div');
+        label.className = 'planner-child-label';
+        label.textContent = group.label;
+        childGroup.appendChild(label);
+        renderPlannerItems(group.items, childGroup, `${itemKey}:${group.key}`, depth + 1);
+        itemEl.appendChild(childGroup);
+      }
+    }
+
+    container.appendChild(itemEl);
+  });
+}
+
+)ASSET",
+R"ASSET(
+
 async function toggleProject(projectId, labelEl) {
   const listEl = $('chats-' + projectId);
   if (!listEl) return;
@@ -3129,6 +3710,7 @@ async function selectChat(projectId, chatId, chatName) {
   state.selectedProjectId = projectId;
   state.selectedChatId    = chatId;
   state.selectedChatAgenticModeId = null;
+  state.plannerExpanded = {};
   document.querySelectorAll('.chat-entry').forEach(el =>
     el.classList.toggle('active', el.dataset.chatId === chatId));
   chatTitle.textContent = stripUserSuffix(chatName);
@@ -3139,6 +3721,7 @@ async function selectChat(projectId, chatId, chatName) {
   await Promise.all([
     loadMessages(projectId, chatId),
     loadProjectAgenticModes(projectId),
+    loadPlanner(projectId, chatId),
   ]);
   renderAgenticModeLabel();
 }
@@ -3201,13 +3784,41 @@ function renderDebugButton() {
   debugBtn.classList.toggle('active', state.webDebuggingActive);
 }
 
+function renderCancelAgentButton() {
+  if (!cancelAgentBtn) return;
+  const canCancel = !!(state.sending && state.selectedChatId);
+  cancelAgentBtn.style.display = canCancel ? '' : 'none';
+  cancelAgentBtn.disabled = !canCancel;
+  if (!canCancel) cancelAgentBtn.textContent = 'Cancel Agent';
+}
+
+async function cancelActiveAgent() {
+  if (!state.selectedChatId || !state.activeAbortController) return;
+  if (cancelAgentBtn) {
+    cancelAgentBtn.disabled = true;
+    cancelAgentBtn.textContent = 'Cancelling...';
+  }
+  try {
+    await fetch(`/api/chats/${state.selectedChatId}/stream`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+    });
+  } catch (_) {}
+  try {
+    state.activeAbortController.abort();
+  } catch (_) {}
+}
+
 function setWebDebuggingActive(active) {
   state.webDebuggingActive = !!(active && state.projectEnableWebDebugging);
   if (!state.webDebuggingActive) {
     removeWebDebugBubbles();
   }
   renderDebugButton();
+  renderCancelAgentButton();
 }
+)ASSET",
+R"ASSET(
 
 function findLastUserRow() {
   const rows = Array.from(messagesEl.querySelectorAll('.message-row.user'));
@@ -3279,6 +3890,7 @@ function renderAgenticModeLabel() {
     compressBtn.style.display = state.projectAllowManualCompress ? 'inline' : 'none';
   }
   renderDebugButton();
+  renderCancelAgentButton();
 }
 
 function openAgenticModePicker() {
@@ -3314,7 +3926,7 @@ function openAgenticModePicker() {
     row.style.cssText = `
       padding:8px 12px; cursor:pointer;
       color: var(--color-text-primary); font-size:var(--font-size-base);
-      border-bottom:1px solid var(--color-border-main);)ASSET"
+      border-bottom:1px solid var(--color-border-main);)ASSET",
 R"ASSET(
    `;
     row.textContent = item.name || 'None';
@@ -3409,6 +4021,10 @@ if (debugBtn) {
   });
 }
 
+if (cancelAgentBtn) {
+  cancelAgentBtn.addEventListener('click', cancelActiveAgent);
+}
+
 async function loadMessages(projectId, chatId) {
   const resp = await api('GET', `/api/chats/${chatId}/messages`);
   if (!resp) return;
@@ -3442,6 +4058,7 @@ async function deleteChat(projectId, chatId) {
     sendBtn.disabled       = true;
     state.messages         = [];
     renderMessages([]);
+    resetPlannerState();
   }
   await loadChats(projectId);
   const listEl = $('chats-' + projectId);
@@ -3509,6 +4126,8 @@ function startInlineRename(entry, nameSpan, projectId, chatId, currentName) {
   input.addEventListener('blur', commit);
   input.addEventListener('click', e => e.stopPropagation());
 }
+)ASSET",
+R"ASSET(
 
 // ── File attachment ───────────────────────────────────────────────────────
 if (attachBtn && fileInput) {
@@ -3665,7 +4284,7 @@ async function sendMessage() {
 
   // Build display content (append uploaded file names if any)
   let displayContent = content;
-  if (uploadedFiles.length) {)ASSET"
+  if (uploadedFiles.length) {)ASSET",
 R"ASSET(
     displayContent += '\n\n\uD83D\uDCCE ' + uploadedFiles.join(', ');
   }
@@ -3681,6 +4300,8 @@ R"ASSET(
   const assistantTurn = createAssistantTurnRow();
 
   const abortCtrl = new AbortController();
+  state.activeAbortController = abortCtrl;
+  renderCancelAgentButton();
   let contextUsageText = '';
   let contextRecorded = false;
   let compressionStatus = null;
@@ -3715,6 +4336,7 @@ R"ASSET(
 
     // Consume SSE stream
     let errorMsg = null;
+    let cancelledByServer = false;
     const streamState = await readSSEStream(resp, ev => {
       if (ev.delta !== undefined) {
         assistantTurn.appendTextDelta(ev.delta);
@@ -3758,6 +4380,105 @@ R"ASSET(
           activityStatus.update(record);
         }
         messagesEl.scrollTop = messagesEl.scrollHeight;
+      } else if (ev.questionnaire) {
+        const qRow = document.createElement('div');
+        qRow.className = 'message-row model';
+        const lbl = document.createElement('div');
+        lbl.className = 'message-role-label';
+        lbl.textContent = 'Question';
+        const bubble = document.createElement('div');
+        bubble.className = 'message-bubble questionnaire-bubble';
+        bubble.style.cssText = 'padding:12px 16px;border-radius:var(--radius-message);background:var(--color-bg-message-model);border:1px solid var(--color-border-main);';
+        const qText = document.createElement('div');
+        qText.style.cssText = 'margin-bottom:10px;font-weight:600;';
+        qText.textContent = ev.question || '';
+        bubble.appendChild(qText);
+        const btnWrap = document.createElement('div');
+        btnWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+        const allowMultiple = !!ev.allow_multiple;
+        const selected = new Set();
+        const toolCallId = ev.tool_call_id || '';
+        const questionChatId = state.selectedChatId || '';
+        let confirmBtn = null;
+        let submitted = false;
+        const errorEl = document.createElement('div');
+        errorEl.style.cssText = 'display:none;margin-top:8px;color:var(--color-accent-danger);font-size:var(--font-size-small);';
+        function setQuestionError(message) {
+          errorEl.textContent = message || '';
+          errorEl.style.display = message ? '' : 'none';
+        }
+        function setQuestionButtonsDisabled(disabled) {
+          btnWrap.querySelectorAll('button.q-opt').forEach(btn => { btn.disabled = disabled; });
+          if (confirmBtn) confirmBtn.disabled = disabled;
+        }
+        async function submitQuestionnaireResponse(indices) {
+          if (submitted) return;
+          setQuestionError('');
+          setQuestionButtonsDisabled(true);
+          try {
+            const resp = await api('POST', '/api/questionnaire-response', {
+              chat_id: questionChatId,
+              tool_call_id: toolCallId,
+              selected_indices: indices,
+            });
+            if (!resp || !resp.ok) {
+              const data = resp ? await resp.json().catch(() => ({})) : {};
+              throw new Error(data.error || 'Could not submit the answer.');
+            }
+            submitted = true;
+            if (confirmBtn) confirmBtn.textContent = 'Sent';
+          } catch (e) {
+            setQuestionButtonsDisabled(false);
+            setQuestionError(e && e.message ? e.message : 'Could not submit the answer.');
+          }
+        }
+        function updateButtons() {
+          btnWrap.querySelectorAll('button.q-opt').forEach((btn, idx) => {
+            const isSelected = selected.has(idx);
+            btn.style.background = isSelected ? 'var(--color-accent-primary)' : 'var(--color-bg-input)';
+            btn.style.color = isSelected ? '#fff' : 'var(--color-text-primary)';
+          });
+          if (confirmBtn) {
+            confirmBtn.style.display = selected.size ? '' : 'none';
+          }
+        }
+        (ev.options || []).forEach((opt, idx) => {
+          const btn = document.createElement('button');
+          btn.className = 'q-opt';
+          btn.style.cssText = 'padding:6px 12px;border:1px solid var(--color-border-input);border-radius:var(--radius-button);cursor:pointer;font-size:var(--font-size-small);background:var(--color-bg-input);color:var(--color-text-primary);';
+          btn.textContent = opt;
+          btn.addEventListener('click', async () => {
+            if (allowMultiple) {
+              if (selected.has(idx)) selected.delete(idx);
+              else selected.add(idx);
+              updateButtons();
+            } else {
+              selected.clear();
+              selected.add(idx);
+              updateButtons();
+              await submitQuestionnaireResponse([idx]);
+            }
+          });
+          btnWrap.appendChild(btn);)ASSET",
+R"ASSET(
+        });
+        bubble.appendChild(btnWrap);
+        if (allowMultiple) {
+          confirmBtn = document.createElement('button');
+          confirmBtn.style.cssText = 'margin-top:10px;padding:6px 14px;border:1px solid var(--color-border-input);border-radius:var(--radius-button);cursor:pointer;font-size:var(--font-size-small);background:var(--color-accent-primary);color:#fff;';
+          confirmBtn.textContent = 'Confirm';
+          confirmBtn.style.display = 'none';
+          confirmBtn.addEventListener('click', async () => {
+            const indices = Array.from(selected).sort((a, b) => a - b);
+            await submitQuestionnaireResponse(indices);
+          });
+          bubble.appendChild(confirmBtn);
+        }
+        bubble.appendChild(errorEl);
+        qRow.appendChild(lbl);
+        qRow.appendChild(bubble);
+        messagesEl.appendChild(qRow);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
       } else if (ev.tool_event !== undefined || ev.tool_name !== undefined) {
         const record = {
           tool_call_id: ev.tool_call_id || '',
@@ -3767,6 +4488,9 @@ R"ASSET(
           status: ev.tool_status || (ev.tool_event === 'start' ? 'live' : 'done'),
         };
         assistantTurn.upsertTool(record);
+        if (record.tool_name === 'project_planner' && record.status !== 'live') {
+          schedulePlannerRefresh(100);
+        }
         messagesEl.scrollTop = messagesEl.scrollHeight;
       } else if (ev.compression_status !== undefined) {
         const isDone = ev.compression_status === 'compression_done';
@@ -3803,6 +4527,8 @@ R"ASSET(
           contextRecorded = true;
         }
         messagesEl.scrollTop = messagesEl.scrollHeight;
+      } else if (ev.cancelled) {
+        cancelledByServer = true;
       } else if (ev.done) {
         // done event — finalize handled below
       } else if (ev.error) {
@@ -3814,7 +4540,20 @@ R"ASSET(
       errorMsg = 'The response stream ended before the server sent a completion event.';
     }
 
-    if (errorMsg) {
+    if (streamState.aborted || cancelledByServer) {
+      const partialAssistant = assistantTurn.finalize();
+      if (assistantTurn.hasContent()) {
+        state.messages.push({
+          role: 'assistant',
+          content: partialAssistant.text,
+          ui_trace: partialAssistant.ui_trace,
+          created_at: '',
+        });
+      } else {
+        assistantTurn.remove();
+      }
+      messagesEl.appendChild(buildMessageRow('error', 'Agent cancelled.'));
+    } else if (errorMsg) {
       const partialAssistant = assistantTurn.finalize();
       if (assistantTurn.hasContent()) {
         state.messages.push({
@@ -3839,7 +4578,20 @@ R"ASSET(
     }
 
   } catch (e) {
-    if (e.name !== 'AbortError') {
+    if (e.name === 'AbortError') {
+      const partialAssistant = assistantTurn.finalize();
+      if (assistantTurn.hasContent()) {
+        state.messages.push({
+          role: 'assistant',
+          content: partialAssistant.text,
+          ui_trace: partialAssistant.ui_trace,
+          created_at: '',
+        });
+      } else {
+        assistantTurn.remove();
+      }
+      messagesEl.appendChild(buildMessageRow('error', 'Agent cancelled.'));
+    } else {
       const partialAssistant = assistantTurn.finalize();
       if (assistantTurn.hasContent()) {
         state.messages.push({
@@ -3860,9 +4612,13 @@ R"ASSET(
       if (compressionStatus && !compressionRecorded && compressionStatus.row.parentNode) {
         compressionStatus.row.remove();
       }
-      messagesEl.appendChild(buildMessageRow('error', '⚠ Network error: ' + e.message));
+      messagesEl.appendChild(buildMessageRow('error', '⚠ Network error: ' + e.message));)ASSET",
+R"ASSET(
     }
   } finally {
+    if (state.activeAbortController === abortCtrl) {
+      state.activeAbortController = null;
+    }
     if (!contextUsageText && pendingContextRow.parentNode) {
       pendingContextRow.remove();
     }
@@ -3877,6 +4633,7 @@ R"ASSET(
     }
     state.sending = false;
     setInputEnabled(true);
+    renderCancelAgentButton();
     messageInput.focus();
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
@@ -3902,6 +4659,7 @@ function setInputEnabled(enabled) {
   messageInput.disabled = !enabled;
   sendBtn.disabled      = !enabled || !state.selectedChatId;
   if (attachBtn) attachBtn.disabled = !enabled;
+  renderCancelAgentButton();
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────
@@ -3951,7 +4709,9 @@ async function init() {
 }
 
 init();
-)ASSET";
+)ASSET"
+};
+const std::size_t kAppJsPartCount = sizeof(kAppJsParts) / sizeof(kAppJsParts[0]);
 
 const char kThemeDefaultCss[] =
 R"ASSET(

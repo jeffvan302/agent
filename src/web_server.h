@@ -29,6 +29,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <condition_variable>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -211,6 +212,7 @@ private:
     void HandleGetMessages    (const void* req, void* res);
     void HandleSendMessage    (const void* req, void* res);
     void HandleStreamMessage  (const void* req, void* res);  // SSE streaming
+    void HandleCancelStream   (const void* req, void* res);
     void HandleUpload         (const void* req, void* res);  // multipart file upload
     void HandleProjectDataDownload(const void* req, void* res);
     void HandleRagDocumentDownload(const void* req, void* res);
@@ -219,6 +221,8 @@ private:
     void HandleGetProjectAgenticModes(const void* req, void* res);
     void HandleSetChatAgenticMode   (const void* req, void* res);
     void HandleCompressChat          (const void* req, void* res); // POST /api/chats/:id/compress
+    void HandleGetPlanner            (const void* req, void* res); // GET /api/chats/:id/planner
+    void HandleUpdatePlannerItem     (const void* req, void* res); // PATCH /api/chats/:id/planner/items/:item_id
 
     // ── Static file serving ───────────────────────────────────────────────
     void HandleStaticOrPage(const void* req, void* res);
@@ -263,7 +267,9 @@ private:
                             const std::function<void(const std::string&, const std::string&)>& on_activity_status = {},
                             const std::function<void(const std::string&, const std::string&, const std::string&, const std::string&, const std::string&)>& on_tool_status = {},
                             bool web_debug_requested = false,
-                            const std::function<void(const std::string&, const std::string&, const std::vector<MessageRecord>&)>& on_prompt_debug = {});
+                            const std::function<void(const std::string&, const std::string&, const std::vector<MessageRecord>&)>& on_prompt_debug = {},
+                            const std::function<void(const std::string& tool_call_id, const std::string& question, const std::vector<std::string>& options, bool allow_multiple)>& on_questionnaire = {},
+                            const std::function<bool()>& should_cancel = {});
                             // on_delta returns false to abort early
 
     // Build a PATCH /api/chats/:id rename handler
@@ -351,6 +357,29 @@ private:
     std::thread                       server_thread_;
     std::thread                       redirect_thread_;
 
+    struct ActiveStreamCancellation {
+        std::atomic<bool> cancelled{false};
+    };
+    mutable std::mutex                active_streams_mutex_;
+    std::unordered_map<std::string, std::shared_ptr<ActiveStreamCancellation>> active_streams_;
+
     mutable std::mutex                sessions_mutex_;
     std::unordered_map<std::string, Session> sessions_;
+
+    // ── Questionnaire wire ──────────────────────────────────────────────────────
+    struct PendingQuestionnaire {
+        std::string tool_call_id;
+        std::string question;
+        std::vector<std::string> options;
+        bool allow_multiple = false;
+        std::string answer_result;
+        std::mutex mtx;
+        std::condition_variable cv;
+        bool answered = false;
+        bool abandoned = false;
+    };
+
+    mutable std::mutex questionnaire_mutex_;
+    std::unordered_map<std::string, std::shared_ptr<PendingQuestionnaire>> pending_questionnaires_;
+    void HandleQuestionnaireResponse(const void* req, void* res);
 };

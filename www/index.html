@@ -34,6 +34,7 @@
         <!-- Populated by app.js -->
       </div>
       <button id="new-chat-btn" disabled>+ New Chat</button>
+      <div id="planner-panel" class="planner-panel" hidden></div>
     </nav>
 
     <!-- Main chat area -->
@@ -54,7 +55,10 @@
             <span id="agentic-mode-label" class="agentic-mode-none">Mode: None</span>
             <span id="compress-btn" title="Compress context window" style="display:none; margin-left:8px; cursor:pointer; font-size:var(--font-size-small); color:var(--color-accent-primary); user-select:none;">Compress</span>
           </div>
-          <button id="debug-btn" type="button" style="display:none">Enable debugging</button>
+          <div id="compose-top-actions">
+            <button id="cancel-agent-btn" type="button" style="display:none">Cancel Agent</button>
+            <button id="debug-btn" type="button" style="display:none">Enable debugging</button>
+          </div>
         </div>
         <div id="compose-bottom">
           <button id="attach-btn" title="Attach file" disabled>&#128206;</button>
