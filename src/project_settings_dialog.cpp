@@ -498,8 +498,8 @@ public:
             style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            1050,
-            750,
+            1200,
+            800,
             owner,
             nullptr,
             instance,
@@ -648,13 +648,103 @@ private:
         WNDCLASSEXW wc{};
         wc.cbSize = sizeof(wc);
         wc.hInstance = instance;
-        wc.lpfnWndProc = DefWindowProcW;
+        wc.lpfnWndProc = &ProjectSettingsDialog::ScrollContentProc;
         wc.lpszClassName = kProjectSettingsScrollContentClassName;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         wc.hbrBackground = SettingsScrollBrush();
         wc.style = CS_HREDRAW | CS_VREDRAW;
         RegisterClassExW(&wc);
         registered = true;
+    }
+
+    static LRESULT CALLBACK ScrollContentProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        if (message == WM_NCCREATE) {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+            auto* self = reinterpret_cast<ProjectSettingsDialog*>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            return DefWindowProcW(hwnd, message, w_param, l_param);
+        }
+        auto* self = reinterpret_cast<ProjectSettingsDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (!self) return DefWindowProcW(hwnd, message, w_param, l_param);
+
+        switch (message) {
+        case WM_COMMAND:
+            self->OnCommand(LOWORD(w_param), HIWORD(w_param));
+            return 0;
+        case WM_KEYDOWN:
+            if (w_param == VK_TAB) {
+                self->AdvanceFocus(GetKeyState(VK_SHIFT) >= 0);
+                return 0;
+            }
+            break;
+        default:
+            break;
+        }
+        return DefWindowProcW(hwnd, message, w_param, l_param);
+    }
+
+    void AdvanceFocus(bool forward) {
+        static const std::vector<HWND*> kTabOrder = {
+            &model_combo_,
+            &model_timeout_edit_,
+            &context_window_combo_,
+            &manual_context_compression_check_,
+            &chat_logging_check_,
+            &web_debugging_check_,
+            &inline_web_links_check_,
+            &internal_tools_list_,
+            &internal_powershell_enabled_check_,
+            &internal_powershell_workdir_edit_,
+            &internal_artifact_memory_enabled_check_,
+            &planner_enabled_check_,
+            &planner_storage_folder_edit_,
+            &completion_driver_enabled_check_,
+            &completion_driver_modes_list_,
+            &questionnaire_enabled_check_,
+            &questionnaire_max_options_edit_,
+            &questionnaire_restrict_mode_check_,
+            &questionnaire_mode_combo_,
+            &rag_services_list_,
+            &rag_enabled_check_,
+            &rag_read_check_,
+            &rag_write_check_,
+            &rag_tool_check_,
+            &rag_export_check_,
+            &rag_delete_check_,
+            &rag_default_ingest_check_,
+            &rag_export_path_edit_,
+            &rag_priority_edit_,
+            &rag_max_chunks_edit_,
+            &rag_min_confidence_edit_,
+            &rag_max_confidence_edit_,
+            &rag_retrieval_mode_combo_,
+            &proj_vars_list_,
+            &proj_vars_add_btn_,
+            &proj_vars_remove_btn_,
+            &proj_vars_name_edit_,
+            &proj_vars_value_edit_,
+            &proj_vars_description_edit_,
+            &proj_vars_inject_check_,
+            &agentic_mode_combo_,
+            &agentic_modes_list_,
+            &instructions_edit_,
+            &import_instructions_button_,
+        };
+        HWND focus = GetFocus();
+        for (size_t i = 0; i < kTabOrder.size(); ++i) {
+            if (*kTabOrder[i] == focus) {
+                const size_t cnt = kTabOrder.size();
+                for (size_t j = 1; j <= cnt; ++j) {
+                    const size_t idx = forward ? (i + j) % cnt : (i + cnt - j) % cnt;
+                    HWND target = *kTabOrder[idx];
+                    if (target && IsWindowVisible(target) && IsWindowEnabled(target)) {
+                        SetFocus(target);
+                        return;
+                    }
+                }
+                return;
+            }
+        }
     }
 
     static LRESULT CALLBACK ScrollPanelProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
@@ -941,7 +1031,7 @@ private:
             kProjectSettingsScrollContentClassName,
             nullptr,
             WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-            0, 0, 0, 0, scroll_panel_, nullptr, nullptr, nullptr);
+            0, 0, 0, 0, scroll_panel_, nullptr, nullptr, this);
 
     // Model selection section
     model_label_ = CreateWindowExW(0, L"STATIC", L"AI Model:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kModelLabel), nullptr, nullptr);
@@ -1154,7 +1244,7 @@ private:
 
         // Initial layout pass so the server details panel is positioned before SelectServer
         // tries to position variable controls relative to it.
-        LayoutControls(1050, 750);
+        LayoutControls(1200, 800);
 
         // Populate server list
         RefreshServerList();
@@ -1422,34 +1512,36 @@ private:
 
         // Project variables section
         {
-            const int pv_btn_w   = Scale(hwnd_, 30);
-            const int pv_list_h  = Scale(hwnd_, 58);
-            const int pv_lbl_w   = Scale(hwnd_, 82);
-            const int pv_edit_h  = Scale(hwnd_, 22);
-            const int pv_row_h   = pv_edit_h + Scale(hwnd_, 4);
-            const int list_w     = right_width - pv_btn_w - gutter;
+            const int vscroll_w     = GetSystemMetrics(SM_CXVSCROLL);
+            const int pv_btn_w      = Scale(hwnd_, 30);
+            const int pv_list_h     = Scale(hwnd_, 80);
+            const int pv_lbl_w      = Scale(hwnd_, 82);
+            const int pv_edit_h     = Scale(hwnd_, 24);
+            const int pv_row_h      = pv_edit_h + Scale(hwnd_, 6);
+            const int inner_right_w = right_width - vscroll_w - gutter;
+            const int list_w        = inner_right_w - pv_btn_w - gutter;
 
-            MoveWindow(proj_vars_header_, 0, y, right_width, label_height, TRUE);
+            MoveWindow(proj_vars_header_, 0, y, inner_right_w, label_height, TRUE);
             y += label_height + gutter;
 
             MoveWindow(proj_vars_list_,       0,                y,                  list_w,         pv_list_h,  TRUE);
-            MoveWindow(proj_vars_add_btn_,    list_w + gutter, y,               pv_btn_w,       button_height, TRUE);
-            MoveWindow(proj_vars_remove_btn_, list_w + gutter, y + button_height + gutter, pv_btn_w, button_height, TRUE);
+            MoveWindow(proj_vars_add_btn_,    list_w + gutter,  y,                                                  pv_btn_w,       button_height, TRUE);
+            MoveWindow(proj_vars_remove_btn_, list_w + gutter,  y + button_height + gutter, pv_btn_w, button_height, TRUE);
             y += pv_list_h + gutter;
 
             MoveWindow(proj_vars_name_label_,  0,            y + Scale(hwnd_, 3), pv_lbl_w,              label_height, TRUE);
-            MoveWindow(proj_vars_name_edit_,   pv_lbl_w, y,                  right_width - pv_lbl_w, pv_edit_h,    TRUE);
+            MoveWindow(proj_vars_name_edit_,   pv_lbl_w, y,                  inner_right_w - pv_lbl_w, pv_edit_h,    TRUE);
             y += pv_row_h + gutter;
 
             MoveWindow(proj_vars_value_label_, 0,            y + Scale(hwnd_, 3), pv_lbl_w,              label_height, TRUE);
-            MoveWindow(proj_vars_value_edit_,  pv_lbl_w, y,                  right_width - pv_lbl_w, pv_edit_h,    TRUE);
+            MoveWindow(proj_vars_value_edit_,  pv_lbl_w, y,                  inner_right_w - pv_lbl_w, pv_edit_h,    TRUE);
             y += pv_row_h + gutter;
 
             MoveWindow(proj_vars_description_label_, 0, y + Scale(hwnd_, 3), pv_lbl_w, label_height, TRUE);
-            MoveWindow(proj_vars_description_edit_, pv_lbl_w, y, right_width - pv_lbl_w, pv_edit_h, TRUE);
+            MoveWindow(proj_vars_description_edit_, pv_lbl_w, y, inner_right_w - pv_lbl_w, pv_edit_h, TRUE);
             y += pv_row_h + gutter;
 
-            MoveWindow(proj_vars_inject_check_, pv_lbl_w, y, right_width - pv_lbl_w, Scale(hwnd_, 20), TRUE);
+            MoveWindow(proj_vars_inject_check_, pv_lbl_w, y, inner_right_w - pv_lbl_w, Scale(hwnd_, 20), TRUE);
             y += Scale(hwnd_, 22) + gutter;
         }
 
@@ -1461,11 +1553,11 @@ private:
 
         MoveWindow(agentic_mode_label_,       0,              am_top,              am_half, am_label_h, TRUE);
         MoveWindow(agentic_mode_combo_,        0,              am_top + am_label_h + gutter,
-                                              am_half,              Scale(hwnd_, 200), TRUE);
+                                              am_half,              Scale(hwnd_, 28), TRUE);
         MoveWindow(agentic_modes_list_label_, am_half + gutter, am_top,       am_half, am_label_h, TRUE);
         MoveWindow(agentic_modes_list_,       am_half + gutter, am_top + am_label_h + gutter,
                                               am_half,              am_control_h, TRUE);
-        y = am_top + am_label_h + gutter + Scale(hwnd_, 200) + gutter;
+        y = am_top + am_label_h + gutter + Scale(hwnd_, 28) + gutter;
 
         const int import_width = Scale(hwnd_, 130);
         MoveWindow(instructions_label_, 0, y + Scale(hwnd_, 5), right_width - import_width - gutter, label_height, TRUE);

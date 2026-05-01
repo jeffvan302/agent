@@ -315,6 +315,8 @@ private:
     void DeleteMode() {
         const int sel = static_cast<int>(SendMessageW(mode_list_, LB_GETCURSEL, 0, 0));
         if (sel < 0 || sel >= static_cast<int>(modes_.size())) return;
+        KillTimer(hwnd_, 1);              // cancel any pending debounced save
+        loaded_index_ = -1;               // clear so FlushLoadedMode() bails out
         modes_.erase(modes_.begin() + sel);
         RefreshModeList();
         if (sel < static_cast<int>(modes_.size())) {

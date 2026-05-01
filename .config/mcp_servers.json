@@ -72,21 +72,6 @@
       "scope": "per_project",
       "variables": [],
       "working_directory": ""
-    },
-    {
-      "arguments": [
-        "-y",
-        "@wonderwhy-er/desktop-commander@latest"
-      ],
-      "auto_connect": true,
-      "command": "npx",
-      "enabled": true,
-      "env_entries": [],
-      "id": "mcp_server_1775879351362_7",
-      "name": "desktop_command_mcp",
-      "scope": "per_project",
-      "variables": [],
-      "working_directory": "$ProjectFolder$"
     }
   ],
   "variables": [

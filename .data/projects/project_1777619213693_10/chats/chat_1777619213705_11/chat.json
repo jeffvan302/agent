@@ -1,0 +1,10 @@
+{
+  "id": "chat_1777619213705_11",
+  "max_tokens": 1024,
+  "model_id": "",
+  "name": "Chat 1",
+  "provider_id": "",
+  "selected_agentic_mode_id": "",
+  "system_prompt": "",
+  "temperature": 0.2
+}

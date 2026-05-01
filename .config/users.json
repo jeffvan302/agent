@@ -2,9 +2,8 @@
   "groups": [
     {
       "id": "C9456B8C-4C5C-41C4-93B5-34A22521126B",
-      "name": "Main Test",
+      "name": "All Chats",
       "user_ids": [
-        "7B1E353D-1788-4932-B43E-B2F083B48E4D",
         "3593868E-3A09-47E2-BEF0-CCBDFFAB7292"
       ]
     }
@@ -31,6 +30,28 @@
       "project_id": "project_1776068964686_8",
       "user_project_folder_enabled": false,
       "user_project_folder_root": ""
+    },
+    {
+      "group_ids": [],
+      "project_id": "project_1776841870641_22",
+      "user_project_folder_enabled": false,
+      "user_project_folder_root": ""
+    },
+    {
+      "group_ids": [
+        "C9456B8C-4C5C-41C4-93B5-34A22521126B"
+      ],
+      "project_id": "project_1777616659667_10",
+      "user_project_folder_enabled": false,
+      "user_project_folder_root": ""
+    },
+    {
+      "group_ids": [
+        "C9456B8C-4C5C-41C4-93B5-34A22521126B"
+      ],
+      "project_id": "project_1777619213693_10",
+      "user_project_folder_enabled": false,
+      "user_project_folder_root": ""
     }
   ],
   "users": [
@@ -44,17 +65,6 @@
       "last_login_at": "2026-04-29T07:48:19Z",
       "password_hash": "pbkdf2:100000:4476e550f6afe94bd630a8879fefb520:318ca4b9a2a47f9645dcb557912b710775d6877851cc8d748a0b583f820a264b",
       "username": "admin"
-    },
-    {
-      "created_at": "2026-04-15T17:53:18Z",
-      "display_name": "tester",
-      "email": "",
-      "enabled": true,
-      "force_password_reset": true,
-      "id": "7B1E353D-1788-4932-B43E-B2F083B48E4D",
-      "last_login_at": "",
-      "password_hash": "pbkdf2:100000:c77071bdb7ca191e3d102f5e1d5f7968:60a8199c6fa58d0d8d4cd45b853f53fdb32b1c234e3d8a4866a68de0ba402d7d",
-      "username": "tester"
     }
   ]
 }
