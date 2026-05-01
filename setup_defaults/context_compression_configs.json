@@ -1,0 +1,154 @@
+{
+  "configs": [
+    {
+      "context_window_trigger_percent": 70,
+      "frequency_every_n_prompts": 20,
+      "id": "cc_f98er24s",
+      "layers": {
+        "layer0": {
+          "capture_model_id": "",
+          "capture_model_provider_id": "",
+          "capture_prompt_template": "",
+          "enabled": false,
+          "max_injected_rows": 12,
+          "selection_model_id": "",
+          "selection_model_provider_id": "",
+          "selection_prompt_template": "",
+          "storage_folder_template": "$ProjectFolder$\\.agent\\.memory\\$CHATID$"
+        },
+        "layer1": {
+          "enabled": true,
+          "max_pins": 50,
+          "pin_code_blocks": true,
+          "pin_explicit_instructions": true,
+          "pin_first_message": true,
+          "pin_numbers": true,
+          "pin_urls": true,
+          "pin_user_flagged": true
+        },
+        "layer2": {
+          "enabled": true,
+          "max_tokens": 400,
+          "model_id": "codex-MiniMax-M2.7",
+          "model_provider_id": "provider_1775726633372_1",
+          "prompt_template": "Generate a concise narrative summary (under {{max_tokens}} tokens) capturing:\n1. The user's original goal and any evolution of that goal\n2. Key decisions made and their reasoning\n3. Approaches attempted, including failures and why they failed\n4. Current status and what the next step should be\n5. Any constraints, preferences, or requirements the user has stated\n\nRules:\n- Do NOT include specific code, URLs, or exact numbers (those are preserved elsewhere)\n- Do NOT summarize-from-summary: treat the previous summary as context, but prioritize accuracy from the new turns if there are contradictions\n- Write in third person past/present tense (\"The user asked for...\", \"The current approach is...\")\n- Flag any ambiguity or unresolved questions explicitly",
+          "trigger_threshold_turns": 8
+        },
+        "layer3": {
+          "enabled": true,
+          "max_tokens": 600,
+          "model_id": "codex-MiniMax-M2.7",
+          "model_provider_id": "provider_1775726633372_1",
+          "prompt_template": "Update the state object based on the new turns. Rules:\n- Only ADD or MODIFY fields that the new turns provide evidence for.\n- Do NOT remove existing entries unless the user explicitly contradicts or revokes them.\n- For decisions and failed_approaches, include the turn index for traceability.\n- Keep all values concise - single sentences, not paragraphs.\n- Return ONLY valid JSON matching the schema. No commentary.\n\nSchema:\n{{schema}}"
+        },
+        "layer4": {
+          "enabled": true,
+          "min_recent_turns": 8
+        }
+      },
+      "name": "HSC",
+      "strategy": "hierarchical_structured",
+      "truncate_top_keep_messages": 6
+    },
+    {
+      "context_window_trigger_percent": 70,
+      "frequency_every_n_prompts": 0,
+      "id": "cc_1776744536752_9",
+      "layers": {
+        "layer0": {
+          "capture_model_id": "deepseek-v4-flash:cloud",
+          "capture_model_provider_id": "provider_1777000661309_11",
+          "capture_prompt_template": "You are extracting durable artifacts from a conversation for long-term chat memory.\n\nINPUT:\n- New turns since the last compression cycle\n- A compact current artifact index\n\nTASK:\nIdentify any code, diagram, markup, configuration, or structured artifacts that should be preserved as durable references.\n\nFor each artifact:\n1. Decide whether it is new or a revision of an existing artifact.\n2. Propose a stable artifact_key.\n3. Summarize what the artifact is.\n4. Summarize the user intent behind it.\n5. Summarize what problem it solves.\n6. Identify artifact type and language.\n7. Return the normalized artifact content.\n8. If it supersedes a prior artifact, identify the prior artifact_id or artifact_key.\n\nRULES:\n- Prefer durable artifacts over incidental snippets.\n- Prefer the latest corrected or revised version of an artifact.\n- Do not invent code that is not present in the conversation.\n- Do not write files.\n- Return JSON only.",
+          "enabled": true,
+          "max_injected_rows": 20,
+          "selection_model_id": "deepseek-v4-flash:cloud",
+          "selection_model_provider_id": "provider_1777000661309_11",
+          "selection_prompt_template": "You are selecting which artifact memory entries should be surfaced in the next compressed context window.\n\nINPUT:\n- The current artifact index\n- The latest structured conversation state\n- Recent turns\n\nTASK:\nChoose the latest and most relevant artifacts that the next model call should know about.\n\nFor each selected artifact:\n1. Include artifact_id\n2. Include artifact_key\n3. Include version\n4. Include type\n5. Include a short relevance note\n\nRULES:\n- Prefer latest versions unless an older version is explicitly relevant.\n- Keep the result compact.\n- Do not include full artifact content.\n- Return JSON only.",
+          "storage_folder_template": "$ProjectFolder$\\.agent\\.memory\\"
+        },
+        "layer1": {
+          "enabled": true,
+          "max_pins": 30,
+          "pin_code_blocks": true,
+          "pin_explicit_instructions": true,
+          "pin_first_message": true,
+          "pin_numbers": true,
+          "pin_urls": true,
+          "pin_user_flagged": true
+        },
+        "layer2": {
+          "enabled": true,
+          "max_tokens": 500,
+          "model_id": "deepseek-v4-flash:cloud",
+          "model_provider_id": "provider_1777000661309_11",
+          "prompt_template": "Generate a concise narrative summary (under {{max_tokens}} tokens) capturing:\n1. The user's original goal and any evolution of that goal\n2. Key decisions made and their reasoning\n3. Approaches attempted, including failures and why they failed\n4. Current status and what the next step should be\n5. Any constraints, preferences, or requirements the user has stated\n\nRules:\n- Do NOT include specific code, URLs, or exact numbers (those are preserved elsewhere)\n- Do NOT summarize-from-summary: treat the previous summary as context, but prioritize accuracy from the new turns if there are contradictions\n- Write in third person past/present tense (\"The user asked for...\", \"The current approach is...\")\n- Flag any ambiguity or unresolved questions explicitly",
+          "trigger_threshold_turns": 8
+        },
+        "layer3": {
+          "enabled": true,
+          "max_tokens": 1500,
+          "model_id": "deepseek-v4-flash:cloud",
+          "model_provider_id": "provider_1777000661309_11",
+          "prompt_template": "Update the state object based on the new turns. Rules:\n- Only ADD or MODIFY fields that the new turns provide evidence for.\n- Do NOT remove existing entries unless the user explicitly contradicts or revokes them.\n- For decisions and failed_approaches, include the turn index for traceability.\n- Keep all values concise - single sentences, not paragraphs.\n- Keep latest itteration of fenced code blocks tagged with 'mermaid', 'vega-lite', 'cytoscape', 'svg', or <svg>..</svg>.\n- Make sure all fenced code blocks that are being retained are annotated for what they are.\n- Return ONLY valid JSON matching the schema. No commentary.\n\nSchema:\n{{schema}}"
+        },
+        "layer4": {
+          "enabled": true,
+          "min_recent_turns": 5
+        }
+      },
+      "name": "Graphical Layout HSC",
+      "strategy": "hierarchical_structured",
+      "truncate_top_keep_messages": 20
+    },
+    {
+      "context_window_trigger_percent": 70,
+      "frequency_every_n_prompts": 0,
+      "id": "cc_1777621276213_9",
+      "layers": {
+        "layer0": {
+          "capture_model_id": "",
+          "capture_model_provider_id": "",
+          "capture_prompt_template": "You are extracting durable artifacts from a conversation for long-term chat memory.\n\nINPUT:\n- New turns since the last compression cycle\n- A compact current artifact index\n\nTASK:\nIdentify any code, diagram, markup, configuration, or structured artifacts that should be preserved as durable references.\n\nFor each artifact:\n1. Decide whether it is new or a revision of an existing artifact.\n2. Propose a stable artifact_key.\n3. Summarize what the artifact is.\n4. Summarize the user intent behind it.\n5. Summarize what problem it solves.\n6. Identify artifact type and language.\n7. Return the normalized artifact content.\n8. If it supersedes a prior artifact, identify the prior artifact_id or artifact_key.\n\nRULES:\n- Prefer durable artifacts over incidental snippets.\n- Prefer the latest corrected or revised version of an artifact.\n- Do not invent code that is not present in the conversation.\n- Do not write files.\n- Return JSON only.",
+          "enabled": false,
+          "max_injected_rows": 12,
+          "selection_model_id": "",
+          "selection_model_provider_id": "",
+          "selection_prompt_template": "You are selecting which artifact memory entries should be surfaced in the next compressed context window.\n\nINPUT:\n- The current artifact index\n- The latest structured conversation state\n- Recent turns\n\nTASK:\nChoose the latest and most relevant artifacts that the next model call should know about.\n\nFor each selected artifact:\n1. Include artifact_id\n2. Include artifact_key\n3. Include version\n4. Include type\n5. Include a short relevance note\n\nRULES:\n- Prefer latest versions unless an older version is explicitly relevant.\n- Keep the result compact.\n- Do not include full artifact content.\n- Return JSON only.",
+          "storage_folder_template": "$ProjectFolder$\\.agent\\.memory\\$CHATID$"
+        },
+        "layer1": {
+          "enabled": true,
+          "max_pins": 10,
+          "pin_code_blocks": true,
+          "pin_explicit_instructions": true,
+          "pin_first_message": true,
+          "pin_numbers": true,
+          "pin_urls": true,
+          "pin_user_flagged": true
+        },
+        "layer2": {
+          "enabled": true,
+          "max_tokens": 500,
+          "model_id": "",
+          "model_provider_id": "",
+          "prompt_template": "Generate a concise narrative summary (under {{max_tokens}} tokens) capturing:\n1. The user's original goal and any evolution of that goal\n2. Key decisions made and their reasoning\n3. Approaches attempted, including failures and why they failed\n4. Current status and what the next step should be\n5. Any constraints, preferences, or requirements the user has stated\n\nRules:\n- Do NOT include specific code, URLs, or exact numbers (those are preserved elsewhere)\n- Do NOT summarize-from-summary: treat the previous summary as context, but prioritize accuracy from the new turns if there are contradictions\n- Write in third person past/present tense (\"The user asked for...\", \"The current approach is...\")\n- Flag any ambiguity or unresolved questions explicitly",
+          "trigger_threshold_turns": 8
+        },
+        "layer3": {
+          "enabled": true,
+          "max_tokens": 800,
+          "model_id": "",
+          "model_provider_id": "",
+          "prompt_template": "Update the state object based on the new turns. Rules:\n- Only ADD or MODIFY fields that the new turns provide evidence for.\n- Do NOT remove existing entries unless the user explicitly contradicts or revokes them.\n- For decisions and failed_approaches, include the turn index for traceability.\n- Keep all values concise - single sentences, not paragraphs.\n- Return ONLY valid JSON matching the schema. No commentary.\n\nSchema:\n{{schema}}"
+        },
+        "layer4": {
+          "enabled": true,
+          "min_recent_turns": 2
+        }
+      },
+      "name": "Rolling Frame",
+      "strategy": "truncate_top",
+      "truncate_top_keep_messages": 20
+    }
+  ]
+}

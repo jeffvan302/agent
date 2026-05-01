@@ -3743,41 +3743,90 @@ void MainWindow::SetupDefaultMcpServersIfEmpty() {
 }
 
 void MainWindow::RunSetupSystem() {
-    const bool has_gpu = DetectDedicatedGpu();
-
+    // --- Overwrite confirmation ---
     std::wstring confirm_msg =
-        L"Setup System will configure this installation in one step:\n\n"
-        L"- Write 6 default MCP servers (DuckDuckGo, file system, sequential\n"
-        L"  thinking, time, git, desktop commander) if none are configured.\n"
-        L"- Check for Node.js, npm, npx, uv, and uvx; install missing\n"
-        L"  command runtimes used by the default MCP servers.\n"
-        L"- Install Poppler pdftotext, Tesseract OCR, Pandoc, and LibreOffice\n"
-        L"  (document extraction tools for the RAG service).\n"
-        L"- Install Ollama (local AI runtime for embeddings).\n"
-        L"- Pull the nomic-embed-text embedding model.\n";
-    if (has_gpu) {
-        confirm_msg +=
-            L"- Pull qwen2.5vl:7b vision model (dedicated GPU detected --\n"
-            L"  matches the default image ingestion model).\n";
-    }
-    confirm_msg +=
-        L"\nAll package installs run in a single visible terminal window.\n"
-        L"You can close the terminal at any time to skip remaining steps.\n\n"
-        L"If MCP servers are already configured they will not be overwritten.\n\n"
-        L"This does not configure providers, web server users/groups, or RAG libraries.\n\n"
-        L"Proceed with system setup?";
+        L"Setup System will OVERWRITE your current configuration:\n\n"
+        L"- All existing projects will be deleted and replaced with:\n"
+        L"  \u2022 Creating Applications\n"
+        L"  \u2022 Gate Keeping Examples\n"
+        L"- All existing MCP servers will be replaced with the default set.\n"
+        L"- All existing agentic modes will be replaced with the default set.\n"
+        L"- Context compression configs will be reset to defaults.\n\n"
+        L"Providers, web config, admin config, and model tools will NOT be changed.\n\n"
+        L"Then it will install required system tools (Node.js, uv, Poppler,\n"
+        L"Tesseract, Pandoc, LibreOffice, Ollama) in a terminal window.\n\n"
+        L"Are you sure you want to overwrite everything and proceed?";
 
-    if (MessageBoxW(hwnd_, confirm_msg.c_str(), L"Setup System",
-                    MB_YESNO | MB_ICONQUESTION) != IDYES) {
+    if (MessageBoxW(hwnd_, confirm_msg.c_str(), L"Setup System \u2014 Overwrite Warning",
+                    MB_YESNO | MB_ICONWARNING) != IDYES) {
         return;
     }
 
-    // --- Step 1: MCP configuration (in-process, instant) ---
-    const bool had_servers = !storage_.LoadMcpServers().empty();
-    SetupDefaultMcpServersIfEmpty();
-    const bool wrote_servers = !had_servers && !storage_.LoadMcpServers().empty();
+    // --- Step 1: Delete all existing projects ---
+    const auto existing_projects = storage_.LoadProjects();
+    for (const auto& project : existing_projects) {
+        storage_.DeleteProject(project.info.id);
+    }
 
-    // --- Step 2: Build combined install script ---
+    // --- Step 2: Write defaults from setup_defaults/ ---
+    const auto app_root = DetermineAppRoot();
+    const auto defaults_dir = app_root / "setup_defaults";
+
+    auto copy_default = [&](const std::filesystem::path& filename) {
+        const auto src = defaults_dir / filename;
+        const auto dst = storage_.config_root() / filename;
+        if (std::filesystem::exists(src)) {
+            std::filesystem::create_directories(dst.parent_path());
+            std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing);
+        }
+    };
+
+    copy_default("agentic_modes.json");
+    copy_default("mcp_servers.json");
+    copy_default("context_compression_configs.json");
+
+    // --- Step 3: Create projects from templates ---
+    auto create_project_from_template = [&](const std::string& template_name) {
+        const auto tmpl_dir = defaults_dir / template_name;
+        const auto project_json_path = tmpl_dir / "project.json";
+        if (!std::filesystem::exists(project_json_path)) return;
+
+        std::ifstream in(project_json_path);
+        if (!in) return;
+        nlohmann::json project_json;
+        try {
+            in >> project_json;
+        } catch (...) { return; }
+
+        std::string project_id = project_json.value("id", "");
+        std::string project_name = project_json.value("name", "Untitled");
+        if (project_id.empty()) return;
+
+        ProjectInfo project;
+        project.id = project_id;
+        project.name = project_name;
+        storage_.SaveProject(project);
+
+        // Copy all other template files into the project config directory
+        const auto project_config_dir = storage_.config_root() / "projects" / project_id;
+        for (const auto& entry : std::filesystem::directory_iterator(tmpl_dir)) {
+            if (entry.is_regular_file()) {
+                const auto dst = project_config_dir / entry.path().filename();
+                std::filesystem::copy_file(entry.path(), dst,
+                    std::filesystem::copy_options::overwrite_existing);
+            }
+        }
+    };
+
+    create_project_from_template("project1");
+    create_project_from_template("project2");
+
+    // Reload the project list so the UI reflects the new state
+    ReloadProjects("", "");
+
+    const bool has_gpu = DetectDedicatedGpu();
+
+    // --- Step 4: Build combined install script ---
     // All winget and ollama commands run sequentially in one terminal window.
     // Each step is prefixed with an echo so the user can track progress.
     std::wostringstream script;
@@ -3905,17 +3954,9 @@ void MainWindow::RunSetupSystem() {
 
     std::wstring done_msg =
         L"Setup terminal launched.\n\n"
-        L"Follow the progress in the terminal window.\n";
-    if (wrote_servers) {
-        done_msg += L"\nDefault MCP servers have been configured. Open 'MCP Servers'\n"
-                    L"to review or customise them before connecting.\n";
-    } else if (had_servers) {
-        done_msg += L"\nYour existing MCP server configuration was not changed.\n";
-    }
-    done_msg +=
-        L"\nOnce Ollama is installed and running, open the RAG Service,\n"
-        L"create a new library, set the embedding provider to Ollama,\n"
-        L"enter 'nomic-embed-text' as the model, and save.\n";
+        L"Follow the progress in the terminal window.\n"
+        L"\nDefault projects, agentic modes, MCP servers, and compression\n"
+        L"configs have been restored from setup defaults.\n";
 
     MessageBoxW(hwnd_, done_msg.c_str(), L"Setup System", MB_OK | MB_ICONINFORMATION);
     UpdateStatus(L"System setup launched.");
