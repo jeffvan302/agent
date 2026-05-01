@@ -126,23 +126,50 @@ inline std::vector<ChatToolDefinition> BuildDefinitions(
         ChatToolDefinition planner;
         planner.name = kPlannerToolName;
         planner.description =
-            "Maintain a persistent, machine-readable project plan across the complete interaction. "
-            "Use this before and during broad work to track nested goals, subgoals, steps, statuses, blockers, "
-            "completion criteria, and tool hints. The plan is stored as planner.json in the configured project folder "
-            "(default $ProjectFolder$\\.agent). Prefer this tool for multi-step software development, research, "
-            "document analysis, refactors, file generation, and agent loops. Add subgoals under goals and steps under "
-            "goals or other steps when work needs deeper decomposition. Update the plan when discoveries happen.";
+            "Planner / Task Decomposition tool. Maintain a persistent project plan stored as planner.json in the "
+            "configured project folder (default $ProjectFolder$\\.agent). Use this to track goals, subgoals, steps, "
+            "features, blockers, notes, and tool hints across the full interaction.\n\n"
+            "Valid actions:\n"
+            "- get — Load the current plan from disk.\n"
+            "- clear — Delete all items from a section (or the entire plan if section=all).\n"
+            "- create or replace — Write a brand-new plan (or replace the existing one entirely). Requires 'plan'.\n"
+            "- update — Merge top-level fields or sections into the existing plan. Requires 'plan'.\n"
+            "- add_item — Add a new item to a section. Can be nested under a parent item.\n"
+            "- update_item — Modify fields of an existing item by id (e.g. change status to completed).\n"
+            "- remove_item — Delete an item by id.\n\n"
+            "Sections: goals, features, steps, blockers, notes, tool_hints\n"
+            "Status values (for item.status):\n"
+            "- pending — Not started (unchecked in UI)\n"
+            "- in_progress — Currently active (blue badge)\n"
+            "- completed — Done. Checkbox checked + title struck through in UI.\n"
+            "- blocked — Waiting on a blocker (red badge)\n"
+            "- cancelled — Abandoned (grey badge, no strikethrough)\n\n"
+            "Examples:\n"
+            "1) Load plan: {\"action\":\"get\"}\n"
+            "2) Create/replace full plan: {\"action\":\"create\",\"plan\":{\"goal\":\"Build app\",\"goals\":[{\"id\":\"g1\",\"title\":\"Setup\",\"status\":\"pending\"}]}}\n"
+            "3) Add a top-level step: {\"action\":\"add_item\",\"section\":\"steps\",\"item\":{\"task\":\"Install deps\",\"status\":\"pending\"}}\n"
+            "4) Add a nested subgoal under parent g1: {\"action\":\"add_item\",\"section\":\"goals\",\"parent_id\":\"g1\",\"item\":{\"title\":\"Subtask\",\"status\":\"pending\"}}\n"
+            "5) Check off / mark completed: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"completed\"}}\n"
+            "6) Mark in progress: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"in_progress\"}}\n"
+            "7) Cancel / abandon: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"cancelled\"}}\n"
+            "8) Remove an item: {\"action\":\"remove_item\",\"section\":\"all\",\"id\":\"s1\"}\n\n"
+            "Notes:\n"
+            "- When adding items, an id is auto-generated if omitted.\n"
+            "- child_section defaults to 'subgoals' for goals, otherwise the requested section.\n"
+            "- To edit an existing item, always use update_item with the existing id.\n"
+            "- The only way to get strikethrough in the UI is status=completed.\n"
+            "- 'create' is an alias for 'replace' and is the preferred action when establishing a new plan.";
         planner.parameters_json = R"({
   "type": "object",
   "properties": {
-    "action": {"type": "string", "enum": ["get", "replace", "update", "clear", "add_item", "update_item", "remove_item"], "description": "Planner operation to perform."},
+    "action": {"type": "string", "enum": ["get", "create", "replace", "update", "clear", "add_item", "update_item", "remove_item"], "description": "Planner operation to perform. Use 'get' to read, 'create' or 'replace' to write a full plan, 'update' to merge fields, 'add_item' to append, 'update_item' to edit by id, 'remove_item' to delete by id, 'clear' to empty a section or all."},
     "section": {"type": "string", "enum": ["goals", "features", "steps", "blockers", "notes", "tool_hints", "all"], "description": "Plan section for item operations or section clears."},
-    "id": {"description": "Item id for update_item/remove_item. May be a string or number."},
+    "id": {"description": "Item id for update_item or remove_item. String or number."},
     "parent_id": {"description": "Optional parent item id for add_item. Use this to add nested subgoals or nested steps."},
     "parent_section": {"type": "string", "enum": ["goals", "features", "steps", "blockers", "notes", "all"], "description": "Optional section to search for parent_id. Defaults to all searchable sections."},
     "child_section": {"type": "string", "enum": ["subgoals", "goals", "steps", "features", "blockers", "notes", "tool_hints"], "description": "Nested array on the parent for add_item. Defaults to subgoals when adding goals, otherwise the requested section."},
     "item": {"type": "object", "description": "Item to add or fields to merge into an existing item. Goals may include subgoals/goals and steps arrays. Steps may include nested steps. Steps should include task, status, tool_hint, and done_when when applicable."},
-    "plan": {"type": "object", "description": "Complete replacement plan for replace, or top-level fields/sections to merge for update."}
+    "plan": {"type": "object", "description": "Complete replacement plan for create/replace, or top-level fields/sections to merge for update."}
   },
   "required": ["action"]
 })";
@@ -711,9 +738,9 @@ inline McpToolCallResult CallPlanner(
             plan[section] = nlohmann::json::array();
         }
         changed = true;
-    } else if (action == "replace") {
+    } else if (action == "create" || action == "replace") {
         if (!args.contains("plan") || !args["plan"].is_object()) {
-            return ErrorResult("Planner replace requires a plan object.");
+            return ErrorResult("Planner create/replace requires a plan object.");
         }
         plan = args["plan"];
         changed = true;

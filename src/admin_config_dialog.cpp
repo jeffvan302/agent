@@ -1392,9 +1392,12 @@ static LRESULT CALLBACK AdminConfigProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
             if (pwd) {
                 st->user_store->SetPassword(st->users[idx].id, *pwd);
                 // Mark user for forced password change on next login
-                WebUser u = st->users[idx];
-                u.force_password_reset = true;
-                st->user_store->UpdateUser(u);
+                auto u_opt = st->user_store->FindUserById(st->users[idx].id);
+                if (u_opt) {
+                    WebUser u = *u_opt;
+                    u.force_password_reset = true;
+                    st->user_store->UpdateUser(u);
+                }
                 st->changed = true;
                 MessageBoxW(dlg, L"Password has been reset. The user will be\n"
                                  L"required to change it on next login.",

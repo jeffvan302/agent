@@ -26,6 +26,12 @@ namespace {
 bool IsOllamaLocalProvider(const ProviderConfig& provider) {
     return NormalizeProviderType(provider.provider_type) == "ollama_local";
 }
+
+std::string LowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
 } // namespace
 
 // Static provider cache for compression model calls
@@ -334,6 +340,10 @@ json BuildRequestBody(const ChatRequestOptions& request, bool stream, const std:
     body["stream"] = stream;
     body["messages"] = json::array();
 
+    const std::string reasoning = LowerAscii(Trim(request.model.default_reasoning_effort));
+    if (reasoning == "none") body["reasoning_effort"] = nullptr;
+    else if (!reasoning.empty()) body["reasoning_effort"] = reasoning == "xhigh" ? "high" : reasoning;
+
     if (!request.system_prompt.empty()) {
         body["messages"].push_back({
             {"role", "system"},
@@ -609,7 +619,12 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
                 if (payload.contains("choices") && payload["choices"].is_array() && !payload["choices"].empty()) {
                     const auto& choice = payload["choices"][0];
                     if (choice.contains("message")) {
-                        result.full_text = ExtractContentString(choice["message"].value("content", json{}));
+                        const std::string reasoning = choice["message"].value("reasoning_content", "");
+                        std::string content = ExtractContentString(choice["message"].value("content", json{}));
+                        if (!reasoning.empty()) {
+                            content = "\u003cthink\u003e" + reasoning + "\u003c/think\u003e\n\n" + content;
+                        }
+                        result.full_text = content;
                     }
                 }
                 if (result.full_text.empty()) {
@@ -623,6 +638,8 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
         }
 
         std::string response_buffer;
+        bool thinking_emitted = false;
+        bool thinking_closed = false;
 
         while (true) {
             DWORD available = 0;
@@ -669,11 +686,29 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
                     const auto& choice = chunk["choices"][0];
                     if (choice.contains("delta")) {
                         const auto& delta = choice["delta"];
-                        if (delta.contains("content")) {
-                            const std::string piece = ExtractContentString(delta["content"]);
-                            if (!piece.empty()) {
-                                result.full_text += piece;
-                                on_delta(piece);
+                        const std::string reasoning_piece = delta.value("reasoning_content", "");
+                        const std::string content_piece = delta.contains("content")
+                            ? ExtractContentString(delta["content"]) : "";
+                        if (!reasoning_piece.empty()) {
+                            if (!thinking_emitted) {
+                                const std::string tag = "\u003cthink\u003e" + reasoning_piece;
+                                thinking_emitted = true;
+                                result.full_text += tag;
+                                on_delta(tag);
+                            } else {
+                                result.full_text += reasoning_piece;
+                                on_delta(reasoning_piece);
+                            }
+                        }
+                        if (!content_piece.empty()) {
+                            if (thinking_emitted && !thinking_closed) {
+                                const std::string close = "\u003c/think\u003e\n\n";
+                                thinking_closed = true;
+                                result.full_text += close + content_piece;
+                                on_delta(close + content_piece);
+                            } else {
+                                result.full_text += content_piece;
+                                on_delta(content_piece);
                             }
                         }
                     }
@@ -974,7 +1009,13 @@ ChatCompletionResult OpenAIClient::CreateToolAwareCompletion(const ChatRequestOp
                     result.finish_reason = choice.value("finish_reason", "");
                     if (choice.contains("message")) {
                         json raw_message = choice["message"];
-                        result.assistant_text = ExtractContentString(raw_message.value("content", json{}));
+                        const std::string reasoning = raw_message.value("reasoning_content", "");
+                        std::string content = ExtractContentString(raw_message.value("content", json{}));
+                        if (!reasoning.empty()) {
+                            content = "\u003cthink\u003e" + reasoning + "\u003c/think\u003e\n\n" + content;
+                            raw_message["content"] = content;
+                        }
+                        result.assistant_text = content;
                         result.tool_calls = ExtractToolCalls(raw_message);
                         if (!result.tool_calls.empty()) {
                             raw_message["tool_calls"] = SerializeToolCallsForProvider(result.tool_calls);
@@ -1102,9 +1143,14 @@ ChatCompletionResult OpenAIClient::CreateSimpleCompletion(const ChatRequestOptio
                     result.finish_reason = choice.value("finish_reason", "");
                     if (choice.contains("message")) {
                         const json& msg_json = choice["message"];
+                        const std::string reasoning = msg_json.value("reasoning_content", "");
+                        std::string content = ExtractContentString(msg_json.value("content", json{}));
+                        if (!reasoning.empty()) {
+                            content = "\u003cthink\u003e" + reasoning + "\u003c/think\u003e\n\n" + content;
+                        }
                         result.message.role = msg_json.value("role", "assistant");
-                        result.message.content = ExtractContentString(msg_json.value("content", json{}));
-                        result.assistant_text = result.message.content;
+                        result.message.content = content;
+                        result.assistant_text = content;
                     }
                 }
                 return result;
@@ -1234,6 +1280,8 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
             }
 
             std::string response_buffer;
+            bool thinking_emitted = false;
+            bool thinking_closed = false;
             std::vector<ChatToolCall> streamed_tool_calls;
 
             while (true) {
@@ -1305,11 +1353,29 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
                         }
 
                         const auto& delta = choice["delta"];
-                        if (delta.contains("content")) {
-                            const std::string piece = ExtractContentString(delta["content"]);
-                            if (!piece.empty()) {
-                                result.assistant_text += piece;
-                                on_delta(piece);
+                        const std::string reasoning_piece = delta.value("reasoning_content", "");
+                        if (!reasoning_piece.empty()) {
+                            if (!thinking_emitted) {
+                                const std::string tag = "\u003cthink\u003e" + reasoning_piece;
+                                thinking_emitted = true;
+                                result.assistant_text += tag;
+                                on_delta(tag);
+                            } else {
+                                result.assistant_text += reasoning_piece;
+                                on_delta(reasoning_piece);
+                            }
+                        }
+                        const std::string content_piece = delta.contains("content")
+                            ? ExtractContentString(delta["content"]) : "";
+                        if (!content_piece.empty()) {
+                            if (thinking_emitted && !thinking_closed) {
+                                const std::string close = "\u003c/think\u003e\n\n";
+                                thinking_closed = true;
+                                result.assistant_text += close + content_piece;
+                                on_delta(close + content_piece);
+                            } else {
+                                result.assistant_text += content_piece;
+                                on_delta(content_piece);
                             }
                         }
 
