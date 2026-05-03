@@ -1,0 +1,441 @@
+=== Provider Queue Test ===
+Provider: Ollama (provider_1777000661309_11)
+Model:    ollama-deepseek-v4-flash (deepseek-v4-flash:cloud)
+Effective max_active_requests: 0
+Provider max_active_requests:  0
+Model max_active_requests:     0
+Test requests to fire:         16
+Timestamp: 2026-05-02T09:22:52Z
+
+--- Results ---
+Total elapsed: 6144 ms
+Succeeded: 16 / Failed: 0
+
+Request #1
+  Start:    0 ms
+  End:      4155 ms
+  Duration: 4155 ms
+  Success:  YES
+  Response: 
+
+Request #2
+  Start:    0 ms
+  End:      4204 ms
+  Duration: 4204 ms
+  Success:  YES
+  Response: 
+
+Request #3
+  Start:    0 ms
+  End:      6109 ms
+  Duration: 6109 ms
+  Success:  YES
+  Response: 
+
+Request #4
+  Start:    0 ms
+  End:      6104 ms
+  Duration: 6103 ms
+  Success:  YES
+  Response: 
+
+Request #5
+  Start:    0 ms
+  End:      5125 ms
+  Duration: 5124 ms
+  Success:  YES
+  Response: 
+
+Request #6
+  Start:    0 ms
+  End:      2007 ms
+  Duration: 2007 ms
+  Success:  YES
+  Response: 
+
+Request #7
+  Start:    0 ms
+  End:      6069 ms
+  Duration: 6069 ms
+  Success:  YES
+  Response: 
+
+Request #8
+  Start:    0 ms
+  End:      5124 ms
+  Duration: 5124 ms
+  Success:  YES
+  Response: 
+
+Request #9
+  Start:    0 ms
+  End:      1953 ms
+  Duration: 1953 ms
+  Success:  YES
+  Response: 
+
+Request #10
+  Start:    1 ms
+  End:      5074 ms
+  Duration: 5073 ms
+  Success:  YES
+  Response: 
+
+Request #11
+  Start:    0 ms
+  End:      4154 ms
+  Duration: 4153 ms
+  Success:  YES
+  Response: 
+
+Request #12
+  Start:    0 ms
+  End:      5127 ms
+  Duration: 5126 ms
+  Success:  YES
+  Response: 
+
+Request #13
+  Start:    0 ms
+  End:      6133 ms
+  Duration: 6132 ms
+  Success:  YES
+  Response: 
+
+Request #14
+  Start:    0 ms
+  End:      4158 ms
+  Duration: 4157 ms
+  Success:  YES
+  Response: 
+
+Request #15
+  Start:    0 ms
+  End:      2054 ms
+  Duration: 2053 ms
+  Success:  YES
+  Response: 
+
+Request #16
+  Start:    0 ms
+  End:      2107 ms
+  Duration: 2106 ms
+  Success:  YES
+  Response: 
+
+=== Provider Queue Test ===
+Provider: MiniMax 2.7 (provider_1775726633372_1)
+Model:    MiniMax 2.7 (codex-MiniMax-M2.7)
+Effective max_active_requests: 2
+Provider max_active_requests:  2
+Model max_active_requests:     0
+Test requests to fire:         4
+Timestamp: 2026-05-02T18:53:33Z
+
+--- Results ---
+Total elapsed: 2614 ms
+Succeeded: 4 / Failed: 0
+
+Request #1
+  Start:    0 ms
+  End:      1097 ms
+  Duration: 1097 ms
+  Success:  YES
+  Response: <think>The user says: "Reply with exactly</think>
+  Queue trace:
+    [idx=0] state=active pos=0 depth=0 active=2
+
+Request #2
+  Start:    0 ms
+  End:      1672 ms
+  Duration: 1672 ms
+  Success:  YES
+  Response: <think>The user asks: "Reply with exactly</think>
+  Queue trace:
+    [idx=1] state=active pos=0 depth=0 active=1
+
+Request #3
+  Start:    0 ms
+  End:      2038 ms
+  Duration: 2038 ms
+  Success:  YES
+  Response: <think>The user wants the assistant to reply with</think>
+  Queue trace:
+    [idx=2] state=queued pos=1 depth=1 active=2
+    [idx=2] state=active pos=1 depth=1 active=2
+
+Request #4
+  Start:    0 ms
+  End:      2538 ms
+  Duration: 2537 ms
+  Success:  YES
+  Response: <think>The user: "Reply with exactly the</think>
+  Queue trace:
+    [idx=3] state=queued pos=2 depth=2 active=2
+    [idx=3] state=active pos=2 depth=0 active=2
+
+=== Provider Queue Test ===
+Provider: Ollama (provider_1777000661309_11)
+Model:    vision process (qwen3.5:0.8b)
+Effective max_active_requests: 0
+Provider max_active_requests:  0
+Model max_active_requests:     0
+Test requests to fire:         16
+Timestamp: 2026-05-03T02:53:44Z
+
+--- Results ---
+Total elapsed: 15495 ms
+Succeeded: 16 / Failed: 0
+
+Request #1
+  Start:    0 ms
+  End:      6523 ms
+  Duration: 6523 ms
+  Success:  YES
+  Response: 
+
+Request #2
+  Start:    0 ms
+  End:      8303 ms
+  Duration: 8303 ms
+  Success:  YES
+  Response: 
+
+Request #3
+  Start:    0 ms
+  End:      7114 ms
+  Duration: 7114 ms
+  Success:  YES
+  Response: 
+
+Request #4
+  Start:    0 ms
+  End:      14220 ms
+  Duration: 14220 ms
+  Success:  YES
+  Response: 
+
+Request #5
+  Start:    0 ms
+  End:      13032 ms
+  Duration: 13032 ms
+  Success:  YES
+  Response: 
+
+Request #6
+  Start:    0 ms
+  End:      11254 ms
+  Duration: 11254 ms
+  Success:  YES
+  Response: 
+
+Request #7
+  Start:    0 ms
+  End:      7720 ms
+  Duration: 7720 ms
+  Success:  YES
+  Response: 
+
+Request #8
+  Start:    0 ms
+  End:      12440 ms
+  Duration: 12439 ms
+  Success:  YES
+  Response: 
+
+Request #9
+  Start:    0 ms
+  End:      10075 ms
+  Duration: 10074 ms
+  Success:  YES
+  Response: 
+
+Request #10
+  Start:    0 ms
+  End:      9489 ms
+  Duration: 9488 ms
+  Success:  YES
+  Response: 
+
+Request #11
+  Start:    0 ms
+  End:      11850 ms
+  Duration: 11849 ms
+  Success:  YES
+  Response: 
+
+Request #12
+  Start:    0 ms
+  End:      10669 ms
+  Duration: 10668 ms
+  Success:  YES
+  Response: 
+
+Request #13
+  Start:    0 ms
+  End:      13625 ms
+  Duration: 13624 ms
+  Success:  YES
+  Response: 
+
+Request #14
+  Start:    0 ms
+  End:      8892 ms
+  Duration: 8892 ms
+  Success:  YES
+  Response: 
+
+Request #15
+  Start:    0 ms
+  End:      14818 ms
+  Duration: 14817 ms
+  Success:  YES
+  Response: 
+
+Request #16
+  Start:    1 ms
+  End:      15436 ms
+  Duration: 15435 ms
+  Success:  YES
+  Response: 
+
+=== Provider Queue Test ===
+Provider: Ollama (provider_1777000661309_11)
+Model:    provider-nomic-embed-text (nomic-embed-text)
+Effective max_active_requests: 1
+Provider max_active_requests:  0
+Model max_active_requests:     1
+Test requests to fire:         2
+Timestamp: 2026-05-03T04:27:31Z
+
+--- Results ---
+Total elapsed: 100 ms
+Succeeded: 0 / Failed: 2
+
+Request #1
+  Start:    0 ms
+  End:      0 ms
+  Duration: 0 ms
+  Success:  NO
+  Error:    Provider 'Ollama' has no base URL configured.
+
+Request #2
+  Start:    0 ms
+  End:      0 ms
+  Duration: 0 ms
+  Success:  NO
+  Error:    Provider 'Ollama' has no base URL configured.
+
+=== Provider Queue Test ===
+Provider: Ollama (provider_1777000661309_11)
+Model:    deepseek-v4-pro-cloud (deepseek-v4-pro:cloud)
+Effective max_active_requests: 1
+Provider max_active_requests:  0
+Model max_active_requests:     1
+Test requests to fire:         2
+Timestamp: 2026-05-03T04:27:52Z
+
+--- Results ---
+Total elapsed: 3015 ms
+Succeeded: 2 / Failed: 0
+
+Request #1
+  Start:    0 ms
+  End:      2206 ms
+  Duration: 2206 ms
+  Success:  YES
+  Response: 
+  Queue trace:
+    [idx=0] state=active pos=0 depth=0 active=1
+
+Request #2
+  Start:    0 ms
+  End:      2959 ms
+  Duration: 2959 ms
+  Success:  YES
+  Response: 
+  Queue trace:
+    [idx=1] state=queued pos=1 depth=1 active=1
+    [idx=1] state=active pos=1 depth=0 active=1
+
+=== Provider Queue Test ===
+Provider: Ollama (provider_1777000661309_11)
+Model:    provider-nomic-embed-text (nomic-embed-text)
+Effective max_active_requests: 1
+Provider max_active_requests:  0
+Model max_active_requests:     1
+Test requests to fire:         2
+Timestamp: 2026-05-03T04:31:13Z
+
+--- Results ---
+Total elapsed: 100 ms
+Succeeded: 0 / Failed: 2
+
+Request #1
+  Start:    0 ms
+  End:      0 ms
+  Duration: 0 ms
+  Success:  NO
+  Error:    Provider 'Ollama' has no base URL configured.
+
+Request #2
+  Start:    0 ms
+  End:      0 ms
+  Duration: 0 ms
+  Success:  NO
+  Error:    Provider 'Ollama' has no base URL configured.
+
+=== Provider Queue Test ===
+Provider: Ollama (provider_1777000661309_11)
+Model:    provider-nomic-embed-text (nomic-embed-text)
+Effective max_active_requests: 1
+Provider max_active_requests:  0
+Model max_active_requests:     1
+Test requests to fire:         2
+Timestamp: 2026-05-03T04:48:55Z
+
+--- Results ---
+Total elapsed: 30165 ms
+Succeeded: 0 / Failed: 2
+
+Request #1
+  Start:    0 ms
+  End:      15032 ms
+  Duration: 15032 ms
+  Success:  NO
+  Error:    Failed to send HTTP request. (WinHTTP error 12029)
+
+Request #2
+  Start:    0 ms
+  End:      30071 ms
+  Duration: 30070 ms
+  Success:  NO
+  Error:    Failed to send HTTP request. (WinHTTP error 12029)
+
+=== Provider Queue Test ===
+Provider: Ollama (provider_1777000661309_11)
+Model:    provider-nomic-embed-text (nomic-embed-text)
+Effective max_active_requests: 1
+Provider max_active_requests:  0
+Model max_active_requests:     1
+Test requests to fire:         2
+Timestamp: 2026-05-03T05:56:00Z
+
+--- Results ---
+Total elapsed: 2616 ms
+Succeeded: 2 / Failed: 0
+
+Request #1
+  Start:    0 ms
+  End:      2483 ms
+  Duration: 2483 ms
+  Success:  YES
+  Response: Embedding OK (768 dims)
+
+Request #2
+  Start:    0 ms
+  End:      2522 ms
+  Duration: 2522 ms
+  Success:  YES
+  Response: Embedding OK (768 dims)
+
