@@ -1,4 +1,4 @@
-#ifndef WIN32_LEAN_AND_MEAN
+﻿#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 
@@ -431,6 +431,9 @@ json BuildModelsList(const RemoteProviderWorkerConfig& config) {
                 {"supports_vision", m.supports_vision},
                 {"supports_embedding", m.supports_embedding},
                 {"supports_thinking", m.supports_thinking},
+                {"max_active_requests", m.max_active_requests},
+                {"max_queue_size", m.max_queue_size},
+                {"self_managed_queue", m.self_managed_queue},
             });
         }
     }
@@ -582,6 +585,9 @@ std::optional<RemoteProviderWorkerConfig> LoadRemoteProviderWorkerConfig(
                             mc.supports_vision = m.value("supports_vision", false);
                             mc.supports_embedding = m.value("supports_embedding", false);
                             mc.supports_thinking = m.value("supports_thinking", false);
+                            mc.max_active_requests = std::max(0, m.value("max_active_requests", 0));
+                            mc.max_queue_size = std::max(0, m.value("max_queue_size", 0));
+                            mc.self_managed_queue = m.value("self_managed_queue", false);
                             mc.is_binding_model = m.value("is_binding_model", false);
                             std::string routing_str = m.value("binding_routing_mode", "top_down_failover");
                             mc.binding_routing_mode = (routing_str == "round_robin" || routing_str == "round-robin")
@@ -643,6 +649,9 @@ std::optional<RemoteProviderWorkerConfig> LoadRemoteProviderWorkerConfig(
                             mc.supports_vision = m.value("supports_vision", false);
                             mc.supports_embedding = m.value("supports_embedding", false);
                             mc.supports_thinking = m.value("supports_thinking", false);
+                            mc.max_active_requests = std::max(0, m.value("max_active_requests", 0));
+                            mc.max_queue_size = std::max(0, m.value("max_queue_size", 0));
+                            mc.self_managed_queue = m.value("self_managed_queue", false);
                             mc.is_binding_model = m.value("is_binding_model", false);
                             std::string routing_str = m.value("binding_routing_mode", "top_down_failover");
                             mc.binding_routing_mode = (routing_str == "round_robin" || routing_str == "round-robin")
@@ -707,6 +716,9 @@ bool SaveRemoteProviderWorkerConfig(const RemoteProviderWorkerConfig& config, st
                     {"supports_vision", m.supports_vision},
                     {"supports_embedding", m.supports_embedding},
                     {"supports_thinking", m.supports_thinking},
+                    {"max_active_requests", m.max_active_requests},
+                    {"max_queue_size", m.max_queue_size},
+                    {"self_managed_queue", m.self_managed_queue},
                 });
             }
             prov["models"] = std::move(models);
@@ -973,11 +985,21 @@ int RunRemoteProviderWorker(const fs::path& config_path) {
         }
         json providers = json::array();
         for (const auto& exp : config->exported_providers) {
+            json models = json::array();
+            for (const auto& m : exp.provider.models) {
+                models.push_back({
+                    {"id", m.id},
+                    {"max_active_requests", m.max_active_requests},
+                    {"max_queue_size", m.max_queue_size},
+                    {"self_managed_queue", m.self_managed_queue},
+                });
+            }
             providers.push_back({
                 {"id", exp.provider.id},
                 {"name", exp.provider.name},
                 {"provider_type", exp.provider.provider_type},
                 {"model_count", static_cast<int>(exp.provider.models.size())},
+                {"models", models},
             });
         }
         SetJson(res, json{

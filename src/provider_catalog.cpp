@@ -1,4 +1,4 @@
-#include "provider_catalog.h"
+﻿#include "provider_catalog.h"
 
 #include "ollama_cli_bridge.h"
 #include "provider_profiles.h"
@@ -250,6 +250,9 @@ std::vector<ModelConfig> LoadProviderCatalog(AppStorage* storage, const Provider
                     model.supports_vision = item.value("supports_vision", false);
                     model.supports_embedding = item.value("supports_embedding", false) || JsonCapabilitiesContain(item, {"embedding", "embeddings"});
                     model.supports_thinking = item.value("supports_thinking", false) || JsonCapabilitiesContain(item, {"thinking", "reasoning"});
+                    model.max_active_requests = std::max(0, item.value("max_active_requests", 0));
+                    model.max_queue_size = std::max(0, item.value("max_queue_size", 0));
+                    model.self_managed_queue = item.value("self_managed_queue", false);
                     model.output_tokens_parameter = "auto";
                     model.catalog_source = "discovered";
                     models.push_back(std::move(model));
@@ -446,8 +449,17 @@ void SyncProviderModelsFromCatalog(ProviderConfig* provider, const std::vector<M
             provider->models.begin(),
             provider->models.end(),
             [&](const ModelConfig& current) { return current.id == model.id; });
-        if (existing != provider->models.end() && !existing->display_name.empty()) {
-            model.display_name = existing->display_name;
+        if (existing != provider->models.end()) {
+            if (!existing->display_name.empty()) {
+                model.display_name = existing->display_name;
+            }
+            if (existing->max_active_requests > 0) {
+                model.max_active_requests = existing->max_active_requests;
+            }
+            if (existing->max_queue_size > 0) {
+                model.max_queue_size = existing->max_queue_size;
+            }
+            model.self_managed_queue = existing->self_managed_queue;
         }
         merged.push_back(std::move(model));
     }

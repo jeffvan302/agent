@@ -1,4 +1,4 @@
-#include "remote_worker_setup_dialog.h"
+﻿#include "remote_worker_setup_dialog.h"
 
 #include "provider_profiles.h"
 #include "remote_provider_worker.h"
@@ -382,6 +382,9 @@ private:
                         {"supports_vision", m.supports_vision},
                         {"supports_embedding", m.supports_embedding},
                         {"supports_thinking", m.supports_thinking},
+                        {"max_active_requests", m.max_active_requests},
+                        {"max_queue_size", m.max_queue_size},
+                        {"self_managed_queue", m.self_managed_queue},
                         {"is_binding_model", m.is_binding_model},
                         {"binding_routing_mode",
                          m.binding_routing_mode == BindingRoutingMode::RoundRobin
@@ -446,7 +449,13 @@ private:
                                         {"supports_embedding",
                                          tm.supports_embedding},
                                         {"supports_thinking",
-                                         tm.supports_thinking}});
+                                         tm.supports_thinking},
+                                        {"max_active_requests",
+                                         tm.max_active_requests},
+                                        {"max_queue_size",
+                                         tm.max_queue_size},
+                                        {"self_managed_queue",
+                                         tm.self_managed_queue}});
                                 }
                             }
                         }
