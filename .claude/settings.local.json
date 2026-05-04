@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(./build.bat)",
-      "Bash(xxd)"
+      "Bash(xxd)",
+      "Bash(iconv -f UTF-16LE -t UTF-8 src/provider_manager.cpp)",
+      "Bash(xxd src/provider_manager.cpp)",
+      "Bash(cp /tmp/pm_utf8.cpp src/provider_manager_utf8.cpp)",
+      "Bash(iconv -f UTF-8 -t UTF-16LE src/provider_manager_utf8.cpp)",
+      "Bash(iconv -f *)",
+      "Bash(grep -E \"^src\\\\\\\\provider_manager.cpp.*error|error C\")"
     ]
   }
 }

@@ -163,3 +163,52 @@ Provider Test Connection diagnostic log
   ping result success=1 message=
 --- end connection test ---
 
+Provider Test Connection diagnostic log
+[2026-05-04T03:02:05Z] TestConnection called
+  provider=Ollama type=ollama_local
+  model=minimax-m2.7:cloud (minimax-m2.7-cloud) embedding=no
+  ollama_local non-embedding path
+[2026-05-04T03:02:05Z] IsOllamaModelAvailable START
+[2026-05-04T03:02:05Z]   provider=Ollama model=minimax-m2.7:cloud
+[2026-05-04T03:02:08Z]   cloud model id, skipping availability check
+  sending ping to Ollama /api/chat
+[2026-05-04T03:02:08Z] PostOllamaApiChat: POST http://127.0.0.1:12484/api/chat
+[2026-05-04T03:02:08Z]   body: {"keep_alive":300,"messages":[{"content":"Reply with the single word pong.","role":"user"}],"model":"minimax-m2.7:cloud","options":{"num_predict":8,"temperature":0.0},"stream":true}
+[2026-05-04T03:02:08Z]   stream=1
+[2026-05-04T03:02:08Z]   parsed host=127.0.0.1 port=12484 path=/api/chat
+[2026-05-04T03:02:08Z]   request created, sending...
+[2026-05-04T03:02:11Z]   HTTP status=200
+  ping result success=1 message=
+--- end connection test ---
+
+Provider Test Connection diagnostic log
+[2026-05-04T03:02:29Z] TestConnection called
+  provider=Ollama type=ollama_local
+  model=nomic-embed-text (provider-nomic-embed-text) embedding=yes
+  supports_embedding=true, dispatching to embedding test path
+  IsOllamaLocalProvider=true, calling TestOllamaEmbeddingConnection
+[2026-05-04T03:02:29Z] TestOllamaEmbeddingConnection START
+[2026-05-04T03:02:29Z]   provider name=Ollama type=ollama_local
+[2026-05-04T03:02:29Z]   model id=nomic-embed-text display=provider-nomic-embed-text
+[2026-05-04T03:02:29Z]   ollama_local_port=12484
+[2026-05-04T03:02:29Z]   Managed Ollama server ensured: http://127.0.0.1:12484
+[2026-05-04T03:02:29Z]   Candidate base URLs:
+[2026-05-04T03:02:29Z]     http://127.0.0.1:12484
+[2026-05-04T03:02:29Z]     http://localhost:12484
+[2026-05-04T03:02:29Z]     http://127.0.0.1:11434
+[2026-05-04T03:02:29Z]     http://localhost:11434
+[2026-05-04T03:02:29Z]   Probing http://127.0.0.1:12484...
+[2026-05-04T03:02:29Z]   ProbeOllamaEmbedding: base_url=http://127.0.0.1:12484
+[2026-05-04T03:02:29Z]   Trying /api/embed at http://127.0.0.1:12484/api/embed
+[2026-05-04T03:02:29Z]   PostAndCheckEmbedding: POST http://127.0.0.1:12484/api/embed
+[2026-05-04T03:02:29Z]     body: {"input":["Diagnostic connection test."],"model":"nomic-embed-text"}
+[2026-05-04T03:02:29Z]     parsed host=127.0.0.1 port=12484 path=/api/embed
+[2026-05-04T03:02:29Z]     session/request created, sending...
+[2026-05-04T03:02:30Z]     HTTP status=200 body length=9658
+[2026-05-04T03:02:30Z]     JSON parsed successfully
+[2026-05-04T03:02:30Z]     found embeddings[768]
+[2026-05-04T03:02:30Z]   Success via /api/embed
+[2026-05-04T03:02:30Z]   Embedding connection OK at http://127.0.0.1:12484 (768 dimensions).
+  result success=1 message=Embedding connection OK at http://127.0.0.1:12484 (768 dimensions).
+--- end connection test ---
+
