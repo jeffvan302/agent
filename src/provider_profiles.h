@@ -38,6 +38,9 @@ inline std::string NormalizeProviderType(std::string type) {
     if (type == "lmstudio" || type == "lm_studio" || type == "lmstudio_local") {
         return "lmstudio_local";
     }
+    if (type == "ollama_cloud") {
+        return "ollama_cloud";
+    }
     if (type == "ollama" || type == "ollama_local" || type == "ollama-native") {
         return "ollama_local";
     }
@@ -98,6 +101,9 @@ inline ProviderRequestProfile ResolveProviderRequestProfile(const ProviderConfig
         profile.model_catalog_mode = provider.model_catalog_mode.empty() ? "bundled" : provider.model_catalog_mode;
     } else if (profile.provider_type == "lmstudio_local") {
         profile.model_catalog_mode = provider.model_catalog_mode.empty() ? "remote_endpoint" : provider.model_catalog_mode;
+    } else if (profile.provider_type == "ollama_cloud") {
+        profile.chat_completions_path = "/api/chat";
+        profile.model_catalog_mode = provider.model_catalog_mode.empty() ? "manual" : provider.model_catalog_mode;
     } else if (profile.provider_type == "ollama_local") {
         profile.chat_completions_path = "/api/chat";
         profile.model_catalog_mode = provider.model_catalog_mode.empty() ? "manual" : provider.model_catalog_mode;
