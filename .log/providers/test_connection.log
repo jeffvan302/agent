@@ -1844,3 +1844,68 @@ Provider Test Connection diagnostic log
   ping result success=1 message=
 --- end connection test ---
 
+Provider Test Connection diagnostic log
+[2026-05-04T08:24:50Z] TestConnection called
+  provider=Ollama type=ollama_local
+  model=nomic-embed-text (provider-nomic-embed-text) embedding=yes
+  supports_embedding=true, dispatching to embedding test path
+  IsOllamaLocalProvider=true, calling TestOllamaEmbeddingConnection
+[2026-05-04T08:24:50Z] TestOllamaEmbeddingConnection START
+[2026-05-04T08:24:50Z]   provider name=Ollama type=ollama_local
+[2026-05-04T08:24:50Z]   model id=nomic-embed-text display=provider-nomic-embed-text
+[2026-05-04T08:24:50Z]   ollama_local_port=12484
+[2026-05-04T08:24:51Z]   Managed Ollama server ensured: http://127.0.0.1:12484
+[2026-05-04T08:24:51Z]   Candidate base URLs:
+[2026-05-04T08:24:51Z]     http://127.0.0.1:12484
+[2026-05-04T08:24:51Z]     http://localhost:12484
+[2026-05-04T08:24:51Z]     http://127.0.0.1:11434
+[2026-05-04T08:24:51Z]     http://localhost:11434
+[2026-05-04T08:24:51Z]   Probing http://127.0.0.1:12484...
+[2026-05-04T08:24:51Z]   ProbeOllamaEmbedding: base_url=http://127.0.0.1:12484
+[2026-05-04T08:24:51Z]   Trying /api/embed at http://127.0.0.1:12484/api/embed
+[2026-05-04T08:24:51Z]   PostAndCheckEmbedding: POST http://127.0.0.1:12484/api/embed
+[2026-05-04T08:24:51Z]     body: {"input":["Diagnostic connection test."],"model":"nomic-embed-text"}
+[2026-05-04T08:24:51Z]     parsed host=127.0.0.1 port=12484 path=/api/embed
+[2026-05-04T08:24:51Z]     session/request created, sending...
+[2026-05-04T08:24:52Z]     HTTP status=200 body length=9658
+[2026-05-04T08:24:52Z]     JSON parsed successfully
+[2026-05-04T08:24:52Z]     found embeddings[768]
+[2026-05-04T08:24:52Z]   Success via /api/embed
+[2026-05-04T08:24:52Z]   Embedding connection OK at http://127.0.0.1:12484 (768 dimensions).
+  result success=1 message=Embedding connection OK at http://127.0.0.1:12484 (768 dimensions).
+--- end connection test ---
+
+Provider Test Connection diagnostic log
+[2026-05-04T08:25:20Z] TestConnection called
+  provider=Ollama Direct type=ollama_cloud
+  model=kimi-k2.6:cloud (kimi-k2.6-direct) embedding=no
+  ollama_cloud non-embedding path
+[2026-05-04T08:25:20Z]   cloud model id, skipping availability check
+  sending ping to Ollama Cloud /api/chat
+[2026-05-04T08:25:20Z] PostOllamaApiChat: POST https://ollama.com/api/chat
+[2026-05-04T08:25:20Z]   body: {"messages":[{"content":"Reply with the single word pong.","role":"user"}],"model":"kimi-k2.6:cloud","options":{"num_predict":8,"temperature":0.0},"stream":true}
+[2026-05-04T08:25:20Z]   stream=1
+[2026-05-04T08:25:20Z]   parsed host=ollama.com port=443 path=/api/chat
+[2026-05-04T08:25:20Z]   request created, sending...
+[2026-05-04T08:25:20Z]   HTTP status=200
+  ping result success=1 message=
+--- end connection test ---
+
+Provider Test Connection diagnostic log
+[2026-05-04T09:28:54Z] TestConnection called
+  provider=Ollama type=ollama_local
+  model=kimi-k2.6:cloud (kimi-k2.6-cloud) embedding=no
+  ollama_local non-embedding path
+[2026-05-04T09:28:54Z] IsOllamaModelAvailable START
+[2026-05-04T09:28:54Z]   provider=Ollama model=kimi-k2.6:cloud
+[2026-05-04T09:28:55Z]   cloud model id, skipping availability check
+  sending ping to Ollama /api/chat
+[2026-05-04T09:28:55Z] PostOllamaApiChat: POST http://127.0.0.1:12484/api/chat
+[2026-05-04T09:28:55Z]   body: {"keep_alive":300,"messages":[{"content":"Reply with the single word pong.","role":"user"}],"model":"kimi-k2.6:cloud","options":{"num_predict":8,"temperature":0.0},"stream":true,"think":"max"}
+[2026-05-04T09:28:55Z]   stream=1
+[2026-05-04T09:28:55Z]   parsed host=127.0.0.1 port=12484 path=/api/chat
+[2026-05-04T09:28:55Z]   request created, sending...
+[2026-05-04T09:28:56Z]   HTTP status=200
+  ping result success=1 message=
+--- end connection test ---
+

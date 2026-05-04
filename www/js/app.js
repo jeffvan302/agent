@@ -243,7 +243,7 @@ function extractThinkingBlocks(text, streaming) {
   let markdown = text.replace(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi,
     function(_match, content) {
       const placeholder = 'THINKING_BLOCK_' + blocks.length + '_PLACEHOLDER';
-      blocks.push({ placeholder, content: content.trim(), open: streaming });
+      blocks.push({ placeholder, content: content.trim(), open: true });
       return '\n\n' + placeholder + '\n\n';
     });
 
