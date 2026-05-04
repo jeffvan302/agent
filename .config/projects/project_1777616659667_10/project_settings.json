@@ -16,7 +16,8 @@
   "enable_web_debugging": true,
   "enabled_agentic_mode_ids": [
     "mode_1386991781",
-    "mode_1396697453"
+    "mode_1396697453",
+    "mode_1426853375"
   ],
   "mcp_bindings": [
     {
@@ -51,7 +52,7 @@
   "model_tool_ids": [],
   "preferred_model_id": "kimi-k2.6:cloud",
   "preferred_provider_id": "provider_1777000661309_11",
-  "project_instructions": "",
+  "project_instructions": "** DO NOT EXECUTE ANY GIT COMMANDS WITHOUT ASKING THE USER! **\r\n",
   "project_name": "Creating Applications",
   "project_variables": [
     {
