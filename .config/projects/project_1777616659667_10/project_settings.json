@@ -52,7 +52,7 @@
   "model_timeout_seconds": 0,
   "model_tool_ids": [],
   "preferred_model_id": "kimi-k2.6:cloud",
-  "preferred_provider_id": "provider_1777000661309_11",
+  "preferred_provider_id": "provider_1777954373162_30",
   "project_instructions": "** DO NOT EXECUTE ANY GIT COMMANDS WITHOUT ASKING THE USER! **\r\n",
   "project_name": "Creating Applications",
   "project_variables": [
