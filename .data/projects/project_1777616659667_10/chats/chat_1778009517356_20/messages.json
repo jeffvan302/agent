@@ -1,0 +1,22 @@
+[
+  {
+    "content": "I would like to create a nifty looking program that runs on a Node.js system that monitors the CPU and memory usage and outputs it to a web server on a web browser app.",
+    "created_at": "2026-05-05T19:32:46Z",
+    "role": "user"
+  },
+  {
+    "content": "",
+    "created_at": "2026-05-05T19:32:53Z",
+    "role": "assistant",
+    "tool_calls": [
+      {
+        "function": {
+          "arguments": "{\"action\":\"get\"}",
+          "name": "project_planner"
+        },
+        "id": "call_1778009573517_25",
+        "type": "function"
+      }
+    ]
+  }
+]

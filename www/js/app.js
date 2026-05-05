@@ -61,6 +61,10 @@ let state = {
   projectEnabledAgenticModeIds: [],
   projectAllowManualCompress: false,
   projectEnableWebDebugging: false,
+  projectEnableAutomation: false,
+  automationSequence: [],
+  automationRecording: false,
+  automationRunning: false,
   webDebuggingActive: false,
   plannerEnabled: false,
   plannerPlan: null,
@@ -87,6 +91,16 @@ const agenticModeLabel = $('agentic-mode-label');
 let   agenticModePicker = null;
 const compressBtn      = $('compress-btn');
 const debugBtn         = $('debug-btn');
+const automateBtn      = $('automate-btn');
+let automationPanelEl = null;
+let automationStepsEl = null;
+let automationStatusEl = null;
+let automationAddStepBtn = null;
+let automationClearBtn = null;
+let automationDoneBtn = null;
+let automationSendBtn = null;
+let automationRepeatEl = null;
+let automationCompressEl = null;
 const cancelAgentBtn   = $('cancel-agent-btn');
 const attachBtn    = $('attach-btn');
 const fileInput    = $('file-input');
@@ -2062,6 +2076,7 @@ async function loadProjectAgenticModes(projectId) {
   state.projectAgenticModes = data.modes || [];
   state.projectAllowManualCompress = data.allow_manual_context_compression || false;
   state.projectEnableWebDebugging = data.enable_web_debugging || false;
+  state.projectEnableAutomation = data.enable_automation || false;
   if (!state.projectEnableWebDebugging) {
     setWebDebuggingActive(false);
   }
@@ -2087,6 +2102,20 @@ function removeWebDebugBubbles() {
 
 function isWebDebuggingEnabled() {
   return !!(state.projectEnableWebDebugging && state.webDebuggingActive);
+}
+
+function renderAutomateButton() {
+  if (!automateBtn) return;
+  if (state.projectEnableAutomation && state.selectedChatId) {
+    automateBtn.style.display = '';
+    automateBtn.disabled = false;
+  } else {
+    automateBtn.style.display = 'none';
+    automateBtn.disabled = true;
+    state.automationRecording = false;
+    state.automationSequence = [];
+    if (automationPanelEl) automationPanelEl.style.display = 'none';
+  }
 }
 
 function renderDebugButton() {
@@ -2209,6 +2238,7 @@ function renderAgenticModeLabel() {
     compressBtn.style.display = state.projectAllowManualCompress ? 'inline' : 'none';
   }
   renderDebugButton();
+  renderAutomateButton();
   renderCancelAgentButton();
 }
 
@@ -2338,6 +2368,7 @@ if (debugBtn) {
     setWebDebuggingActive(!state.webDebuggingActive);
   });
 }
+
 
 if (cancelAgentBtn) {
   cancelAgentBtn.addEventListener('click', cancelActiveAgent);

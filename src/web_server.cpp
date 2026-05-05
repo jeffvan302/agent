@@ -2519,6 +2519,7 @@ void WebServer::HandleGetProjectAgenticModes(const void* req_ptr, void* res_ptr)
         {"modes", modes_arr},
         {"allow_manual_context_compression", proj_settings.allow_manual_context_compression},
         {"enable_web_debugging", proj_settings.enable_web_debugging},
+        {"enable_automation", proj_settings.enable_automation},
     };
     SendJson(res_ptr, 200, resp.dump());
 }
@@ -5311,6 +5312,8 @@ void WebServer::EnsureDefaultWebAssets() const {
         { "login.html",                    DefaultWebAssets::kLoginHtml          },
         { "change-password.html",          DefaultWebAssets::kChangePasswordHtml },
         { "css/base.css",                  DefaultWebAssets::kBaseCss            },
+        { "js/app.js",                     DefaultWebAssets::kAppJs            },
+        { "js/automation.js",              DefaultWebAssets::kAutomationJs       },
         { "js/login.js",                   DefaultWebAssets::kLoginJs            },
         { "js/change-password.js",         DefaultWebAssets::kChangePasswordJs   },
         { "themes/default/style.css",      DefaultWebAssets::kThemeDefaultCss    },
@@ -5337,26 +5340,6 @@ void WebServer::EnsureDefaultWebAssets() const {
         fs::create_directories(dest.parent_path());
         std::ofstream f(dest, std::ios::binary | std::ios::trunc);
         if (f) f << a.content;
-    }
-
-    std::string app_js;
-    for (std::size_t i = 0; i < DefaultWebAssets::kAppJsPartCount; ++i) {
-        app_js += DefaultWebAssets::kAppJsParts[i];
-    }
-    const fs::path app_dest = root / "js/app.js";
-    bool should_write_app = !fs::exists(app_dest);
-    if (!should_write_app && managed_default_root) {
-        std::ifstream in(app_dest, std::ios::binary);
-        std::ostringstream existing;
-        if (in) {
-            existing << in.rdbuf();
-        }
-        should_write_app = existing.str() != app_js;
-    }
-    if (should_write_app) {
-        fs::create_directories(app_dest.parent_path());
-        std::ofstream f(app_dest, std::ios::binary | std::ios::trunc);
-        if (f) f << app_js;
     }
 }
 

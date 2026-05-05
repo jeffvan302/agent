@@ -36,6 +36,7 @@ struct ProjectSettingsOptions {
     bool allow_manual_context_compression = false;       // allow manual compression from web UI
     bool enable_web_debugging = false;                   // allow prompt debugging in web UI
     bool serve_web_links_inline = false;                  // serve web file links inline instead of forced downloads
+    bool enable_automation = false;                       // Enable automation sequence recording and playback in web UI
     bool built_in_powershell_enabled = false;
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
     bool built_in_artifact_memory_enabled = false;
@@ -70,6 +71,7 @@ struct ProjectSettingsResult {
     bool allow_manual_context_compression = false; // allow manual compression from web UI
     bool enable_web_debugging = false;             // allow prompt debugging in web UI
     bool serve_web_links_inline = false;            // serve web file links inline instead of forced downloads
+    bool enable_automation = false;                 // Enable automation sequence recording and playback in web UI
     bool built_in_powershell_enabled = false;
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
     bool built_in_artifact_memory_enabled = false;

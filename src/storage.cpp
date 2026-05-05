@@ -1837,6 +1837,7 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     j["allow_manual_context_compression"] = settings.allow_manual_context_compression;
     j["enable_web_debugging"] = settings.enable_web_debugging;
     j["serve_web_links_inline"] = settings.serve_web_links_inline;
+    j["enable_automation"] = settings.enable_automation;
     j["built_in_powershell_enabled"] = settings.built_in_powershell_enabled;
     j["built_in_powershell_working_directory"] = settings.built_in_powershell_working_directory;
     j["built_in_artifact_memory_enabled"] = settings.built_in_artifact_memory_enabled;
@@ -1921,6 +1922,7 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     settings.allow_manual_context_compression = j.value("allow_manual_context_compression", false);
     settings.enable_web_debugging = j.value("enable_web_debugging", false);
     settings.serve_web_links_inline = j.value("serve_web_links_inline", false);
+    settings.enable_automation = j.value("enable_automation", false);
     settings.built_in_powershell_enabled = j.value("built_in_powershell_enabled", false);
     settings.built_in_powershell_working_directory = j.value(
         "built_in_powershell_working_directory", "$ProjectFolder$");

@@ -1,3 +1,4 @@
+
 if (automateBtn) {
   automateBtn.addEventListener('click', () => {
     state.automationRecording = true;
@@ -118,3 +119,4 @@ if (automationAddStepBtn) { automationAddStepBtn.addEventListener('click', addAu
 if (automationClearBtn)  { automationClearBtn.addEventListener('click', clearAutomationSequence); }
 if (automationDoneBtn)   { automationDoneBtn.addEventListener('click', finishAutomationRecording); }
 if (automationSendBtn)   { automationSendBtn.addEventListener('click', runAutomationSequence); }
+

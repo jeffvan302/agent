@@ -116,6 +116,7 @@ enum ControlId : int {
     kChatLoggingCheck = 6466,
     kManualContextCompressionCheck = 6467,
     kWebDebuggingCheck = 6468,
+    kAutomationCheck = 6495,
     kInlineWebLinksCheck = 6476,
     kInternalToolsHeader = 6469,
     kInternalToolsList = 6470,
@@ -1213,6 +1214,9 @@ private:
         inline_web_links_check_ = CreateWindowExW(0, L"BUTTON", L"Serve /data and /rag web file links inline (risky)",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInlineWebLinksCheck), nullptr, nullptr);
+        automation_check_ = CreateWindowExW(0, L"BUTTON", L"Enable automation sequence recording",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kAutomationCheck), nullptr, nullptr);
 
         instructions_label_ = CreateWindowExW(0, L"STATIC", L"Project Instructions:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInstructionsLabel), nullptr, nullptr);
         import_instructions_button_ = CreateWindowExW(0, L"BUTTON", L"Import Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kImportInstructions), nullptr, nullptr);
@@ -1263,7 +1267,7 @@ private:
             proj_vars_name_label_, proj_vars_name_edit_, proj_vars_value_label_, proj_vars_value_edit_,
             proj_vars_description_label_, proj_vars_description_edit_, proj_vars_inject_check_,
             agentic_mode_label_, agentic_mode_combo_, agentic_modes_list_label_, agentic_modes_list_,
-            chat_logging_check_, manual_context_compression_check_, web_debugging_check_, inline_web_links_check_,
+            chat_logging_check_, manual_context_compression_check_, web_debugging_check_, inline_web_links_check_, automation_check_,
             instructions_label_, import_instructions_button_, instructions_edit_,
             check_context_button_, save_button_, cancel_button_
         };
@@ -1347,6 +1351,9 @@ private:
         }
         if (options_.serve_web_links_inline) {
             CheckDlgButton(scroll_content_host_, kInlineWebLinksCheck, BST_CHECKED);
+        }
+        if (options_.enable_automation) {
+            CheckDlgButton(scroll_content_host_, kAutomationCheck, BST_CHECKED);
         }
         internal_powershell_enabled_ = options_.built_in_powershell_enabled;
         internal_artifact_memory_enabled_ = options_.built_in_artifact_memory_enabled;
@@ -1458,6 +1465,8 @@ private:
 
         y += Scale(hwnd_, 24);
         MoveWindow(inline_web_links_check_, 0, y, right_width, Scale(hwnd_, 20), TRUE);
+        y += Scale(hwnd_, 24);
+        MoveWindow(automation_check_, 0, y, right_width, Scale(hwnd_, 20), TRUE);
 
         y += Scale(hwnd_, 26) + gutter;
         MoveWindow(internal_tools_header_, 0, y, right_width, label_height, TRUE);
@@ -2892,6 +2901,7 @@ private:
         result.allow_manual_context_compression = (IsDlgButtonChecked(scroll_content_host_, kManualContextCompressionCheck) == BST_CHECKED);
         result.enable_web_debugging = (IsDlgButtonChecked(scroll_content_host_, kWebDebuggingCheck) == BST_CHECKED);
         result.serve_web_links_inline = (IsDlgButtonChecked(scroll_content_host_, kInlineWebLinksCheck) == BST_CHECKED);
+        result.enable_automation = (IsDlgButtonChecked(scroll_content_host_, kAutomationCheck) == BST_CHECKED);
         result.built_in_powershell_enabled = InternalToolListChecked(0, internal_powershell_enabled_);
         result.built_in_powershell_working_directory = workdir_;
         if (result.built_in_powershell_working_directory.empty()) {
@@ -3484,6 +3494,7 @@ private:
     HWND manual_context_compression_check_ = nullptr;
     HWND web_debugging_check_ = nullptr;
     HWND inline_web_links_check_ = nullptr;
+    HWND automation_check_ = nullptr;
     HWND internal_tools_header_ = nullptr;
     HWND internal_tools_list_ = nullptr;
     WNDPROC internal_tools_list_prev_proc_ = nullptr;

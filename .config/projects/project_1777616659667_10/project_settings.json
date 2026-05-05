@@ -16,6 +16,7 @@
     "mode_1426853375"
   ],
   "compression_configs": [],
+  "enable_automation": true,
   "enable_chat_logging": false,
   "enable_web_debugging": true,
   "enabled_agentic_mode_ids": [

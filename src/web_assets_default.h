@@ -18,6 +18,7 @@ namespace DefaultWebAssets {
     extern const char kAppJs[];
     extern const char* const kAppJsParts[];
     extern const std::size_t kAppJsPartCount;
+    extern const char kAutomationJs[];
     extern const char kThemeDefaultCss[];
     extern const char kThemeDefaultJson[];
     extern const char kThemeDarkCss[];

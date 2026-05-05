@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -58,14 +59,31 @@
           <div id="compose-top-actions">
             <button id="cancel-agent-btn" type="button" style="display:none">Cancel Agent</button>
             <button id="debug-btn" type="button" style="display:none">Enable debugging</button>
+            <button id="automate-btn" type="button" style="display:none">Automate</button>
           </div>
         </div>
         <div id="compose-bottom">
-          <button id="attach-btn" title="Attach file" disabled>&#128206;</button>
-          <input id="file-input" type="file" multiple style="display:none">
-          <textarea id="message-input" placeholder="Type a message…"
-                    rows="1" disabled></textarea>
-          <button id="send-btn" disabled>Send</button>
+          <div id="automation-panel" style="display:none">
+            <div id="automation-toolbar">
+              <span id="automation-status">Recording sequence</span>
+              <label class="automation-field">Repeat:<input id="automation-repeat" type="number" min="1" max="50" value="1"></label>
+              <label class="automation-field"><input id="automation-compress" type="checkbox">Compress</label>
+              <div class="automation-toolbar-actions">
+                <button id="automation-add-step-btn" type="button">+ Step</button>
+                <button id="automation-clear-btn" type="button">Clear</button>
+                <button id="automation-done-btn" type="button">Done</button>
+                <button id="automation-send-btn" type="button" style="display:none">Send Sequence</button>
+              </div>
+            </div>
+            <div id="automation-steps"></div>
+          </div>
+          <div id="compose-bottom-row">
+            <button id="attach-btn" title="Attach file" disabled>&#128206;</button>
+            <input id="file-input" type="file" multiple style="display:none">
+            <textarea id="message-input" placeholder="Type a message…"
+                      rows="1" disabled></textarea>
+            <button id="send-btn" disabled>Send</button>
+          </div>
         </div>
       </div>
     </main>
@@ -124,5 +142,7 @@
 <script src="/js/vendor/vega-embed.min.js"></script>
 <script src="/js/vendor/cytoscape.min.js"></script>
 <script src="/js/app.js"></script>
+<script src="/js/automation.js"></script>
 </body>
 </html>
+
