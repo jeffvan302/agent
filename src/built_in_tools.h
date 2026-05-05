@@ -7,9 +7,11 @@
 #include "variable_resolver.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
@@ -25,10 +27,12 @@ inline constexpr const char* kCompletionDriverToolName = "completion_driver";
 inline constexpr const char* kCompletionDriverContinuationPrefix = "[Completion Driver generated continuation prompt]";
 inline constexpr const char* kDefaultPlannerStorageFolder = "$ProjectFolder$\\.agent";
 inline constexpr const char* kPlannerFileName = "planner.json";
+inline constexpr const char* kFilesystemToolName = "project_filesystem";
 
 inline bool IsBuiltInToolName(const std::string& name) {
     return name == kPowerShellToolName || name == kQuestionnaireToolName ||
-           name == kPlannerToolName || name == kCompletionDriverToolName;
+           name == kPlannerToolName || name == kCompletionDriverToolName ||
+           name == kFilesystemToolName;
 }
 
 inline std::string TraceTitleForBuiltInTool(const std::string& name) {
@@ -36,6 +40,7 @@ inline std::string TraceTitleForBuiltInTool(const std::string& name) {
     if (name == kQuestionnaireToolName) return "Built-in / User Questionnaire";
     if (name == kPlannerToolName) return "Built-in / Planner";
     if (name == kCompletionDriverToolName) return "Built-in / Completion Driver";
+    if (name == kFilesystemToolName) return "Built-in / Project Filesystem";
     return "Built-in / " + name;
 }
 
@@ -71,6 +76,81 @@ inline std::string QuestionnaireSystemPrompt() {
         "- After the tool returns the user's selection, use that answer to continue.\n"
         "- The tool blocks until the user responds, so the conversation will pause cleanly."
     );
+}
+
+inline std::string FilesystemSystemPrompt() {
+    return (
+        "Project Filesystem Instructions:\n"
+        "- Use the project_filesystem tool for all file read, write, directory listing, and edit operations.\n"
+        "- Always specify paths relative to the configured working directory (default $ProjectFolder$). Templates like $ProjectFolder$ are expanded automatically.\n"
+        "- Actions: read, write, edit, list_directory, create_directory.\n"
+        "- read: Returns file content. Optionally pass start_line / end_line (1-based, inclusive) or start_offset / length (bytes).\n"
+        "- write: Overwrites a file. Pass create_backup=true to snapshot the existing file into .agent/backups/<timestamp>/<path> before overwriting.\n"
+        "- edit: Applies JSON diff edits. Each edit object uses either:\n"
+        "  1) old_lines + new_lines — exact match-and-replace by contiguous lines, or\n"
+        "  2) direct JSON-patch style: {\"op\": \"replace\", \"path\": \"...\"} (not yet supported; use old_lines/new_lines).\n"
+        "- list_directory: Returns files and subdirectories for a path.\n"
+        "- create_directory: Creates a directory (including parents).\n"
+        "- Backups: When create_backup=true, the tool copies the original file or directory tree into $ProjectFolder$/.agent/backups/<timestamp>/<original_relative_path>.\n"
+        "- The host auto-expands path templates. Do not escape backslashes unnecessarily; forward slashes are acceptable.\n"
+        "- If a path is invalid, permission is denied, or a file is missing, the tool returns a clear error — do not retry blindly.\n"
+        "Examples:\n"
+        "  Read whole file: {\"action\":\"read\",\"path\":\"src/main.cpp\"}\n"
+        "  Read lines 10-20: {\"action\":\"read\",\"path\":\"src/main.cpp\",\"start_line\":10,\"end_line\":20}\n"
+        "  Write with backup: {\"action\":\"write\",\"path\":\"README.md\",\"content\":\"...\",\"create_backup\":true}\n"
+        "  Edit by lines: {\"action\":\"edit\",\"path\":\"src/main.cpp\",\"edits\":[{\"old_lines\":[\"old line 1\",\"old line 2\"],\"new_lines\":[\"new line 1\"]}]}\n"
+        "  List dir: {\"action\":\"list_directory\",\"path\":\"src\"}\n"
+        "  Create dir: {\"action\":\"create_directory\",\"path\":\"src/utils\"}");
+}
+
+inline std::string PowerShellSystemPrompt() {
+    return (
+        "PowerShell Execution Instructions:\n"
+        "- The powershell_execute tool runs a PowerShell command line on the host machine.\n"
+        "- This is a high-risk tool. Use it ONLY when the user explicitly needs command execution.\n"
+        "- Prefer the project_filesystem tool for reading, writing, or editing files instead of PowerShell.\n"
+        "   * Use powershell_execute for: dependency installs, build scripts, git commands, environment checks.\n"
+        "   * Use project_filesystem for: reading source code, editing files, listing directories.\n"
+        "- Provide concise commands. Avoid destructive operations unless explicitly requested.\n"
+        "- Set timeout_seconds (1-120) if the command may take long; default is 30s.\n"
+        "- The tool returns stdout, stderr, exit code, and timed_out status. Do not silently swallow errors.\n"
+        "- If a command fails, analyze the error output rather than blindly retrying.\n"
+        "Examples:\n"
+        "  Install dependency: {\"command\":\"npm install\",\"timeout_seconds\":60}\n"
+        "  Check git status: {\"command\":\"git status\"}\n"
+        "  Build project: {\"command\":\"cmake --build build --config Release\",\"timeout_seconds\":120}");
+}
+
+inline std::string PlannerSystemPrompt() {
+    return (
+        "Planner / Task Decomposition Instructions:\n"
+        "- The project_planner tool maintains a persistent project plan stored as planner.json in the project folder (default $ProjectFolder$\\.agent).\n"
+        "- Use it to track goals, subgoals, steps, features, blockers, notes, and tool hints across the full interaction.\n"
+        "- Actions: get, create/replace, update, clear, add_item, update_item, remove_item.\n"
+        "- get: Load the current plan. Do this at the start of a complex task to check existing state.\n"
+        "- create/replace: Write a complete new plan. Use when establishing a new project or resetting the plan.\n"
+        "- update: Merge top-level fields into the existing plan. Use for bulk updates (e.g., change the main goal).\n"
+        "- clear: Delete all items from a section (goals/features/steps/blockers/notes/tool_hints) or the entire plan if section=all.\n"
+        "- add_item: Append an item to a section. Optionally nest under a parent item via parent_id.\n"
+        "- update_item: Modify fields of an existing item by id (e.g., mark status=completed).\n"
+        "- remove_item: Delete an item by id from a section (or section=all to search all sections).\n"
+        "Sections: goals, features, steps, blockers, notes, tool_hints.\n"
+        "Status values for items: pending (not started), in_progress (active), completed (done), blocked (waiting), cancelled (abandoned).\n"
+        "- When adding items, an id is auto-generated if omitted.\n"
+        "- child_section defaults to 'subgoals' for goals, otherwise the requested section.\n"
+        "- To edit an existing item, always use update_item with the existing id.\n"
+        "- The only way to get strikethrough in the UI is status=completed.\n"
+        "Examples:\n"
+        "  Load plan: {\"action\":\"get\"}\n"
+        "  Create full plan: {\"action\":\"create\",\"plan\":{\"goal\":\"Build app\",\"goals\":[{\"id\":\"g1\",\"title\":\"Setup\",\"status\":\"pending\"}]}}\n"
+        "  Add a step: {\"action\":\"add_item\",\"section\":\"steps\",\"item\":{\"task\":\"Install deps\",\"status\":\"pending\"}}\n"
+        "  Add nested subgoal: {\"action\":\"add_item\",\"section\":\"goals\",\"parent_id\":\"g1\",\"item\":{\"title\":\"Subtask\",\"status\":\"pending\"}}\n"
+        "  Mark completed: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"completed\"}}\n"
+        "  Mark blocked: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"blocked\"}}\n"
+        "  Remove item: {\"action\":\"remove_item\",\"section\":\"all\",\"id\":\"s1\"}\n"
+        "Notes:\n"
+        "- Use the planner proactively. When the user gives a multi-step task, first get the plan, then update items as progress is made.\n"
+        "- Tool hints in the planner help future turns choose the right tool without guessing.");
 }
 
 inline std::string CompletionDriverSystemPrompt() {
@@ -206,6 +286,36 @@ inline std::vector<ChatToolDefinition> BuildDefinitions(
             "Do not ask rhetorical questions without this tool when a decision is needed.";
         q.parameters_json = R"({"type":"object","properties":{"question":{"type":"string","description":"The question or prompt text shown to the user."},"options":{"type":"array","items":{"type":"string"},"description":"A list of distinct clickable answer choices."},"allow_multiple":{"type":"boolean","description":"If true, the user may select more than one option. Default false."}},"required":["question","options"]})";
         definitions.push_back(std::move(q));
+    }
+    if (settings.built_in_filesystem_enabled) {
+        ChatToolDefinition fs;
+        fs.name = kFilesystemToolName;
+        fs.description =
+            "Project Filesystem tool. Read, write, edit, list, and create files/directories under the configured working directory. "
+            "All paths are relative to the working directory (default $ProjectFolder$) and templates are auto-expanded.\n\n"
+            "Actions:\n"
+            "- read — Return the full content of a file, or a portion if start_line/end_line or start_offset/length are provided.\n"
+            "- write — Overwrite a file with new content. Set create_backup=true to snapshot the original into .agent/backups/<timestamp>.\n"
+            "- edit — Apply diff edits using old_lines/new_lines replacements. Each edit must match contiguous existing lines exactly.\n"
+            "- list_directory — Return files and subdirectories for the given path.\n"
+            "- create_directory — Create a new directory (including intermediate parents).\n\n"
+            "Errors are explicit: file_not_found, permission_denied, invalid_path, or backup_failed. Do not retry blindly.";
+        fs.parameters_json = R"({
+  "type": "object",
+  "properties": {
+    "action": {"type": "string", "enum": ["read", "write", "edit", "list_directory", "create_directory"], "description": "Filesystem operation to perform."},
+    "path": {"type": "string", "description": "Relative path within the working directory. Supports $ProjectFolder$ templates."},
+    "content": {"type": "string", "description": "Full file content for write action."},
+    "start_line": {"type": "integer", "description": "Optional 1-based start line for read."},
+    "end_line": {"type": "integer", "description": "Optional 1-based end line for read (inclusive)."},
+    "start_offset": {"type": "integer", "description": "Optional byte start offset for read."},
+    "length": {"type": "integer", "description": "Optional byte length for read."},
+    "create_backup": {"type": "boolean", "description": "If true, backup the original file or directory before write or edit."},
+    "edits": {"type": "array", "description": "For edit action: list of {old_lines:[...], new_lines:[...]} objects. old_lines must match contiguous lines exactly."}
+  },
+  "required": ["action", "path"]
+})";
+        definitions.push_back(std::move(fs));
     }
     return definitions;
 }
@@ -821,6 +931,263 @@ inline McpToolCallResult CallPlanner(
     return PlannerResult(action, file_path_utf8, plan, changed);
 }
 
+inline bool IsValidRelativePath(const std::string& path) {
+    if (path.empty()) return false;
+    if (path.find("..") != std::string::npos) return false;
+    if (path.find(':') != std::string::npos) return false;
+    return true;
+}
+
+inline std::filesystem::path ResolveFilesystemPath(
+    const std::string& path_template,
+    const std::string& working_directory_template,
+    const std::vector<ProjectMcpVariableValue>& variables) {
+    std::string expanded = variable_resolver::ExpandTemplate(
+        working_directory_template.empty() ? "$ProjectFolder$" : working_directory_template,
+        variables);
+    expanded = Trim(expanded);
+    if (expanded.empty()) expanded = "$ProjectFolder$";
+    std::filesystem::path root(Utf8ToWide(expanded));
+    std::string rel = Trim(path_template);
+    rel = variable_resolver::ExpandTemplate(rel, variables);
+    rel = Trim(rel);
+    std::string root_utf8 = WideToUtf8(root.wstring());
+    if (!root_utf8.empty() && rel.rfind(root_utf8, 0) == 0) {
+        rel = rel.substr(root_utf8.size());
+        while (!rel.empty() && (rel.front() == '\\' || rel.front() == '/')) rel = rel.substr(1);
+    }
+    if (rel.empty()) return root;
+    std::filesystem::path target = root / Utf8ToWide(rel);
+    return target;
+}
+
+inline bool ReadWholeFileUtf8(const std::filesystem::path& path, std::string* out, std::string* error) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        if (error) *error = "Could not open file for reading: " + WideToUtf8(path.wstring());
+        return false;
+    }
+    std::ostringstream stream;
+    stream << input.rdbuf();
+    *out = stream.str();
+    return true;
+}
+
+inline bool WriteWholeFileUtf8(const std::filesystem::path& path, const std::string& content, std::string* error) {
+    try {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        if (!output.is_open()) {
+            if (error) *error = "Could not open file for writing: " + WideToUtf8(path.wstring());
+            return false;
+        }
+        output << content;
+        return true;
+    } catch (const std::exception& ex) {
+        if (error) *error = std::string("Could not write file: ") + ex.what();
+        return false;
+    }
+}
+
+inline bool CreateFilesystemBackup(
+    const std::filesystem::path& target,
+    const std::filesystem::path& project_root,
+    std::string* backup_rel_path_out,
+    std::string* error) {
+    try {
+        std::error_code ec;
+        const auto now = std::chrono::system_clock::now();
+        const auto time_t_now = std::chrono::system_clock::to_time_t(now);
+        std::tm utc{};
+        gmtime_s(&utc, &time_t_now);
+        std::ostringstream ts;
+        ts << std::put_time(&utc, "%Y%m%d_%H%M%S");
+        const std::string timestamp = ts.str();
+        std::filesystem::path backup_root = project_root / ".agent" / "backups" / Utf8ToWide(timestamp);
+        std::filesystem::path rel;
+        if (target.wstring().rfind(project_root.wstring(), 0) == 0) {
+            rel = std::filesystem::relative(target, project_root, ec);
+        }
+        if (ec || rel.empty()) {
+            rel = target.filename();
+        }
+        std::filesystem::path backup_dest = backup_root / rel;
+        std::filesystem::create_directories(backup_dest.parent_path(), ec);
+        if (ec) {
+            if (error) *error = "Failed to create backup directory: " + ec.message();
+            return false;
+        }
+        if (std::filesystem::is_directory(target, ec)) {
+            std::filesystem::copy(target, backup_dest,
+                std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+            if (ec) {
+                if (error) *error = "Failed to backup directory: " + ec.message();
+                return false;
+            }
+        } else {
+            std::filesystem::copy_file(target, backup_dest,
+                std::filesystem::copy_options::overwrite_existing, ec);
+            if (ec) {
+                if (error) *error = "Failed to backup file: " + ec.message();
+                return false;
+            }
+        }
+        if (backup_rel_path_out) {
+            *backup_rel_path_out = WideToUtf8((std::filesystem::path(".agent") / "backups" / Utf8ToWide(timestamp) / rel).wstring());
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        if (error) *error = std::string("Backup error: ") + ex.what();
+        return false;
+    }
+}
+
+inline McpToolCallResult CallFilesystem(
+    const std::string& arguments_json,
+    const ProjectSettings& settings,
+    const std::vector<ProjectMcpVariableValue>& variables) {
+    nlohmann::json args;
+    try {
+        args = nlohmann::json::parse(arguments_json.empty() ? "{}" : arguments_json);
+    } catch (const std::exception& ex) {
+        return ErrorResult(std::string("Invalid filesystem tool arguments: ") + ex.what());
+    }
+    const std::string action = Trim(args.value("action", ""));
+    const std::string path_template = Trim(args.value("path", ""));
+    if (action.empty()) return ErrorResult("Filesystem tool requires an action.");
+    if (path_template.empty()) return ErrorResult("Filesystem tool requires a path.");
+    if (!IsValidRelativePath(path_template)) return ErrorResult("Filesystem path contains invalid characters or parent-directory references (..).");
+    std::filesystem::path target = ResolveFilesystemPath(path_template, settings.built_in_filesystem_working_directory, variables);
+    std::error_code ec;
+    const bool target_exists = std::filesystem::exists(target, ec);
+    const bool target_is_dir = target_exists && std::filesystem::is_directory(target, ec);
+    const bool create_backup = args.value("create_backup", false);
+    std::string expanded_root = variable_resolver::ExpandTemplate(
+        settings.built_in_filesystem_working_directory.empty() ? "$ProjectFolder$" : settings.built_in_filesystem_working_directory,
+        variables);
+    expanded_root = Trim(expanded_root);
+    if (expanded_root.empty()) expanded_root = "$ProjectFolder$";
+    std::filesystem::path project_root = std::filesystem::weakly_canonical(std::filesystem::path(Utf8ToWide(expanded_root)), ec);
+    if (action == "read") {
+        if (!target_exists) return ErrorResult("File not found: " + path_template);
+        if (target_is_dir) return ErrorResult("Cannot read a directory as a file. Use list_directory instead.");
+        std::string content;
+        std::string read_error;
+        if (!ReadWholeFileUtf8(target, &content, &read_error)) return ErrorResult(read_error);
+        int start_line = args.value("start_line", 0);
+        int end_line = args.value("end_line", 0);
+        int start_offset = args.value("start_offset", -1);
+        int length = args.value("length", -1);
+        if (start_line > 0 || end_line > 0) {
+            std::vector<std::string> lines;
+            std::istringstream stream(content);
+            std::string line;
+            while (std::getline(stream, line)) lines.push_back(line);
+            if (start_line < 1) start_line = 1;
+            if (end_line < 1 || end_line > static_cast<int>(lines.size())) end_line = static_cast<int>(lines.size());
+            std::ostringstream out;
+            for (int i = start_line - 1; i < end_line; ++i) {
+                if (i > start_line - 1) out << "\n";
+                out << lines[i];
+            }
+            content = out.str();
+        } else if (start_offset >= 0 && length >= 0) {
+            if (start_offset < static_cast<int>(content.size())) {
+                content = content.substr(start_offset, static_cast<size_t>(length));
+            } else { content.clear(); }
+        }
+        McpToolCallResult result;
+        result.success = true;
+        result.raw_result_json = nlohmann::json({ {"tool", kFilesystemToolName}, {"success", true}, {"action", "read"}, {"path", path_template}, {"content", content} }).dump(2);
+        result.content_text = "Read file: " + path_template + "\n\n" + content;
+        return result;
+    }
+    if (action == "list_directory") {
+        if (!target_exists) return ErrorResult("Directory not found: " + path_template);
+        if (!target_is_dir) return ErrorResult("Path is not a directory: " + path_template);
+        nlohmann::json entries = nlohmann::json::array();
+        for (const auto& entry : std::filesystem::directory_iterator(target, ec)) {
+            if (ec) continue;
+            entries.push_back(nlohmann::json({ {"name", WideToUtf8(entry.path().filename().wstring())}, {"is_directory", entry.is_directory(ec)} }));
+        }
+        McpToolCallResult result;
+        result.success = true;
+        result.raw_result_json = nlohmann::json({ {"tool", kFilesystemToolName}, {"success", true}, {"action", "list_directory"}, {"path", path_template}, {"entries", entries} }).dump(2);
+        result.content_text = "Directory listing: " + path_template + "\n" + entries.dump(2);
+        return result;
+    }
+    if (action == "create_directory") {
+        std::filesystem::create_directories(target, ec);
+        if (ec) return ErrorResult("Failed to create directory: " + path_template + " — " + ec.message());
+        McpToolCallResult result;
+        result.success = true;
+        result.raw_result_json = nlohmann::json({ {"tool", kFilesystemToolName}, {"success", true}, {"action", "create_directory"}, {"path", path_template} }).dump(2);
+        result.content_text = "Created directory: " + path_template;
+        return result;
+    }
+    std::string backup_rel;
+    if (create_backup && target_exists) {
+        std::string backup_error;
+        if (!CreateFilesystemBackup(target, project_root, &backup_rel, &backup_error)) return ErrorResult("Backup failed: " + backup_error);
+    }
+    if (action == "write") {
+        const std::string content = args.value("content", "");
+        std::string write_error;
+        if (!WriteWholeFileUtf8(target, content, &write_error)) return ErrorResult(write_error);
+        McpToolCallResult result;
+        result.success = true;
+        nlohmann::json payload = { {"tool", kFilesystemToolName}, {"success", true}, {"action", "write"}, {"path", path_template}, {"bytes_written", static_cast<int>(content.size())} };
+        if (!backup_rel.empty()) payload["backup_path"] = backup_rel;
+        result.raw_result_json = payload.dump(2);
+        result.content_text = "Wrote file: " + path_template;
+        if (!backup_rel.empty()) result.content_text += " (backup: " + backup_rel + ")";
+        return result;
+    }
+    if (action == "edit") {
+        if (!target_exists || target_is_dir) return ErrorResult("Edit target must be an existing file: " + path_template);
+        std::string original;
+        std::string read_error;
+        if (!ReadWholeFileUtf8(target, &original, &read_error)) return ErrorResult(read_error);
+        const auto edits = args.value("edits", nlohmann::json::array());
+        if (!edits.is_array() || edits.empty()) return ErrorResult("Edit action requires a non-empty 'edits' array.");
+        std::vector<std::string> lines;
+        { std::istringstream stream(original); std::string line; while (std::getline(stream, line)) lines.push_back(line); }
+        for (const auto& edit : edits) {
+            if (!edit.is_object()) continue;
+            const auto old_j = edit.value("old_lines", nlohmann::json::array());
+            const auto new_j = edit.value("new_lines", nlohmann::json::array());
+            if (!old_j.is_array() || old_j.empty()) continue;
+            std::vector<std::string> old_lines; for (const auto& item : old_j) { if (item.is_string()) old_lines.push_back(item.get<std::string>()); }
+            std::vector<std::string> new_lines; for (const auto& item : new_j) { if (item.is_string()) new_lines.push_back(item.get<std::string>()); }
+            if (old_lines.empty()) continue;
+            bool replaced = false;
+            for (size_t i = 0; i + old_lines.size() <= lines.size(); ++i) {
+                bool match = true;
+                for (size_t j = 0; j < old_lines.size(); ++j) { if (lines[i + j] != old_lines[j]) { match = false; break; } }
+                if (match) {
+                    lines.erase(lines.begin() + i, lines.begin() + i + old_lines.size());
+                    lines.insert(lines.begin() + i, new_lines.begin(), new_lines.end());
+                    replaced = true; break;
+                }
+            }
+            if (!replaced) return ErrorResult("Edit failed: old_lines not found in file. Ensure the lines match exactly (including whitespace).");
+        }
+        std::ostringstream out;
+        for (size_t i = 0; i < lines.size(); ++i) { if (i > 0) out << "\n"; out << lines[i]; }
+        std::string write_error;
+        if (!WriteWholeFileUtf8(target, out.str(), &write_error)) return ErrorResult(write_error);
+        McpToolCallResult result;
+        result.success = true;
+        nlohmann::json payload = { {"tool", kFilesystemToolName}, {"success", true}, {"action", "edit"}, {"path", path_template} };
+        if (!backup_rel.empty()) payload["backup_path"] = backup_rel;
+        result.raw_result_json = payload.dump(2);
+        result.content_text = "Edited file: " + path_template;
+        if (!backup_rel.empty()) result.content_text += " (backup: " + backup_rel + ")";
+        return result;
+    }
+    return ErrorResult("Unknown filesystem action: " + action);
+}
+
 inline McpToolCallResult CallTool(
     const std::string& name,
     const std::string& arguments_json,
@@ -839,6 +1206,9 @@ inline McpToolCallResult CallTool(
     }
     if (name == kQuestionnaireToolName && IsQuestionnaireEnabled(settings, current_agentic_mode_id)) {
         return CallQuestionnaire(arguments_json, questionnaire_wait);
+    }
+    if (name == kFilesystemToolName && settings.built_in_filesystem_enabled) {
+        return CallFilesystem(arguments_json, settings, variables);
     }
     return ErrorResult("Built-in tool is not enabled for this project: " + name);
 }

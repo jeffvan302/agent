@@ -1,4 +1,4 @@
-﻿// WIN32_LEAN_AND_MEAN prevents <windows.h> from pulling in the old winsock.h,
+// WIN32_LEAN_AND_MEAN prevents <windows.h> from pulling in the old winsock.h,
 // allowing cpp-httplib to include <winsock2.h> first (required on Windows).
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -3346,6 +3346,17 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
         }
     }
 
+    // Inject built-in tool system prompts (not part of history / never compressed)
+    if (project_settings.built_in_powershell_enabled) {
+        const std::string ps_context = built_in_tools::PowerShellSystemPrompt();
+        AppendPromptSection(built.full_prompt, ps_context);
+        built.sections.push_back({"PowerShell Execution", ps_context});
+    }
+    if (project_settings.built_in_planner_enabled) {
+        const std::string planner_context = built_in_tools::PlannerSystemPrompt();
+        AppendPromptSection(built.full_prompt, planner_context);
+        built.sections.push_back({"Planner / Task Decomposition", planner_context});
+    }
     if (built_in_tools::IsCompletionDriverEnabled(project_settings, mode_id)) {
         const std::string driver_context = built_in_tools::CompletionDriverSystemPrompt();
         AppendPromptSection(built.full_prompt, driver_context);
@@ -3355,6 +3366,11 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
         const std::string q_context = built_in_tools::QuestionnaireSystemPrompt();
         AppendPromptSection(built.full_prompt, q_context);
         built.sections.push_back({"User Questionnaire", q_context});
+    }
+    if (project_settings.built_in_filesystem_enabled) {
+        const std::string fs_context = built_in_tools::FilesystemSystemPrompt();
+        AppendPromptSection(built.full_prompt, fs_context);
+        built.sections.push_back({"Project Filesystem", fs_context});
     }
 
     if (mcp_manager) {

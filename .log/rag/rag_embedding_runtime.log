@@ -6412,3 +6412,15 @@ Error: listen tcp 127.0.0.1:11434: bind: Only one usage of each socket address (
 [2026-05-05T05:58:33Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
 Error: listen tcp 127.0.0.1:11434: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
 [2026-05-05T05:58:36Z] Ollama is responding at http://localhost:11434.
+[2026-05-05T06:41:54Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+Error: listen tcp 127.0.0.1:11434: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
+[2026-05-05T06:41:56Z] Ollama is responding at http://localhost:11434.
+[2026-05-05T06:43:30Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+Error: listen tcp 127.0.0.1:11434: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
+[2026-05-05T06:43:33Z] Ollama is responding at http://localhost:11434.
+[2026-05-05T08:37:27Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+Error: listen tcp 127.0.0.1:11434: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
+[2026-05-05T08:37:30Z] Ollama is responding at http://localhost:11434.
+[2026-05-05T09:03:07Z] Starting Ollama with command: "C:\Users\TheunisvanNiekerk\AppData\Local\Programs\Ollama\ollama.exe" serve
+Error: listen tcp 127.0.0.1:11434: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
+[2026-05-05T09:03:09Z] Ollama is responding at http://localhost:11434.

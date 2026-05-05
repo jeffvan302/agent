@@ -2,6 +2,9 @@
   "allow_manual_context_compression": true,
   "built_in_artifact_memory_enabled": true,
   "built_in_completion_driver_enabled": true,
+  "built_in_filesystem_auto_archive": false,
+  "built_in_filesystem_enabled": true,
+  "built_in_filesystem_working_directory": "$ProjectFolder$",
   "built_in_planner_enabled": true,
   "built_in_planner_storage_folder": "$ProjectFolder$\\.agent",
   "built_in_powershell_enabled": true,
@@ -26,17 +29,6 @@
       "variables": []
     },
     {
-      "server_id": "mcp_server_1775829469413_4",
-      "variables": [
-        {
-          "description": "",
-          "inject_into_context": false,
-          "name": "ProjectFolder",
-          "value": "K:\\tester"
-        }
-      ]
-    },
-    {
       "server_id": "mcp_server_1775841788611_5",
       "variables": []
     },
@@ -52,7 +44,7 @@
   "model_timeout_seconds": 0,
   "model_tool_ids": [],
   "preferred_model_id": "kimi-k2.6:cloud",
-  "preferred_provider_id": "provider_1777954373162_30",
+  "preferred_provider_id": "provider_1777000661309_11",
   "project_instructions": "** DO NOT EXECUTE ANY GIT COMMANDS WITHOUT ASKING THE USER! **\r\n",
   "project_name": "Creating Applications",
   "project_variables": [

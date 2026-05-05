@@ -3524,6 +3524,9 @@ void MainWindow::EditProjectSettings() {
     options.questionnaire_max_options = project_settings.questionnaire_max_options;
     options.questionnaire_restrict_by_mode = project_settings.questionnaire_restrict_by_mode;
     options.questionnaire_allowed_mode_id = project_settings.questionnaire_allowed_mode_id;
+    options.built_in_filesystem_enabled = project_settings.built_in_filesystem_enabled;
+    options.built_in_filesystem_auto_archive = project_settings.built_in_filesystem_auto_archive;
+    options.built_in_filesystem_working_directory = project_settings.built_in_filesystem_working_directory;
     options.model_timeout_seconds = project_settings.model_timeout_seconds;
 
     // Pre-seed ProjectFolder from MCP global binding values if not already set.
@@ -3580,6 +3583,9 @@ void MainWindow::EditProjectSettings() {
     saved_settings.questionnaire_max_options = result->questionnaire_max_options;
     saved_settings.questionnaire_restrict_by_mode = result->questionnaire_restrict_by_mode;
     saved_settings.questionnaire_allowed_mode_id = result->questionnaire_allowed_mode_id;
+    saved_settings.built_in_filesystem_enabled = result->built_in_filesystem_enabled;
+    saved_settings.built_in_filesystem_auto_archive = result->built_in_filesystem_auto_archive;
+    saved_settings.built_in_filesystem_working_directory = result->built_in_filesystem_working_directory;
     saved_settings.model_timeout_seconds = result->model_timeout_seconds;
     storage_.SaveProjectSettings(active_project_id_, saved_settings);
     storage_.SaveProjectCompressionSettings(active_project_id_, ProjectCompressionSettings{
@@ -4390,6 +4396,23 @@ void MainWindow::SendCurrentMessage() {
                 }
             }
         }
+        // Inject built-in tool system prompts (not part of history / never compressed)
+        if (proj_settings.built_in_powershell_enabled) {
+            const std::string ps_context = built_in_tools::PowerShellSystemPrompt();
+            if (!request.system_prompt.empty()) {
+                request.system_prompt += "\n\n";
+            }
+            request.system_prompt += ps_context;
+            system_prompt_sections.push_back({"PowerShell Execution", ps_context});
+        }
+        if (proj_settings.built_in_planner_enabled) {
+            const std::string planner_context = built_in_tools::PlannerSystemPrompt();
+            if (!request.system_prompt.empty()) {
+                request.system_prompt += "\n\n";
+            }
+            request.system_prompt += planner_context;
+            system_prompt_sections.push_back({"Planner / Task Decomposition", planner_context});
+        }
         if (built_in_tools::IsCompletionDriverEnabled(proj_settings, proj_settings.selected_agentic_mode_id)) {
             const std::string driver_context = built_in_tools::CompletionDriverSystemPrompt();
             if (!request.system_prompt.empty()) {
@@ -4405,6 +4428,14 @@ void MainWindow::SendCurrentMessage() {
             }
             request.system_prompt += q_context;
             system_prompt_sections.push_back({"User Questionnaire", q_context});
+        }
+        if (proj_settings.built_in_filesystem_enabled) {
+            const std::string fs_context = built_in_tools::FilesystemSystemPrompt();
+            if (!request.system_prompt.empty()) {
+                request.system_prompt += "\n\n";
+            }
+            request.system_prompt += fs_context;
+            system_prompt_sections.push_back({"Project Filesystem", fs_context});
         }
     }
 

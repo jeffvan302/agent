@@ -47,6 +47,9 @@ struct ProjectSettingsOptions {
     int questionnaire_max_options = 8;
     bool questionnaire_restrict_by_mode = false;
     std::string questionnaire_allowed_mode_id;
+    bool built_in_filesystem_enabled = false;
+    bool built_in_filesystem_auto_archive = false;
+    std::string built_in_filesystem_working_directory = "$ProjectFolder$";
     int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 
@@ -78,6 +81,9 @@ struct ProjectSettingsResult {
     int questionnaire_max_options = 8;
     bool questionnaire_restrict_by_mode = false;
     std::string questionnaire_allowed_mode_id;
+    bool built_in_filesystem_enabled = false;
+    bool built_in_filesystem_auto_archive = false;
+    std::string built_in_filesystem_working_directory = "$ProjectFolder$";
     int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 

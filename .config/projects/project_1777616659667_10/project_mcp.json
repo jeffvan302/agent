@@ -5,17 +5,6 @@
       "variables": []
     },
     {
-      "server_id": "mcp_server_1775829469413_4",
-      "variables": [
-        {
-          "description": "",
-          "inject_into_context": false,
-          "name": "ProjectFolder",
-          "value": "K:\\tester"
-        }
-      ]
-    },
-    {
       "server_id": "mcp_server_1775841788611_5",
       "variables": []
     },

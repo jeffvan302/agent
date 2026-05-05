@@ -143,6 +143,13 @@ enum ControlId : int {
     kCompletionDriverModesList = 6492,
     kCompletionDriverNoteLabel = 6493,
 
+    // Filesystem built-in tool settings
+    kFilesystemEnabledCheck = 6500,
+    kFilesystemAutoArchiveCheck = 6501,
+    kFilesystemWorkingDirLabel = 6502,
+    kFilesystemWorkingDirEdit = 6503,
+    kFilesystemNoteLabel = 6504,
+
     // Right panel scrollable host
     kSettingsScrollPanel = 6480,
 
@@ -704,6 +711,9 @@ private:
             &questionnaire_max_options_edit_,
             &questionnaire_restrict_mode_check_,
             &questionnaire_mode_combo_,
+            &filesystem_enabled_check_,
+            &filesystem_auto_archive_check_,
+            &filesystem_working_dir_edit_,
             &rag_services_list_,
             &rag_enabled_check_,
             &rag_read_check_,
@@ -768,7 +778,7 @@ private:
                 const LRESULT item_info = SendMessageW(hwnd, LB_ITEMFROMPOINT, 0, MAKELPARAM(x, y));
                 const int index = LOWORD(item_info);
                 const bool outside = HIWORD(item_info) != 0;
-                if (!outside && index >= 0 && index <= 4) {
+                if (!outside && index >= 0 && index <= 5) {
                     SetFocus(hwnd);
                     if (x <= Scale(hwnd, 42)) {
                         self->ToggleInternalToolEnabled(index);
@@ -782,7 +792,7 @@ private:
             case WM_KEYDOWN:
                 if (w_param == VK_SPACE) {
                     const int index = ListBox_GetCurSel(hwnd);
-                    if (index >= 0 && index <= 4) {
+                    if (index >= 0 && index <= 5) {
                         self->ToggleInternalToolEnabled(index);
                         return 0;
                     }
@@ -1125,6 +1135,23 @@ private:
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kQuestionnaireModeCombo), nullptr, nullptr);
 
+        // Filesystem tool section controls
+        filesystem_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable Project Filesystem tool",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kFilesystemEnabledCheck), nullptr, nullptr);
+        filesystem_auto_archive_check_ = CreateWindowExW(0, L"BUTTON", L"Auto-archive file reads/writes into Artifact/Code Memory",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kFilesystemAutoArchiveCheck), nullptr, nullptr);
+        filesystem_working_dir_label_ = CreateWindowExW(0, L"STATIC", L"Working directory:", WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kFilesystemWorkingDirLabel), nullptr, nullptr);
+        filesystem_working_dir_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"$ProjectFolder$",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kFilesystemWorkingDirEdit), nullptr, nullptr);
+        filesystem_note_label_ = CreateWindowExW(0, L"STATIC",
+            L"Allows the model to read, write, edit, list, and create files under the working directory.",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kFilesystemNoteLabel), nullptr, nullptr);
+
         // RAG services section
         rag_services_header_ = CreateWindowExW(0, L"STATIC", L"RAG Services:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagServicesHeader), nullptr, nullptr);
         rag_services_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
@@ -1224,6 +1251,8 @@ private:
             completion_driver_enabled_check_, completion_driver_modes_label_, completion_driver_modes_list_, completion_driver_note_label_,
             questionnaire_enabled_check_, questionnaire_max_options_label_, questionnaire_max_options_edit_,
             questionnaire_restrict_mode_check_, questionnaire_mode_label_, questionnaire_mode_combo_,
+            filesystem_enabled_check_, filesystem_auto_archive_check_, filesystem_working_dir_label_,
+            filesystem_working_dir_edit_, filesystem_note_label_,
             rag_services_header_, rag_services_list_, rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_check_,
             rag_priority_label_, rag_priority_edit_, rag_max_chunks_label_, rag_max_chunks_edit_,
@@ -1331,6 +1360,11 @@ private:
             : options_.built_in_planner_storage_folder;
 
         questionnaire_enabled_ = options_.built_in_questionnaire_enabled;
+        filesystem_enabled_ = options_.built_in_filesystem_enabled;
+        filesystem_auto_archive_ = options_.built_in_filesystem_auto_archive;
+        filesystem_working_directory_ = Trim(options_.built_in_filesystem_working_directory).empty()
+            ? std::string("$ProjectFolder$")
+            : options_.built_in_filesystem_working_directory;
         if (completion_driver_enabled_) {
             CheckDlgButton(scroll_content_host_, kCompletionDriverEnabledCheck, BST_CHECKED);
         }
@@ -1466,6 +1500,13 @@ private:
         MoveWindow(questionnaire_mode_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 75), questionnaire_mode_label_w, label_height, TRUE);
         MoveWindow(questionnaire_mode_combo_, internal_settings_x + panel_pad + questionnaire_mode_label_w + gutter, tool_y + Scale(hwnd_, 72), questionnaire_mode_combo_w, Scale(hwnd_, 180), TRUE);
         SendMessageW(questionnaire_mode_combo_, CB_SETDROPPEDWIDTH, questionnaire_mode_combo_w, 0);
+
+        // Filesystem tool controls
+        MoveWindow(filesystem_enabled_check_, internal_settings_x + panel_pad, tool_y, internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(filesystem_auto_archive_check_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(filesystem_working_dir_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 50), Scale(hwnd_, 100), label_height, TRUE);
+        MoveWindow(filesystem_working_dir_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 102), tool_y + Scale(hwnd_, 48), internal_settings_w - panel_pad * 2 - Scale(hwnd_, 102), Scale(hwnd_, 22), TRUE);
+        MoveWindow(filesystem_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 74), internal_settings_w - panel_pad * 2, Scale(hwnd_, 56), TRUE);
 
         // RAG services section
         y += internal_h + gutter * 2;
@@ -1659,6 +1700,12 @@ private:
         case kCompletionDriverEnabledCheck:
             if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
                 completion_driver_enabled_ = (IsDlgButtonChecked(scroll_content_host_, kCompletionDriverEnabledCheck) == BST_CHECKED);
+                RefreshInternalToolsList();
+            }
+            break;
+        case kFilesystemEnabledCheck:
+            if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
+                filesystem_enabled_ = (IsDlgButtonChecked(scroll_content_host_, kFilesystemEnabledCheck) == BST_CHECKED);
                 RefreshInternalToolsList();
             }
             break;
@@ -2143,12 +2190,14 @@ private:
             questionnaire_enabled_ = !questionnaire_enabled_;
         } else if (index == 4) {
             completion_driver_enabled_ = !completion_driver_enabled_;
+        } else if (index == 5) {
+            filesystem_enabled_ = !filesystem_enabled_;
         }
         RefreshInternalToolsList(false);
     }
 
     void SelectInternalTool(int index) {
-        if (index < 0 || index > 4) return;
+        if (index < 0 || index > 5) return;
         SaveCurrentInternalToolSettings();
         selected_internal_tool_index_ = index;
         ListBox_SetCurSel(internal_tools_list_, index);
@@ -2237,8 +2286,11 @@ private:
         ListBox_AddString(internal_tools_list_,
             (std::wstring(completion_driver_enabled_ ? L"[✓] " : L"[ ] ") + L"Completion Driver").c_str());
 
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(filesystem_enabled_ ? L"[✓] " : L"[ ] ") + L"Project Filesystem").c_str());
+
         int sel = selected_internal_tool_index_;
-        if (sel < 0 || sel > 4) sel = 0;
+        if (sel < 0 || sel > 5) sel = 0;
         ListBox_SetCurSel(internal_tools_list_, sel);
         toggling_internal_tool_ = false;
         ShowInternalToolSettings(sel);
@@ -2260,6 +2312,11 @@ private:
         ShowWindow(completion_driver_modes_label_, SW_HIDE);
         ShowWindow(completion_driver_modes_list_, SW_HIDE);
         ShowWindow(completion_driver_note_label_, SW_HIDE);
+        ShowWindow(filesystem_enabled_check_, SW_HIDE);
+        ShowWindow(filesystem_auto_archive_check_, SW_HIDE);
+        ShowWindow(filesystem_working_dir_label_, SW_HIDE);
+        ShowWindow(filesystem_working_dir_edit_, SW_HIDE);
+        ShowWindow(filesystem_note_label_, SW_HIDE);
         ShowWindow(questionnaire_enabled_check_, SW_HIDE);
         ShowWindow(questionnaire_max_options_label_, SW_HIDE);
         ShowWindow(questionnaire_max_options_edit_, SW_HIDE);
@@ -2328,6 +2385,22 @@ private:
             EnableWindow(completion_driver_modes_label_, completion_driver_enabled_ ? TRUE : FALSE);
             EnableWindow(completion_driver_modes_list_, completion_driver_enabled_ ? TRUE : FALSE);
         }
+        if (index == 5) {
+            panel_has_content = true;
+            ShowWindow(filesystem_enabled_check_, SW_SHOW);
+            ShowWindow(filesystem_auto_archive_check_, SW_SHOW);
+            ShowWindow(filesystem_working_dir_label_, SW_SHOW);
+            ShowWindow(filesystem_working_dir_edit_, SW_SHOW);
+            ShowWindow(filesystem_note_label_, SW_SHOW);
+            CheckDlgButton(scroll_content_host_, kFilesystemEnabledCheck,
+                filesystem_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+            CheckDlgButton(scroll_content_host_, kFilesystemAutoArchiveCheck,
+                filesystem_auto_archive_ ? BST_CHECKED : BST_UNCHECKED);
+            SetWindowTextW(filesystem_working_dir_edit_, Utf8ToWide(filesystem_working_directory_).c_str());
+            EnableWindow(filesystem_auto_archive_check_, filesystem_enabled_ ? TRUE : FALSE);
+            EnableWindow(filesystem_working_dir_label_, filesystem_enabled_ ? TRUE : FALSE);
+            EnableWindow(filesystem_working_dir_edit_, filesystem_enabled_ ? TRUE : FALSE);
+        }
         if (panel_has_content) {
             std::wstring title;
             switch (index) {
@@ -2336,6 +2409,7 @@ private:
             case 2: title = L"Planner Settings"; break;
             case 3: title = L"Questionnaire Settings"; break;
             case 4: title = L"Completion Driver Settings"; break;
+            case 5: title = L"Filesystem Settings"; break;
             default: title = L"Tool Settings"; break;
             }
             SetWindowTextW(internal_tool_settings_panel_, title.c_str());
@@ -2835,6 +2909,12 @@ private:
                 result.completion_driver_allowed_mode_ids.push_back(options_.agentic_modes[i].id);
             }
         }
+        result.built_in_filesystem_enabled = InternalToolListChecked(5, filesystem_enabled_);
+        result.built_in_filesystem_auto_archive = filesystem_auto_archive_;
+        result.built_in_filesystem_working_directory = filesystem_working_directory_;
+        if (result.built_in_filesystem_working_directory.empty()) {
+            result.built_in_filesystem_working_directory = "$ProjectFolder$";
+        }
         const std::wstring max_opts_text = TrimWide(GetWindowTextString(questionnaire_max_options_edit_));
         result.built_in_questionnaire_enabled = questionnaire_enabled_;
         if (!max_opts_text.empty()) {
@@ -3106,9 +3186,26 @@ private:
         ProjectSettings preview_settings;
         preview_settings.built_in_completion_driver_enabled = settings.built_in_completion_driver_enabled;
         preview_settings.completion_driver_allowed_mode_ids = settings.completion_driver_allowed_mode_ids;
+
+        if (settings.built_in_powershell_enabled) {
+            if (!context.empty()) context += "\n\n";
+            context += built_in_tools::PowerShellSystemPrompt();
+        }
+        if (settings.built_in_planner_enabled) {
+            if (!context.empty()) context += "\n\n";
+            context += built_in_tools::PlannerSystemPrompt();
+        }
         if (built_in_tools::IsCompletionDriverEnabled(preview_settings, settings.selected_agentic_mode_id)) {
             if (!context.empty()) context += "\n\n";
             context += built_in_tools::CompletionDriverSystemPrompt();
+        }
+        if (settings.built_in_questionnaire_enabled) {
+            if (!context.empty()) context += "\n\n";
+            context += built_in_tools::QuestionnaireSystemPrompt();
+        }
+        if (settings.built_in_filesystem_enabled) {
+            if (!context.empty()) context += "\n\n";
+            context += built_in_tools::FilesystemSystemPrompt();
         }
 
         const std::string mcp_context =
@@ -3412,10 +3509,17 @@ private:
     HWND questionnaire_restrict_mode_check_ = nullptr;
     HWND questionnaire_mode_label_ = nullptr;
     HWND questionnaire_mode_combo_ = nullptr;
+    HWND filesystem_enabled_check_ = nullptr;
+    HWND filesystem_auto_archive_check_ = nullptr;
+    HWND filesystem_working_dir_label_ = nullptr;
+    HWND filesystem_working_dir_edit_ = nullptr;
+    HWND filesystem_note_label_ = nullptr;
     bool internal_powershell_enabled_ = false;
     bool internal_artifact_memory_enabled_ = false;
     bool planner_enabled_ = false;
     bool completion_driver_enabled_ = false;
+    bool filesystem_enabled_ = false;
+    bool filesystem_auto_archive_ = false;
     bool toggling_internal_tool_ = false;
     std::vector<bool> agentic_mode_enabled_;
     std::vector<bool> completion_driver_mode_allowed_;
@@ -3425,6 +3529,7 @@ private:
     int selected_internal_tool_index_ = 0;
     std::string workdir_ = "$ProjectFolder$";
     std::string planner_storage_folder_ = "$ProjectFolder$\\.agent";
+    std::string filesystem_working_directory_ = "$ProjectFolder$";
 
     HWND scroll_panel_ = nullptr;
     HWND scroll_backdrop_ = nullptr;
