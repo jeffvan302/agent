@@ -4462,13 +4462,59 @@ void MainWindow::SendCurrentMessage() {
     }
 
     if (selected_compression_config) {
-        // Emergency trigger: if the selected model context is near the configured threshold,
-        // compress before the following turn.
+        // Emergency trigger: if the assembled request exceeds the configured threshold,
+        // compress NOW (before the model call), not on the next turn.
         size_t estimated = EstimateRequestInputTokens(request, {}, false);
         size_t ctx_win = static_cast<size_t>(request.model.context_window);
         int trigger_percent = selected_compression_config->context_window_trigger_percent;
         if (trigger_percent > 0 && ctx_win > 0 && estimated > (ctx_win * static_cast<size_t>(trigger_percent) / 100)) {
             compression_service_.MarkCompressionScheduled(active_project_id_, active_chat_id_);
+            const auto compression_messages = ModelVisibleMessages(active_messages_);
+            auto model_caller = [&](const ChatRequestOptions& opts) -> std::optional<ChatCompletionResult> {
+                auto result = OpenAIClient::CreateSimpleCompletion(opts);
+                return result.success ? std::make_optional(result) : std::nullopt;
+            };
+            // Preserve old compressed context before CompressConversation updates the state.
+            const std::string old_comp = compression_service_.LoadChatState(active_project_id_, active_chat_id_).current_compressed_context;
+            const std::string fresh_compressed = compression_service_.CompressConversation(
+                compression_messages,
+                active_project_id_,
+                active_chat_id_,
+                proj_settings.selected_compression_config_id,
+                model_caller,
+                false,
+                "emergency_threshold",
+                resolved_prompt_variables);
+            if (!fresh_compressed.empty()) {
+                compressed_context = fresh_compressed;
+                auto compression_state = compression_service_.LoadChatState(active_project_id_, active_chat_id_);
+                request_history = ModelVisibleMessages(active_messages_);
+                if (compression_state.last_compression_message_index > 0) {
+                    const size_t first_uncompressed = std::min(compression_state.last_compression_message_index, request_history.size());
+                    request_history.erase(request_history.begin(), request_history.begin() + first_uncompressed);
+                    request_history = message_sanitizer::SanitizeModelVisibleMessages(request_history);
+                }
+                request.messages = std::move(request_history);
+                request.messages.push_back(user_message);
+                // Rebuild system prompt with the new compressed context.
+                // request.system_prompt currently contains the FULL old system prompt including old compressed context.
+                // We replace the old compressed part with the new one.
+                if (!old_comp.empty() && !request.system_prompt.empty()) {
+                    size_t pos = request.system_prompt.find(old_comp);
+                    if (pos != std::string::npos) {
+                        request.system_prompt.replace(pos, old_comp.size(), compressed_context);
+                    } else {
+                        // Old compressed context not found (edge case); prepend new one
+                        request.system_prompt = compressed_context + "\n\n" + request.system_prompt;
+                    }
+                } else {
+                    if (!request.system_prompt.empty()) {
+                        request.system_prompt = compressed_context + "\n\n" + request.system_prompt;
+                    } else {
+                        request.system_prompt = compressed_context;
+                    }
+                }
+            }
         }
     }
 
@@ -4702,7 +4748,7 @@ void MainWindow::SendCurrentMessage() {
         return;
     }
 
-    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, proj_settings, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_]() {
+    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, proj_settings, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_, selected_compression_config, compression_service = &compression_service_]() {
         constexpr int kMaxToolRounds = 8;
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
@@ -4728,6 +4774,10 @@ void MainWindow::SendCurrentMessage() {
         tool_definitions.insert(tool_definitions.end(), built_in_tool_definitions.begin(), built_in_tool_definitions.end());
 
         std::vector<MessageRecord> working_messages = request.messages;
+        // Baseline snapshot before tool calls bloat context. Guard only triggers
+        // if the *pre-loop* assembled request is already close to threshold,
+        // not on natural in-loop assistant/tool-result growth.
+        const std::vector<MessageRecord> pre_tool_loop_messages = working_messages;
         std::string error;
         constexpr int kMaxCompletionDriverRounds = 64;
         const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
@@ -4737,6 +4787,19 @@ void MainWindow::SendCurrentMessage() {
         bool success = false;
 
         for (int round = 0; round < max_rounds; ++round) {
+            // Tool-loop emergency: if pre-tool-loop request already exceeds threshold,
+            // schedule compression for the *next* turn (preserves current tool chain).
+            if (selected_compression_config && request.model.context_window > 0) {
+                ChatRequestOptions check;
+                check.system_prompt = request.system_prompt;
+                check.model = request.model;
+                check.messages = pre_tool_loop_messages;
+                const size_t est_tool = EstimateRequestInputTokens(check, {}, false);
+                const size_t trigger_tool = request.model.context_window * selected_compression_config->context_window_trigger_percent / 100;
+                if (est_tool > trigger_tool) {
+                    compression_service->MarkCompressionScheduled(project_id, chat_id);
+                }
+            }
             ChatRequestOptions loop_request = request;
             loop_request.messages = working_messages;
 

@@ -1909,3 +1909,19 @@ Provider Test Connection diagnostic log
   ping result success=1 message=
 --- end connection test ---
 
+Provider Test Connection diagnostic log
+[2026-05-05T04:35:47Z] TestConnection called
+  provider=Agent Remote Worker type=agent_https
+  model=kimi-k2.6:cloud (kimi-k2.6-direct) embedding=no
+  standard OpenAI-compatible non-embedding path
+  sending ping
+[2026-05-05T04:35:47Z] RunRequest: POST https://127.0.0.1:8765/chat/completions
+[2026-05-05T04:35:47Z]   stream=0 provider=Agent Remote Worker model=kimi-k2.6:cloud
+[2026-05-05T04:35:47Z]   body: {"max_tokens":8,"messages":[{"content":"Reply with the single word pong.","role":"user"}],"model":"kimi-k2.6:cloud","reasoning_effort":"max","stream":false,"temperature":0.0}
+[2026-05-05T04:35:47Z]   parsed host=127.0.0.1 port=8765 path=/chat/completions
+[2026-05-05T04:35:47Z]   attempt 1/4
+[2026-05-05T04:35:52Z]   attempt 1 HTTP status=200
+[2026-05-05T04:35:52Z]   response length=339
+  ping result success=1 message=Connection succeeded.
+--- end connection test ---
+

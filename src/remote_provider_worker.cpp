@@ -835,6 +835,9 @@ void ProxyPostSync(const httplib::Request& req,
         }
     }
 
+    if (!target_model.empty()) {
+        WriteLine(L"Agent request: model=" + Utf8ToWide(resolved_model_id) + L"  provider=" + Utf8ToWide(exp->provider.name));
+    }
     // For Ollama local, ensure ollama is running
     std::string upstream_error;
     if (!EnsureOllamaLocalRunning(exp->provider, &upstream_error)) {
@@ -983,6 +986,7 @@ int RunRemoteProviderWorker(const fs::path& config_path) {
             SetJson(res, json{{"error", "unauthorized"}}, 401);
             return;
         }
+        WriteLine(L"Agent health check");
         json providers = json::array();
         for (const auto& exp : config->exported_providers) {
             json models = json::array();
@@ -1014,6 +1018,7 @@ int RunRemoteProviderWorker(const fs::path& config_path) {
             SetJson(res, json{{"error", "unauthorized"}}, 401);
             return;
         }
+        WriteLine(L"Agent catalog request");
         SetJson(res, BuildModelsList(*config));
     });
 
@@ -1022,6 +1027,7 @@ int RunRemoteProviderWorker(const fs::path& config_path) {
             SetJson(res, json{{"error", "unauthorized"}}, 401);
             return;
         }
+        WriteLine(L"Agent Ollama tags request");
         // Ollama model listing: return models from Ollama-local providers
         json models = json::array();
         for (const auto& exp : config->exported_providers) {

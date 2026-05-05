@@ -1,4 +1,4 @@
-// WIN32_LEAN_AND_MEAN prevents <windows.h> from pulling in the old winsock.h,
+﻿// WIN32_LEAN_AND_MEAN prevents <windows.h> from pulling in the old winsock.h,
 // allowing cpp-httplib to include <winsock2.h> first (required on Windows).
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -3395,14 +3395,14 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
     return built;
 }
 
-void MaybeScheduleCompression(
+bool MaybeScheduleCompression(
     ContextCompressionService* compression_service,
     const std::optional<ContextCompressionConfig>& selected_config,
     const std::string& project_id,
     const std::string& chat_id,
     const ChatRequestOptions& request) {
     if (!compression_service || !selected_config) {
-        return;
+        return false;
     }
 
     const size_t context_window =
@@ -3412,7 +3412,7 @@ void MaybeScheduleCompression(
     const int trigger_percent =
         selected_config->context_window_trigger_percent;
     if (context_window == 0 || trigger_percent <= 0) {
-        return;
+        return false;
     }
 
     const size_t estimated_tokens =
@@ -3421,7 +3421,9 @@ void MaybeScheduleCompression(
         context_window * static_cast<size_t>(trigger_percent) / 100;
     if (estimated_tokens > trigger_tokens) {
         compression_service->MarkCompressionScheduled(project_id, chat_id);
+        return true;
     }
+    return false;
 }
 
 WebServer::ModelCallResult
@@ -3579,12 +3581,33 @@ WebServer::CallModel(const std::string& project_id,
         built_in_tool_definitions.begin(),
         built_in_tool_definitions.end());
 
-    MaybeScheduleCompression(
+    if (MaybeScheduleCompression(
         &compression_service_,
         prepared_history.selected_config,
         project_id,
         chat_id,
-        opts);
+        opts)) {
+        // Threshold exceeded: re-run compression before this turn
+        const auto refreshed = PrepareWebRequestHistory(
+            storage_,
+            &compression_service_,
+            project_id,
+            chat_id,
+            proj_settings,
+            stored_messages,
+            resolved_prompt_variables);
+        opts.messages = refreshed.request_history;
+        opts.messages.push_back(user_msg);
+        if (!refreshed.compressed_context.empty()) {
+            opts.system_prompt = built_system_prompt.full_prompt;
+            const std::string old_comp = prepared_history.compressed_context;
+            if (!old_comp.empty() && opts.system_prompt.rfind(old_comp, 0) == 0) {
+                opts.system_prompt.replace(0, old_comp.size(), refreshed.compressed_context);
+            } else {
+                opts.system_prompt = refreshed.compressed_context + "\n\n" + opts.system_prompt;
+            }
+        }
+    }
 
     if (!tool_definitions.empty()) {
         constexpr int kMaxToolRounds = 8;
@@ -3593,10 +3616,27 @@ WebServer::CallModel(const std::string& project_id,
             proj_settings, effective_agentic_mode_id);
         const int max_rounds = completion_driver_enabled ? kMaxCompletionDriverRounds : kMaxToolRounds;
         std::vector<MessageRecord> working_messages = opts.messages;
+        // Baseline snapshot before tool calls bloat context. Guard only triggers
+        // if the *pre-loop* assembled request is already close to threshold,
+        // not on natural in-loop assistant/tool-result growth.
+        const std::vector<MessageRecord> pre_tool_loop_messages = working_messages;
         bool completion_driver_done = !completion_driver_enabled;
         bool success = false;
 
         for (int round = 0; round < max_rounds; ++round) {
+            // Tool-loop emergency: if pre-tool-loop request already exceeds threshold,
+            // schedule compression for the *next* turn (preserves current tool chain).
+            if (prepared_history.selected_config && opts.model.context_window > 0) {
+                ChatRequestOptions check;
+                check.system_prompt = opts.system_prompt;
+                check.model = opts.model;
+                check.messages = working_messages;
+                const size_t est_tool = EstimateRequestInputTokens(check, {}, {}, false);
+                const size_t trigger_tool = opts.model.context_window * prepared_history.selected_config->context_window_trigger_percent / 100;
+                if (est_tool > trigger_tool) {
+                    compression_service_.MarkCompressionScheduled(project_id, chat_id);
+                }
+            }
             ChatRequestOptions loop_opts = opts;
             loop_opts.messages = working_messages;
 
@@ -3974,12 +4014,33 @@ std::string WebServer::StreamModel(const std::string& project_id,
         built_in_tool_definitions.begin(),
         built_in_tool_definitions.end());
 
-    MaybeScheduleCompression(
+    if (MaybeScheduleCompression(
         &compression_service_,
         prepared_history.selected_config,
         project_id,
         chat_id,
-        opts);
+        opts)) {
+        // Threshold exceeded: re-run compression before this turn
+        const auto refreshed = PrepareWebRequestHistory(
+            storage_,
+            &compression_service_,
+            project_id,
+            chat_id,
+            proj_settings,
+            stored_messages,
+            resolved_prompt_variables);
+        opts.messages = refreshed.request_history;
+        opts.messages.push_back(user_msg);
+        if (!refreshed.compressed_context.empty()) {
+            opts.system_prompt = built_system_prompt.full_prompt;
+            const std::string old_comp = prepared_history.compressed_context;
+            if (!old_comp.empty() && opts.system_prompt.rfind(old_comp, 0) == 0) {
+                opts.system_prompt.replace(0, old_comp.size(), refreshed.compressed_context);
+            } else {
+                opts.system_prompt = refreshed.compressed_context + "\n\n" + opts.system_prompt;
+            }
+        }
+    }
 
     if (on_context_usage) {
         std::vector<ChatToolDefinition> extra_tool_definitions = rag_tool_set.definitions;
@@ -4015,6 +4076,18 @@ std::string WebServer::StreamModel(const std::string& project_id,
         bool success = false;
 
         for (int round = 0; round < max_rounds; ++round) {
+            // Tool-loop emergency: if threshold exceeded mid-loop, schedule for next turn
+            if (prepared_history.selected_config && opts.model.context_window > 0) {
+                ChatRequestOptions check;
+                check.system_prompt = opts.system_prompt;
+                check.model = opts.model;
+                check.messages = working_messages;
+                const size_t est_tool = EstimateRequestInputTokens(check, {}, {}, false);
+                const size_t trigger_tool = opts.model.context_window * prepared_history.selected_config->context_window_trigger_percent / 100;
+                if (est_tool > trigger_tool) {
+                    compression_service_.MarkCompressionScheduled(project_id, chat_id);
+                }
+            }
             ChatRequestOptions loop_opts = opts;
             loop_opts.messages = working_messages;
 
@@ -5777,3 +5850,4 @@ void WebServer::Reconfigure(const WebServerConfig& new_config)
 
     if (was_running) Start();
 }
+
