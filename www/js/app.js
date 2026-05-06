@@ -63,8 +63,9 @@ let state = {
   projectEnableWebDebugging: false,
   projectEnableAutomation: false,
   automationSequence: [],
-  automationRecording: false,
+  automationPanelOpen: false,
   automationRunning: false,
+  selectedAutomationStepIndex: -1,
   webDebuggingActive: false,
   plannerEnabled: false,
   plannerPlan: null,
@@ -590,7 +591,7 @@ function renderMessages(messages) {
         msg.ui_trace.length) {
       messagesEl.appendChild(buildAssistantTraceRow(msg.ui_trace, msg.content || ''));
     } else {
-      messagesEl.appendChild(buildMessageRow(msg.role, msg.content));
+      messagesEl.appendChild(buildMessageRow(msg.role, msg.content, msg.name));
     }
   }
   messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -1384,7 +1385,7 @@ function buildWebDebugRow(content) {
   return row;
 }
 
-function buildMessageRow(role, content) {
+function buildMessageRow(role, content, modeName) {
   if (role === 'file') return buildFileUploadRow(content);
   if (role === 'context') return buildContextUsageRow(content);
   if (role === 'compression') return buildCompressionRow(content);
@@ -1396,7 +1397,15 @@ function buildMessageRow(role, content) {
 
   const lbl = document.createElement('div');
   lbl.className = 'message-role-label';
-  lbl.textContent = role === 'user' ? 'You' : role === 'error' ? '\u26A0' : 'Assistant';
+  if (role === 'user') {
+    lbl.textContent = 'You';
+  } else if (role === 'error') {
+    lbl.textContent = '\u26A0';
+  } else if (role === 'assistant' && modeName) {
+    lbl.textContent = 'Assistant (' + modeName + ')';
+  } else {
+    lbl.textContent = 'Assistant';
+  }
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble' + (role === 'error' ? ' error' : '');
@@ -2112,9 +2121,9 @@ function renderAutomateButton() {
   } else {
     automateBtn.style.display = 'none';
     automateBtn.disabled = true;
-    state.automationRecording = false;
-    state.automationSequence = [];
+    state.automationPanelOpen = false;
     if (automationPanelEl) automationPanelEl.style.display = 'none';
+    updateSendButtonForAutomation();
   }
 }
 
@@ -2984,11 +2993,30 @@ async function sendMessage() {
   }
 }
 
-sendBtn.addEventListener('click', sendMessage);
+function updateSendButtonForAutomation() {
+  if (!sendBtn) return;
+  if (state.automationPanelOpen) {
+    sendBtn.textContent = state.selectedAutomationStepIndex >= 0 ? 'Update Step' : 'Add Step';
+  } else {
+    sendBtn.textContent = 'Send';
+  }
+}
+
+sendBtn.addEventListener('click', () => {
+  if (state.automationPanelOpen) {
+    addOrUpdateAutomationStep();
+  } else {
+    sendMessage();
+  }
+});
 messageInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    sendMessage();
+    if (state.automationPanelOpen) {
+      addOrUpdateAutomationStep();
+    } else {
+      sendMessage();
+    }
   }
 });
 

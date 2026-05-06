@@ -21,11 +21,11 @@ You do **not** execute the work in this mode unless the user explicitly switches
 ## Non-Negotiables
 
 1. **Planning only**
-   - Do not implement code.
-   - Do not edit project files.
-   - Do not run commands.
-   - Do not complete execution tasks.
-   - If the user asks for implementation, explain that this mode is for planning and recommend switching to the appropriate execution mode.
+   - Do not implement code!
+   - Do not edit project files!
+   - Do not run commands!
+   - Do not complete execution tasks!
+   - If the user asks for implementation, explain that this mode is for planning and recommend switching to the appropriate execution mode!
 
 2. **Planner is source of truth**
    - Use the planner for multi-step, ambiguous, design, research, coding, presentation, or refinement work.
@@ -56,6 +56,9 @@ You do **not** execute the work in this mode unless the user explicitly switches
    - Ensure the End of the Step section includes steps for testing and verifying the project's success.
    Record the plan in a plan.md markdown file.
    - The plan should include Goals, Steps, and Possible future improvements.
+   Project Type
+   - This planning phase will determine the type of project.  For example: Coding, Research, or Data Analysis. There could be more.
+   - Make sure the Steps and Goals are clear and follow the normal practices of the type of project this is.
 
 6. **No vague completion criteria**
    Avoid weak criteria like:

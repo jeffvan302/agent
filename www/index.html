@@ -1,5 +1,8 @@
 
 
+
+
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -35,6 +38,7 @@
         <!-- Populated by app.js -->
       </div>
       <button id="new-chat-btn" disabled>+ New Chat</button>
+      <div id="automation-running-status" class="automation-running-status" style="display:none"></div>
       <div id="planner-panel" class="planner-panel" hidden></div>
     </nav>
 
@@ -65,13 +69,12 @@
         <div id="compose-bottom">
           <div id="automation-panel" style="display:none">
             <div id="automation-toolbar">
-              <span id="automation-status">Recording sequence</span>
+              <span id="automation-status">0 step(s)</span>
               <label class="automation-field">Repeat:<input id="automation-repeat" type="number" min="1" max="50" value="1"></label>
               <label class="automation-field"><input id="automation-compress" type="checkbox">Compress</label>
               <div class="automation-toolbar-actions">
                 <button id="automation-add-step-btn" type="button">+ Step</button>
                 <button id="automation-clear-btn" type="button">Clear</button>
-                <button id="automation-done-btn" type="button">Done</button>
                 <button id="automation-send-btn" type="button" style="display:none">Send Sequence</button>
               </div>
             </div>
@@ -145,4 +148,7 @@
 <script src="/js/automation.js"></script>
 </body>
 </html>
+
+
+
 

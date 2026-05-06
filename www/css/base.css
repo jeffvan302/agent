@@ -1107,11 +1107,23 @@ color-accent-primary);
   width: 44px; padding: 2px 4px; border: 1px solid var(--color-border-input); border-radius: var(--radius-input); background: var(--color-bg-input); color: var(--color-text-primary); font-size: var(--font-size-small);
 }
 #automation-steps { max-height: 160px; overflow-y: auto; }
-.automation-step { display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid var(--color-border-main); border-radius:var(--radius-input); margin-bottom:6px; background:var(--color-bg-main); font-size:var(--font-size-small); color:var(--color-text-primary); }
+.automation-step { display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid var(--color-border-main); border-radius:var(--radius-input); margin-bottom:6px; background:var(--color-bg-main); font-size:var(--font-size-small); color:var(--color-text-primary); cursor:pointer; }
+.automation-step.selected { border-color: var(--color-accent-primary); background: var(--color-accent-primary-soft, rgba(0,0,0,0.05)); }
 .automation-step .step-index { font-weight:700; color:var(--color-accent-primary); min-width:22px; }
 .automation-step .step-name { font-weight:600; }
 .automation-step .step-prompt { color:var(--color-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 240px; }
 .automation-step .step-meta { color:var(--color-text-muted); margin-left:auto; white-space:nowrap; }
+
+.automation-running-status {
+  font-size: var(--font-size-small);
+  color: var(--color-text-primary);
+  background: var(--color-bg-main);
+  border: 1px solid var(--color-accent-primary);
+  border-radius: var(--radius-input);
+  padding: 6px 10px;
+  margin: 6px 0;
+  font-weight: 600;
+}
 
 #compose-bottom-row {
   display: flex;
@@ -1366,3 +1378,53 @@ color-accent-primary);
   font-size: var(--font-size-small);
   display: none;
 }
+
+
+
+
+'use strict';
+
+document.getElementById('login-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+
+  const btn = document.getElementById('login-btn');
+  const errEl = document.getElementById('login-error');
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  const rememberMe = !!document.getElementById('remember-me')?.checked;
+
+  btn.disabled = true;
+  btn.textContent = 'Signing in...';
+  errEl.style.display = 'none';
+
+  try {
+    const resp = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, remember_me: rememberMe }),
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      if (data.force_password_reset) {
+        sessionStorage.setItem('force_password_reset', 'true');
+        window.location.href = '/change-password';
+      } else {
+        window.location.href = '/';
+      }
+    } else {
+      errEl.textContent = data.error || 'Login failed.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    }
+  } catch (err) {
+    errEl.textContent = 'Network error - is the server running?';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+});
+
+
+

@@ -2,6 +2,9 @@
   "allow_manual_context_compression": true,
   "built_in_artifact_memory_enabled": true,
   "built_in_completion_driver_enabled": false,
+  "built_in_filesystem_auto_archive": false,
+  "built_in_filesystem_enabled": false,
+  "built_in_filesystem_working_directory": "$ProjectFolder$",
   "built_in_planner_enabled": false,
   "built_in_planner_storage_folder": "$ProjectFolder$\\.agent",
   "built_in_powershell_enabled": false,
@@ -12,6 +15,7 @@
     "mode_1411300765"
   ],
   "compression_configs": [],
+  "enable_automation": true,
   "enable_chat_logging": false,
   "enable_web_debugging": true,
   "enabled_agentic_mode_ids": [

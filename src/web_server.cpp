@@ -2999,8 +2999,10 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
                 continue;
             }
             if (m.content.empty()) continue;
-            arr.push_back({{"role", m.role}, {"content", m.content},
-                           {"created_at", m.created_at}});
+            json item = {{"role", m.role}, {"content", m.content},
+                       {"created_at", m.created_at}};
+            if (!m.name.empty()) item["name"] = m.name;
+            arr.push_back(item);
             continue;
         }
         flush_pending_assistant();
@@ -3504,6 +3506,16 @@ WebServer::CallModel(const std::string& project_id,
     const std::string effective_agentic_mode_id = chat_selected_agentic_mode_id.empty()
         ? proj_settings.selected_agentic_mode_id
         : chat_selected_agentic_mode_id;
+    std::string resolved_mode_name;
+    {
+        const auto all_modes = storage_->LoadAgenticModes();
+        for (const auto& m : all_modes) {
+            if (m.id == effective_agentic_mode_id) {
+                resolved_mode_name = m.name;
+                break;
+            }
+        }
+    }
 
     // Load existing message history and prepare any compressed request view.
     const auto stored_messages = storage_->LoadMessages(project_id, chat_id);
@@ -3725,38 +3737,40 @@ WebServer::CallModel(const std::string& project_id,
                 asst_msg.role       = "assistant";
                 asst_msg.content    = completion.assistant_text;
                 asst_msg.created_at = NowIso();
+                asst_msg.name       = resolved_mode_name;
                 messages.push_back(asst_msg);
                 working_messages.push_back(asst_msg);
                 result.assistant_text = completion.assistant_text;
             }
-            if (completion_driver_enabled && !completion_driver_done) {
-                working_messages.push_back(
-                    built_in_tools::MakeCompletionDriverContinuationMessage(round + 1));
-                continue;
-            }
-            success = true;
-            break;
-        }
+      if (completion_driver_enabled && !completion_driver_done) {
+        working_messages.push_back(
+          built_in_tools::MakeCompletionDriverContinuationMessage(round + 1));
+        continue;
+      }
+      success = true;
+      break;
+    }
 
-        if (!success) {
-            ChatRequestOptions final_opts = opts;
-            final_opts.messages = working_messages;
-            if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
-            final_opts.system_prompt +=
-                "The MCP tool-call round limit has been reached. Do not call or "
-                "request any more tools. Use the tool results already present in "
-                "the conversation to write the final answer. If the requested work "
-                "succeeded, say so and summarize the important output. If it did "
-                "not fully succeed, explain the last observed state and what remains.";
+    if (!success) {
+      ChatRequestOptions final_opts = opts;
+      final_opts.messages = working_messages;
+      if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
+      final_opts.system_prompt +=
+        "The MCP tool-call round limit has been reached. Do not call or "
+        "request any more tools. Use the tool results already present in "
+        "the conversation to write the final answer. If the requested work "
+        "succeeded, say so and summarize the important output. If it did "
+        "not fully succeed, explain the last observed state and what remains.";
 
-            const auto final_completion =
-                OpenAIClient::CreateSimpleCompletion(final_opts);
-            if (final_completion.success && !final_completion.assistant_text.empty()) {
-                MessageRecord asst_msg;
-                asst_msg.role       = "assistant";
-                asst_msg.content    = final_completion.assistant_text;
-                asst_msg.created_at = NowIso();
-                messages.push_back(asst_msg);
+      const auto final_completion =
+        OpenAIClient::CreateSimpleCompletion(final_opts);
+      if (final_completion.success && !final_completion.assistant_text.empty()) {
+        MessageRecord asst_msg;
+        asst_msg.role       = "assistant";
+        asst_msg.content    = final_completion.assistant_text;
+        asst_msg.created_at = NowIso();
+        asst_msg.name       = resolved_mode_name;
+        messages.push_back(asst_msg);
                 storage_->SaveMessages(project_id, chat_id, messages);
                 NotifyContentChanged();
                 result.success = true;
@@ -3939,6 +3953,16 @@ std::string WebServer::StreamModel(const std::string& project_id,
     const std::string effective_agentic_mode_id = chat_selected_agentic_mode_id.empty()
         ? proj_settings.selected_agentic_mode_id
         : chat_selected_agentic_mode_id;
+    std::string resolved_mode_name;
+    {
+        const auto all_modes = storage_->LoadAgenticModes();
+        for (const auto& m : all_modes) {
+            if (m.id == effective_agentic_mode_id) {
+                resolved_mode_name = m.name;
+                break;
+            }
+        }
+    }
 
     const auto prepared_history = PrepareWebRequestHistory(
         storage_,
@@ -4140,6 +4164,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     asst_msg.role = "assistant";
                     asst_msg.content = accumulated;
                     asst_msg.created_at = NowIso();
+                    asst_msg.name = resolved_mode_name;
                     messages.push_back(asst_msg);
                     storage_->SaveMessages(project_id, chat_id, messages);
                     NotifyContentChanged();
@@ -4302,6 +4327,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 asst_msg.role = "assistant";
                 asst_msg.content = completion.assistant_text;
                 asst_msg.created_at = NowIso();
+                asst_msg.name = resolved_mode_name;
                 messages.push_back(asst_msg);
                 working_messages.push_back(asst_msg);
                 storage_->SaveMessages(project_id, chat_id, messages);
@@ -4370,6 +4396,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 asst_msg.role = "assistant";
                 asst_msg.content = final_text;
                 asst_msg.created_at = NowIso();
+                asst_msg.name = resolved_mode_name;
                 messages.push_back(asst_msg);
                 storage_->SaveMessages(project_id, chat_id, messages);
                 NotifyContentChanged();
@@ -4429,6 +4456,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
         asst_msg.role       = "assistant";
         asst_msg.content    = accumulated;
         asst_msg.created_at = NowIso();
+        asst_msg.name       = resolved_mode_name;
         messages.push_back(asst_msg);
         storage_->SaveMessages(project_id, chat_id, messages);
         NotifyContentChanged();
