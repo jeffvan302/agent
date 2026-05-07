@@ -301,6 +301,16 @@ private:
         int repeat = 1;
     };
 
+    struct AutomationToolTraceItem {
+        std::string tool_call_id;
+        std::string tool_name;
+        std::string arguments_json;
+        std::string result_json;
+        std::string status;
+        std::string started_at;
+        std::string updated_at;
+    };
+
     // Server-owned automation jobs let the browser leave, reload, or switch
     // chats while a sequence keeps running. The worker calls StreamModel, so
     // each step inherits the normal tool loop, completion-driver continuation,
@@ -323,8 +333,11 @@ private:
         std::string queue_provider;
         std::string live_response;
         std::string live_mode_name;
+        std::string live_started_at;
         std::string current_tool_name;
         std::string current_tool_status;
+        std::string current_tool_at;
+        std::vector<AutomationToolTraceItem> live_tool_trace;
         std::string heartbeat_at;
         std::string heartbeat_message;
         int queue_position = 0;

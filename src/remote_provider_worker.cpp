@@ -888,8 +888,7 @@ void ProxyPostSync(const httplib::Request& req,
                 auto response = client.Post(ollama_path ? "/api/chat" : "/v1/chat/completions",
                     hdrs, body, "application/json",
                     [&](const char* data, size_t len) {
-                        sink.write(data, len);
-                        return true;
+                        return sink.write(data, len);
                     });
                 if (!response) {
                     std::string msg = ollama_path

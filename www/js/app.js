@@ -75,6 +75,7 @@ let state = {
   plannerExpanded: {},
   plannerRefreshTimer: null,
   activeAbortController: null,
+  activeAbortControllers: {},
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -727,9 +728,19 @@ function renderMessages(messages) {
         msg.role === 'assistant' &&
         Array.isArray(msg.ui_trace) &&
         msg.ui_trace.length) {
-      messagesEl.appendChild(buildAssistantTraceRow(msg.ui_trace, msg.content || '', msg.name || ''));
+      messagesEl.appendChild(buildAssistantTraceRow(
+        msg.ui_trace,
+        msg.content || '',
+        msg.name || '',
+        msg.created_at || ''
+      ));
     } else {
-      messagesEl.appendChild(buildMessageRow(msg.role, msg.content, msg.name));
+      messagesEl.appendChild(buildMessageRow(
+        msg.role,
+        msg.content,
+        msg.name,
+        msg.created_at || ''
+      ));
     }
   }
   if (typeof renderAutomationLiveResponse === 'function') {
@@ -965,8 +976,33 @@ function formatContextUsageText(used, total) {
   return 'CTX: ' + usedText;
 }
 
+function normalizeContextUsageRecord(content) {
+  let record = content;
+  if (typeof record === 'string') {
+    try {
+      const parsed = JSON.parse(record);
+      if (parsed && typeof parsed === 'object') record = parsed;
+    } catch (_) {}
+  }
+  if (typeof record === 'string') {
+    return { text: record };
+  }
+  record = record || {};
+  const used = record.used_tokens !== undefined ? record.used_tokens : record.ctx_used;
+  const total = record.total_tokens !== undefined ? record.total_tokens : record.ctx_total;
+  return {
+    text: record.text || formatContextUsageText(used, total),
+    used_tokens: used,
+    total_tokens: total,
+    request_id: record.request_id || '',
+    provider_name: record.provider_name || '',
+    model_id: record.model_id || '',
+    mode_name: record.mode_name || '',
+  };
+}
+
 function buildContextUsageRow(content, pending = false) {
-  content = content || '';
+  const record = normalizeContextUsageRecord(content || '');
   const row = document.createElement('div');
   row.className = 'message-row context-usage';
   if (pending) row.classList.add('is-pending');
@@ -986,8 +1022,22 @@ function buildContextUsageRow(content, pending = false) {
 
   const value = document.createElement('span');
   value.className = 'context-usage-value';
-  value.textContent = content.indexOf('CTX:') === 0 ? content.slice(4).trim() : content;
+  const text = record.text || '';
+  value.textContent = text.indexOf('CTX:') === 0 ? text.slice(4).trim() : text;
   bubble.appendChild(value);
+
+  const metaParts = [];
+  if (record.provider_name || record.model_id) {
+    metaParts.push([record.provider_name, record.model_id].filter(Boolean).join(' / '));
+  }
+  if (record.mode_name) metaParts.push(record.mode_name);
+  if (record.request_id) metaParts.push(record.request_id);
+  if (metaParts.length) {
+    const meta = document.createElement('span');
+    meta.style.cssText = 'font-size:11px;color:var(--color-text-muted);margin-left:6px;';
+    meta.textContent = metaParts.join('  ·  ');
+    bubble.appendChild(meta);
+  }
 
   row.appendChild(lbl);
   row.appendChild(bubble);
@@ -1011,6 +1061,9 @@ function normalizeCompressionRecord(content) {
     status: record.status === 'live' ? 'live' : 'done',
     before_messages: record.before_messages,
     after_messages: record.after_messages,
+    before_tokens: record.before_tokens,
+    after_tokens: record.after_tokens,
+    compressed_context_tokens: record.compressed_context_tokens,
     compressed_through: record.compressed_through,
     created_at: record.created_at,
   };
@@ -1054,6 +1107,14 @@ function createCompressionRow(content) {
     const parts = [];
     if (typeof record.before_messages === 'number' && typeof record.after_messages === 'number') {
       parts.push(record.before_messages + ' \u2192 ' + record.after_messages + ' messages');
+    }
+    if (typeof record.before_tokens === 'number' && typeof record.after_tokens === 'number') {
+      parts.push(
+        Number(record.before_tokens).toLocaleString() +
+        ' \u2192 ' +
+        Number(record.after_tokens).toLocaleString() +
+        ' tokens'
+      );
     }
     if (record.created_at) {
       parts.push(new Date(record.created_at).toLocaleString());
@@ -1266,6 +1327,28 @@ function normalizeAssistantTrace(trace, fallbackContent = '') {
   return normalized;
 }
 
+function formatMessageTimestamp(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function messageRoleLabel(role, modeName = '', createdAt = '') {
+  const time = formatMessageTimestamp(createdAt);
+  const suffix = time ? ' [' + time + ']' : '';
+  if (role === 'user') return 'You' + suffix;
+  if (role === 'error') return '\u26A0';
+  if (role === 'assistant' && modeName) {
+    return 'Assistant (' + modeName + ')' + suffix;
+  }
+  return 'Assistant' + suffix;
+}
+
 function prettyToolUsageText(value) {
   if (value == null) return '';
   if (typeof value === 'string') {
@@ -1300,6 +1383,8 @@ function normalizeToolUsageRecord(content) {
     toolName: record.tool_name || record.toolName || 'Tool',
     arguments: prettyToolUsageText(record.arguments || record.tool_arguments || ''),
     result: prettyToolUsageText(record.result || record.tool_result || ''),
+    startedAt: record.started_at || record.startedAt || record.created_at || record.createdAt || '',
+    updatedAt: record.updated_at || record.updatedAt || record.finished_at || record.finishedAt || '',
     status: record.status === 'error' ? 'error'
       : record.status === 'live' ? 'live'
       : 'done',
@@ -1307,13 +1392,19 @@ function normalizeToolUsageRecord(content) {
 }
 
 function formatToolUsageSummary(record) {
+  const timestamp = formatMessageTimestamp(
+    record.status === 'live'
+      ? (record.startedAt || record.updatedAt)
+      : (record.updatedAt || record.startedAt)
+  );
+  const suffix = timestamp ? ' [' + timestamp + ']' : '';
   if (record.status === 'live') {
-    return 'Using ' + record.toolName + '...';
+    return 'Using ' + record.toolName + '...' + suffix;
   }
   if (record.status === 'error') {
-    return 'Tool error: ' + record.toolName;
+    return 'Tool error: ' + record.toolName + suffix;
   }
-  return 'Used ' + record.toolName;
+  return 'Used ' + record.toolName + suffix;
 }
 
 function createToolUsageBlock(content) {
@@ -1426,13 +1517,13 @@ function renderAssistantTraceBubble(bubble, trace, options = {}) {
   return normalized;
 }
 
-function buildAssistantTraceRow(trace, fallbackContent = '', modeName = '') {
+function buildAssistantTraceRow(trace, fallbackContent = '', modeName = '', createdAt = '') {
   const row = document.createElement('div');
   row.className = 'message-row model';
 
   const lbl = document.createElement('div');
   lbl.className = 'message-role-label';
-  lbl.textContent = modeName ? 'Assistant (' + modeName + ')' : 'Assistant';
+  lbl.textContent = messageRoleLabel('assistant', modeName, createdAt);
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
@@ -1480,7 +1571,7 @@ function parseWebDebugRecord(content) {
 function createDebugSection(title, text) {
   const details = document.createElement('details');
   details.className = 'web-debug-section';
-  details.open = title === 'System Prompt';
+  details.open = title === 'Request Summary' || title === 'System Prompt';
 
   const summary = document.createElement('summary');
   summary.textContent = title;
@@ -1492,6 +1583,16 @@ function createDebugSection(title, text) {
   return details;
 }
 
+function formatDebugValue(value) {
+  if (value === undefined || value === null || value === '') return '(empty)';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_) {
+    return String(value);
+  }
+}
+
 function formatDebugMessages(messages) {
   if (!Array.isArray(messages) || !messages.length) return '(none)';
   return messages.map((msg, idx) => {
@@ -1499,6 +1600,54 @@ function formatDebugMessages(messages) {
     const content = msg && msg.content ? msg.content : '';
     return `#${idx + 1} [${role}]\n${content}`;
   }).join('\n\n---\n\n');
+}
+
+function formatDebugSections(sections) {
+  if (!Array.isArray(sections) || !sections.length) return '(none)';
+  return sections.map(section => {
+    const title = section && (section.title || section.name) ? (section.title || section.name) : 'Section';
+    const content = section && section.content ? section.content : '';
+    return '## ' + title + '\n' + content;
+  }).join('\n\n---\n\n');
+}
+
+function formatDebugTools(tools) {
+  if (!Array.isArray(tools) || !tools.length) return '(none)';
+  return tools.map((tool, idx) => {
+    const name = tool && tool.name ? tool.name : ('tool_' + (idx + 1));
+    const desc = tool && tool.description ? tool.description : '';
+    const params = tool && tool.parameters !== undefined
+      ? tool.parameters
+      : (tool ? tool.parameters_json : '');
+    const tokenLine = tool && tool.estimated_tokens !== undefined
+      ? '\nEstimated tokens: ' + tool.estimated_tokens
+      : '';
+    return '#' + (idx + 1) + ' ' + name +
+      tokenLine +
+      '\n\nDescription:\n' + (desc || '(empty)') +
+      '\n\nParameters:\n' + formatDebugValue(params);
+  }).join('\n\n---\n\n');
+}
+
+function formatRequestSummary(record) {
+  const provider = record.provider || {};
+  const model = record.model || {};
+  const mode = record.mode || {};
+  const ctx = record.context_window || {};
+  const parts = [];
+  if (record.request_id) parts.push('Request: ' + record.request_id);
+  const providerText = [provider.name, provider.id].filter(Boolean).join(' / ');
+  const modelText = [model.display_name, model.id].filter(Boolean).join(' / ');
+  const modeText = [mode.name, mode.id].filter(Boolean).join(' / ');
+  if (providerText) parts.push('Provider: ' + providerText);
+  if (modelText) parts.push('Model: ' + modelText);
+  if (modeText) parts.push('Mode: ' + modeText);
+  if (ctx.used_tokens !== undefined) {
+    parts.push('Context: ' + formatContextUsageText(ctx.used_tokens, ctx.total_tokens));
+  }
+  if (ctx.message_count !== undefined) parts.push('Context messages: ' + ctx.message_count);
+  if (ctx.tool_count !== undefined) parts.push('Tools: ' + ctx.tool_count);
+  return parts.filter(Boolean).join('\n');
 }
 
 function buildWebDebugRow(content) {
@@ -1517,16 +1666,31 @@ function buildWebDebugRow(content) {
   title.className = 'web-debug-title';
   title.textContent = 'Prompt sent to model';
   bubble.appendChild(title);
+  bubble.appendChild(createDebugSection('Request Summary', formatRequestSummary(record)));
   bubble.appendChild(createDebugSection('System Prompt', record.system_prompt || ''));
-  bubble.appendChild(createDebugSection('User Prompt', record.user_prompt || ''));
-  bubble.appendChild(createDebugSection('Context Messages', formatDebugMessages(record.request_messages)));
+  bubble.appendChild(createDebugSection('System Sections', formatDebugSections(record.system_sections)));
+  bubble.appendChild(createDebugSection('Tools (not chat history)', formatDebugTools(record.tools)));
+  bubble.appendChild(createDebugSection(
+    'Context Messages (compressible)',
+    formatDebugMessages(record.compressible_messages || record.request_messages)
+  ));
+  bubble.appendChild(createDebugSection(
+    'Chat Records Not Sent',
+    formatDebugMessages(record.non_model_chat_records)
+  ));
+  bubble.appendChild(createDebugSection('Project Settings', formatDebugValue(record.project_settings)));
+  bubble.appendChild(createDebugSection('Compression', formatDebugValue(record.compression)));
+  bubble.appendChild(createDebugSection('Notes', formatDebugValue(record.notes)));
+  if (record.user_prompt !== undefined) {
+    bubble.appendChild(createDebugSection('User Prompt', record.user_prompt || ''));
+  }
 
   row.appendChild(lbl);
   row.appendChild(bubble);
   return row;
 }
 
-function buildMessageRow(role, content, modeName) {
+function buildMessageRow(role, content, modeName, createdAt = '') {
   if (role === 'file') return buildFileUploadRow(content);
   if (role === 'context') return buildContextUsageRow(content);
   if (role === 'compression') return buildCompressionRow(content);
@@ -1538,15 +1702,7 @@ function buildMessageRow(role, content, modeName) {
 
   const lbl = document.createElement('div');
   lbl.className = 'message-role-label';
-  if (role === 'user') {
-    lbl.textContent = 'You';
-  } else if (role === 'error') {
-    lbl.textContent = '\u26A0';
-  } else if (role === 'assistant' && modeName) {
-    lbl.textContent = 'Assistant (' + modeName + ')';
-  } else {
-    lbl.textContent = 'Assistant';
-  }
+  lbl.textContent = messageRoleLabel(role, modeName, createdAt);
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble' + (role === 'error' ? ' error' : '');
@@ -1566,14 +1722,14 @@ function buildMessageRow(role, content, modeName) {
   return row;
 }
 
-function createAssistantTurnRow(initialTrace = [], modeName = '') {
+function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = '') {
   const row = document.createElement('div');
   row.className = 'message-row model';
   row.id = 'streaming-row';
 
   const lbl = document.createElement('div');
   lbl.className = 'message-role-label';
-  lbl.textContent = modeName ? 'Assistant (' + modeName + ')' : 'Assistant';
+  lbl.textContent = messageRoleLabel('assistant', modeName, createdAt);
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble streaming';
@@ -1586,7 +1742,14 @@ function createAssistantTurnRow(initialTrace = [], modeName = '') {
 
   let trace = normalizeAssistantTrace(initialTrace);
 
+  function ensureAttached() {
+    if (!row.isConnected) {
+      messagesEl.appendChild(row);
+    }
+  }
+
   function render(streaming) {
+    ensureAttached();
     renderAssistantTraceBubble(bubble, trace, { streaming });
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
@@ -1604,6 +1767,9 @@ function createAssistantTurnRow(initialTrace = [], modeName = '') {
 
   function upsertTool(record) {
     const next = normalizeToolUsageRecord(record);
+    const now = new Date().toISOString();
+    next.startedAt = next.startedAt || now;
+    next.updatedAt = next.updatedAt || now;
     let index = -1;
     if (next.toolCallId) {
       index = trace.findIndex(segment =>
@@ -1617,7 +1783,11 @@ function createAssistantTurnRow(initialTrace = [], modeName = '') {
       }
       trace.push({ type: 'tool_usage', record: next });
     } else {
-      trace[index].record = Object.assign({}, trace[index].record, next);
+      const previous = trace[index].record || {};
+      trace[index].record = Object.assign({}, previous, next, {
+        startedAt: next.startedAt || previous.startedAt || now,
+        updatedAt: next.updatedAt || previous.updatedAt || now,
+      });
     }
     render(true);
   }
@@ -2223,10 +2393,11 @@ async function selectChat(projectId, chatId, chatName) {
   document.querySelectorAll('.chat-entry').forEach(el =>
     el.classList.toggle('active', el.dataset.chatId === chatId));
   chatTitle.textContent = stripUserSuffix(chatName);
-  messageInput.disabled = false;
-  sendBtn.disabled      = false;
+  const selectedStreamActive = !!activeControllerForChat(chatId);
+  messageInput.disabled = selectedStreamActive;
+  sendBtn.disabled      = selectedStreamActive;
   newChatBtn.disabled   = false;
-  if (attachBtn) attachBtn.disabled = false;
+  if (attachBtn) attachBtn.disabled = selectedStreamActive;
   await Promise.all([
     loadMessages(projectId, chatId),
     loadProjectAgenticModes(projectId),
@@ -2236,6 +2407,7 @@ async function selectChat(projectId, chatId, chatName) {
   if (typeof refreshAutomationStatusForChat === 'function') {
     refreshAutomationStatusForChat(chatId, { reloadMessages: false });
   }
+  refreshSelectedChatSendingState();
   if (isMobileLayout()) setMobileSidebarOpen(false);
 }
 
@@ -2281,8 +2453,18 @@ function currentAgenticModeName() {
   return activeId || 'Default';
 }
 
+function activeControllerForChat(chatId) {
+  if (!chatId || !state.activeAbortControllers) return null;
+  return state.activeAbortControllers[chatId] || null;
+}
+
+function refreshSelectedChatSendingState() {
+  state.activeAbortController = activeControllerForChat(state.selectedChatId);
+  state.sending = !!state.activeAbortController;
+  setInputEnabled(!!state.selectedChatId && !state.sending);
+}
+
 function removeWebDebugBubbles() {
-  state.messages = state.messages.filter(msg => !(msg && msg.role === 'web_debug'));
   document.querySelectorAll('.message-row.web-debug').forEach(row => row.remove());
 }
 
@@ -2325,11 +2507,14 @@ function renderCancelAgentButton() {
     ? state.automationJobs[state.selectedChatId]
     : null;
   const automationActive = !!(automationJob && automationJob.active);
-  const canCancel = !!((state.sending || automationActive) && state.selectedChatId);
+  const streamActive = !!activeControllerForChat(state.selectedChatId);
+  state.activeAbortController = streamActive ? activeControllerForChat(state.selectedChatId) : null;
+  state.sending = streamActive;
+  const canCancel = !!((streamActive || automationActive) && state.selectedChatId);
   cancelAgentBtn.style.display = canCancel ? '' : 'none';
   cancelAgentBtn.disabled = !canCancel;
   if (canCancel) {
-    cancelAgentBtn.textContent = automationActive && !state.sending
+    cancelAgentBtn.textContent = automationActive && !streamActive
       ? 'Cancel Automation'
       : 'Cancel Agent';
   } else {
@@ -2343,13 +2528,14 @@ async function cancelActiveAgent() {
     ? state.automationJobs[state.selectedChatId]
     : null;
   const automationActive = !!(automationJob && automationJob.active);
-  if (!state.activeAbortController && !automationActive) return;
+  const streamController = activeControllerForChat(state.selectedChatId);
+  if (!streamController && !automationActive) return;
   if (cancelAgentBtn) {
     cancelAgentBtn.disabled = true;
     cancelAgentBtn.textContent = 'Cancelling...';
   }
   try {
-    if (automationActive && !state.activeAbortController) {
+    if (automationActive && !streamController) {
       await fetch(`/api/chats/${state.selectedChatId}/automation`, {
         method: 'DELETE',
         credentials: 'same-origin',
@@ -2365,15 +2551,13 @@ async function cancelActiveAgent() {
     }
   } catch (_) {}
   try {
-    if (state.activeAbortController) state.activeAbortController.abort();
+    if (streamController) streamController.abort();
   } catch (_) {}
 }
 
 function setWebDebuggingActive(active) {
   state.webDebuggingActive = !!(active && state.projectEnableWebDebugging);
-  if (!state.webDebuggingActive) {
-    removeWebDebugBubbles();
-  }
+  renderMessages(state.messages);
   renderDebugButton();
   renderCancelAgentButton();
 }
@@ -2527,7 +2711,7 @@ if (agenticModeLabel) {
 
 if (compressBtn) {
   compressBtn.addEventListener('click', async () => {
-    if (!state.selectedChatId || state.sending) return;
+    if (!state.selectedChatId || activeControllerForChat(state.selectedChatId)) return;
     const ok = confirm(
       'Compressing the context window will summarize older messages into a compressed block.\n' +
       'This action cannot be undone.\n\nDo you want to continue?'
@@ -2810,9 +2994,17 @@ async function uploadPendingFiles(chatId) {
 
 // ── Send message ──────────────────────────────────────────────────────────
 async function sendMessage() {
-  if (state.sending) return;
+  const sendProjectId = state.selectedProjectId;
+  const sendChatId = state.selectedChatId;
+  if (!sendChatId || activeControllerForChat(sendChatId)) return;
   const content = messageInput.value.trim();
-  if ((!content && state.pendingFiles.length === 0) || !state.selectedChatId) return;
+  if ((!content && state.pendingFiles.length === 0) || !sendChatId) return;
+
+  const isCurrentSendChat = () =>
+    state.selectedProjectId === sendProjectId && state.selectedChatId === sendChatId;
+  const sendAgenticModeId = state.selectedChatAgenticModeId || '';
+  const sendWebDebugRequested = isWebDebuggingEnabled();
+  const sendAssistantModeName = currentAgenticModeName();
 
   state.sending      = true;
   messageInput.value = '';
@@ -2822,22 +3014,26 @@ async function sendMessage() {
   // Upload any queued file attachments first
   let uploadedFiles = [];
   try {
-    uploadedFiles = await uploadPendingFiles(state.selectedChatId);
+    uploadedFiles = await uploadPendingFiles(sendChatId);
   } catch (e) {
-    state.sending = false;
-    messageInput.value = content;
-    resizeTextarea();
-    setInputEnabled(true);
-    messagesEl.appendChild(buildMessageRow('error', 'Upload failed: ' + e.message));
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (isCurrentSendChat()) {
+      state.sending = false;
+      messageInput.value = content;
+      resizeTextarea();
+      setInputEnabled(true);
+      messagesEl.appendChild(buildMessageRow('error', 'Upload failed: ' + e.message));
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
     return;
   }
 
   if (!content) {
-    state.sending = false;
-    setInputEnabled(true);
-    messageInput.focus();
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (isCurrentSendChat()) {
+      state.sending = false;
+      setInputEnabled(true);
+      messageInput.focus();
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
     return;
   }
 
@@ -2846,38 +3042,51 @@ async function sendMessage() {
   if (uploadedFiles.length) {
     displayContent += '\n\n\uD83D\uDCCE ' + uploadedFiles.join(', ');
   }
-  const assistantModeName = currentAgenticModeName();
+  const assistantModeName = sendAssistantModeName;
+  const userCreatedAt = new Date().toISOString();
+  const assistantCreatedAt = new Date().toISOString();
 
   // Show user message immediately
-  state.messages.push({ role: 'user', content: displayContent, created_at: '' });
+  state.messages.push({ role: 'user', content: displayContent, created_at: userCreatedAt });
   renderMessages(state.messages);
 
   const pendingContextRow = buildContextUsageRow('', true);
   messagesEl.appendChild(pendingContextRow);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 
-  const assistantTurn = createAssistantTurnRow([], assistantModeName);
+  const assistantTurn = createAssistantTurnRow([], assistantModeName, assistantCreatedAt);
 
   const abortCtrl = new AbortController();
-  state.activeAbortController = abortCtrl;
-  renderCancelAgentButton();
+  state.activeAbortControllers[sendChatId] = abortCtrl;
+  if (isCurrentSendChat()) {
+    state.activeAbortController = abortCtrl;
+    renderCancelAgentButton();
+  }
   let contextUsageText = '';
   let contextRecorded = false;
   let compressionStatus = null;
   let compressionRecorded = false;
   let queueStatus = null;
   let activityStatus = null;
+  let streamUiDetached = false;
+  function ensureVisibleStreamRows() {
+    if (!isCurrentSendChat()) return false;
+    if (pendingContextRow && !pendingContextRow.isConnected) {
+      messagesEl.appendChild(pendingContextRow);
+    }
+    return true;
+  }
 
   try {
-    const resp = await fetch(`/api/chats/${state.selectedChatId}/messages/stream`, {
+    const resp = await fetch(`/api/chats/${sendChatId}/messages/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
       body: JSON.stringify({
         content,
         attachments: uploadedFiles,
-        selected_agentic_mode_id: state.selectedChatAgenticModeId || '',
-        web_debug: isWebDebuggingEnabled(),
+        selected_agentic_mode_id: sendAgenticModeId,
+        web_debug: sendWebDebugRequested,
       }),
       signal: abortCtrl.signal,
     });
@@ -2887,9 +3096,11 @@ async function sendMessage() {
     if (!resp.ok) {
       let errMsg = 'Request failed';
       try { errMsg = (await resp.json()).error || errMsg; } catch (_) {}
-      assistantTurn.remove();
-      const errRow = buildMessageRow('error', '⚠ ' + errMsg);
-      messagesEl.appendChild(errRow);
+      if (isCurrentSendChat()) {
+        assistantTurn.remove();
+        const errRow = buildMessageRow('error', '⚠ ' + errMsg);
+        messagesEl.appendChild(errRow);
+      }
       return;
     }
 
@@ -2897,6 +3108,16 @@ async function sendMessage() {
     let errorMsg = null;
     let cancelledByServer = false;
     const streamState = await readSSEStream(resp, ev => {
+      if (!isCurrentSendChat() &&
+          ev.error === undefined &&
+          !ev.cancelled &&
+          !ev.done) {
+        streamUiDetached = true;
+        return;
+      }
+      if (isCurrentSendChat()) {
+        ensureVisibleStreamRows();
+      }
       if (ev.delta !== undefined) {
         assistantTurn.appendTextDelta(ev.delta);
       } else if (ev.web_debug) {
@@ -3043,6 +3264,8 @@ async function sendMessage() {
           tool_name: ev.tool_name || 'Tool',
           arguments: ev.tool_arguments || '',
           result: ev.tool_result || '',
+          started_at: ev.started_at || ev.updated_at || '',
+          updated_at: ev.updated_at || ev.started_at || '',
           status: ev.tool_status || (ev.tool_event === 'start' ? 'live' : 'done'),
         };
         assistantTurn.upsertTool(record);
@@ -3098,6 +3321,7 @@ async function sendMessage() {
       errorMsg = 'The response stream ended before the server sent a completion event.';
     }
 
+    if (isCurrentSendChat()) {
     if (streamState.aborted || cancelledByServer) {
       const partialAssistant = assistantTurn.finalize();
       if (assistantTurn.hasContent()) {
@@ -3106,7 +3330,7 @@ async function sendMessage() {
           content: partialAssistant.text,
           ui_trace: partialAssistant.ui_trace,
           name: assistantModeName,
-          created_at: '',
+          created_at: assistantCreatedAt,
         });
       } else {
         assistantTurn.remove();
@@ -3120,7 +3344,7 @@ async function sendMessage() {
           content: partialAssistant.text,
           ui_trace: partialAssistant.ui_trace,
           name: assistantModeName,
-          created_at: '',
+          created_at: assistantCreatedAt,
         });
       } else {
         assistantTurn.remove();
@@ -3134,12 +3358,17 @@ async function sendMessage() {
         content: finalAssistant.text,
         ui_trace: finalAssistant.ui_trace,
         name: assistantModeName,
-        created_at: '',
+        created_at: assistantCreatedAt,
       });
+    }
+    } else {
+      assistantTurn.remove();
     }
 
   } catch (e) {
-    if (e.name === 'AbortError') {
+    if (!isCurrentSendChat()) {
+      assistantTurn.remove();
+    } else if (e.name === 'AbortError') {
       const partialAssistant = assistantTurn.finalize();
       if (assistantTurn.hasContent()) {
         state.messages.push({
@@ -3147,7 +3376,7 @@ async function sendMessage() {
           content: partialAssistant.text,
           ui_trace: partialAssistant.ui_trace,
           name: assistantModeName,
-          created_at: '',
+          created_at: assistantCreatedAt,
         });
       } else {
         assistantTurn.remove();
@@ -3161,7 +3390,7 @@ async function sendMessage() {
           content: partialAssistant.text,
           ui_trace: partialAssistant.ui_trace,
           name: assistantModeName,
-          created_at: '',
+          created_at: assistantCreatedAt,
         });
       } else {
         assistantTurn.remove();
@@ -3178,26 +3407,35 @@ async function sendMessage() {
       messagesEl.appendChild(buildMessageRow('error', '⚠ Network error: ' + e.message));
     }
   } finally {
+    if (state.activeAbortControllers &&
+        state.activeAbortControllers[sendChatId] === abortCtrl) {
+      delete state.activeAbortControllers[sendChatId];
+    }
     if (state.activeAbortController === abortCtrl) {
       state.activeAbortController = null;
     }
-    if (!contextUsageText && pendingContextRow.parentNode) {
-      pendingContextRow.remove();
+    if (isCurrentSendChat()) {
+      if (!contextUsageText && pendingContextRow.parentNode) {
+        pendingContextRow.remove();
+      }
+      if (queueStatus && queueStatus.row.parentNode) {
+        queueStatus.row.remove();
+      }
+      if (activityStatus && activityStatus.row.parentNode) {
+        activityStatus.row.remove();
+      }
+      if (compressionStatus && !compressionRecorded && compressionStatus.row.parentNode) {
+        compressionStatus.row.remove();
+      }
+      refreshSelectedChatSendingState();
+      if (streamUiDetached) {
+        await loadMessages(sendProjectId, sendChatId);
+      }
+      messageInput.focus();
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    } else {
+      refreshSelectedChatSendingState();
     }
-    if (queueStatus && queueStatus.row.parentNode) {
-      queueStatus.row.remove();
-    }
-    if (activityStatus && activityStatus.row.parentNode) {
-      activityStatus.row.remove();
-    }
-    if (compressionStatus && !compressionRecorded && compressionStatus.row.parentNode) {
-      compressionStatus.row.remove();
-    }
-    state.sending = false;
-    setInputEnabled(true);
-    renderCancelAgentButton();
-    messageInput.focus();
-    messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 }
 
@@ -3503,10 +3741,12 @@ function renderAutomationJobStatusInto(statusEl, job, active) {
   }
 
   if (active && job.current_tool_name) {
+    const toolTime = formatMessageTimestamp(job.current_tool_at || job.updated_at);
     const tool = document.createElement('div');
     tool.className = 'automation-status-detail';
     tool.textContent = (job.current_tool_status === 'live' ? 'Running tool: ' : 'Last tool: ') +
-      job.current_tool_name;
+      job.current_tool_name +
+      (toolTime ? ' [' + toolTime + ']' : '');
     statusEl.appendChild(tool);
   }
 
@@ -3578,12 +3818,34 @@ function clearAutomationLiveResponse() {
   document.querySelectorAll('.automation-live-response').forEach(row => row.remove());
 }
 
+function automationLiveTrace(job) {
+  const trace = [];
+  const tools = Array.isArray(job && job.live_tool_trace)
+    ? job.live_tool_trace
+    : [];
+  tools.forEach(tool => {
+    trace.push({
+      type: 'tool_usage',
+      record: normalizeToolUsageRecord(tool),
+    });
+  });
+  if (job && job.live_response) {
+    trace.push({
+      type: 'text',
+      content: job.live_response,
+      live: true,
+    });
+  }
+  return trace;
+}
+
 function renderAutomationLiveResponse(job = selectedAutomationJob()) {
   clearAutomationLiveResponse();
+  const trace = automationLiveTrace(job);
   if (!job ||
       !automationJobIsActive(job) ||
       job.chat_id !== state.selectedChatId ||
-      !job.live_response) {
+      !trace.length) {
     return;
   }
 
@@ -3592,18 +3854,18 @@ function renderAutomationLiveResponse(job = selectedAutomationJob()) {
 
   const lbl = document.createElement('div');
   lbl.className = 'message-role-label';
-  lbl.textContent = job.live_mode_name
-    ? 'Assistant (' + job.live_mode_name + ')'
-    : 'Assistant';
+  lbl.textContent = messageRoleLabel(
+    'assistant',
+    job.live_mode_name || '',
+    job.live_started_at || job.updated_at || ''
+  );
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble streaming';
-  bubble.innerHTML = renderMarkdown(job.live_response, { streaming: true });
-  postProcessMessageBubble(bubble);
-
-  const cursor = document.createElement('span');
-  cursor.className = 'streaming-cursor';
-  bubble.appendChild(cursor);
+  renderAssistantTraceBubble(bubble, trace, {
+    streaming: true,
+    fallbackContent: job.live_response || '',
+  });
 
   row.appendChild(lbl);
   row.appendChild(bubble);

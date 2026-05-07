@@ -35,6 +35,18 @@
       "token": "e270bc01eac5fc72f4edd4ff5cdda2421db969169e5f507f6d8f4d7e822185d3",
       "user_id": "3593868E-3A09-47E2-BEF0-CCBDFFAB7292",
       "username": "admin"
+    },
+    {
+      "created_at_unix": 1778142908,
+      "force_password_reset": false,
+      "last_activity_unix": 1778142908,
+      "needs_password_reset": false,
+      "persistent": true,
+      "persistent_until_unix": 1780734908,
+      "remote_addr": "10.240.0.230",
+      "token": "a668894c1e29a0ff7038362d41f3ca8cf9aef0ced7e0c07581b5ab435f5b7037",
+      "user_id": "3593868E-3A09-47E2-BEF0-CCBDFFAB7292",
+      "username": "admin"
     }
   ]
 }

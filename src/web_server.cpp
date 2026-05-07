@@ -470,6 +470,14 @@ size_t EstimateRequestInputTokens(const ChatRequestOptions& request,
     return tokens;
 }
 
+size_t EstimateMessagesTokens(const std::vector<MessageRecord>& messages) {
+    size_t tokens = 0;
+    for (const auto& message : messages) {
+        tokens += EstimateMessageTokens(message);
+    }
+    return tokens;
+}
+
 std::vector<ProjectMcpVariableValue> BuildWebRuntimeVariables(
     AppStorage* storage,
     WebUserStore* user_store,
@@ -2704,18 +2712,27 @@ void WebServer::HandleCompressChat(const void* req_ptr, void* res_ptr) {
                 config->name));
     }
 
+    const std::string compression_created_at = NowIso();
     json record_payload = {
         {"status", "done"},
         {"message", "Context compressed successfully"},
+        {"created_at", compression_created_at},
         {"before_messages", visible.size()},
         {"after_messages", remaining},
         {"compressed_through", compressed_through},
+        {"before_tokens", EstimateMessagesTokens(visible)},
+        {"after_tokens", EstimateTokenCount(compressed) +
+            EstimateMessagesTokens(std::vector<MessageRecord>(
+                visible.begin() + static_cast<std::ptrdiff_t>(
+                    std::min(compressed_through, visible.size())),
+                visible.end()))},
+        {"compressed_context_tokens", EstimateTokenCount(compressed)},
     };
 
     MessageRecord comp_msg;
     comp_msg.role = "compression";
     comp_msg.content = record_payload.dump();
-    comp_msg.created_at = NowIso();
+    comp_msg.created_at = compression_created_at;
     messages.push_back(comp_msg);
     storage_->SaveMessages(*project_id, chat_id, messages);
     NotifyContentChanged();
@@ -2927,7 +2944,8 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
         });
     };
 
-    auto append_pending_tool_calls = [&](const std::string& tool_calls_json) {
+    auto append_pending_tool_calls = [&](const std::string& tool_calls_json,
+                                         const std::string& created_at) {
         if (tool_calls_json.empty()) return;
         try {
             const auto tool_calls = json::parse(tool_calls_json);
@@ -2953,6 +2971,8 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
                     {"tool_name", tool_name},
                     {"arguments", arguments_json},
                     {"status", "done"},
+                    {"started_at", created_at},
+                    {"updated_at", created_at},
                 });
                 if (!tool_call_id.empty()) {
                     tool_trace_indices[tool_call_id] = pending_ui_trace.size() - 1;
@@ -2979,7 +2999,13 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
             }
             current["result"] = message.content;
             current["status"] = "done";
+            if (current.value("started_at", "").empty()) {
+                current["started_at"] = message.created_at;
+            }
+            current["updated_at"] = message.created_at;
         } else {
+            segment["started_at"] = message.created_at;
+            segment["updated_at"] = message.created_at;
             pending_ui_trace.push_back(segment);
             if (!message.tool_call_id.empty()) {
                 tool_trace_indices[message.tool_call_id] = pending_ui_trace.size() - 1;
@@ -3008,7 +3034,7 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
             ensure_pending_created_at(m.created_at);
             ensure_pending_mode_name(m.name);
             append_pending_text(m.content);
-            append_pending_tool_calls(m.tool_calls_json);
+            append_pending_tool_calls(m.tool_calls_json, m.created_at);
             continue;
         }
         if (m.role == "tool") {
@@ -3297,17 +3323,23 @@ PreparedWebHistory PrepareWebRequestHistory(
 
     if (storage && compression_generated && !prepared.compressed_context.empty() &&
         compression_state.last_compression_message_index > 0) {
+        const std::string compression_created_at = NowIso();
         json payload = {
             {"status", "done"},
             {"message", "Context window compressed."},
+            {"created_at", compression_created_at},
             {"before_messages", compression_messages.size()},
             {"after_messages", prepared.request_history.size()},
             {"compressed_through", compression_state.last_compression_message_index},
+            {"before_tokens", EstimateMessagesTokens(compression_messages)},
+            {"after_tokens", EstimateMessagesTokens(prepared.request_history) +
+                EstimateTokenCount(prepared.compressed_context)},
+            {"compressed_context_tokens", EstimateTokenCount(prepared.compressed_context)},
         };
         MessageRecord comp_msg;
         comp_msg.role = "compression";
         comp_msg.content = payload.dump();
-        comp_msg.created_at = NowIso();
+        comp_msg.created_at = compression_created_at;
         prepared.compression_record = comp_msg;
 
         // ── Chat log the automatic compression event ────────────────
@@ -3438,6 +3470,115 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
     }
 
     return built;
+}
+
+json MessageToDebugJson(const MessageRecord& message) {
+    json item = {
+        {"role", message.role},
+        {"content", message.content},
+        {"created_at", message.created_at},
+    };
+    if (!message.name.empty()) item["name"] = message.name;
+    if (!message.tool_call_id.empty()) item["tool_call_id"] = message.tool_call_id;
+    if (!message.tool_calls_json.empty()) {
+        try {
+            item["tool_calls"] = json::parse(message.tool_calls_json);
+        } catch (...) {
+            item["tool_calls_json"] = message.tool_calls_json;
+        }
+    }
+    return item;
+}
+
+json MessagesToDebugJson(const std::vector<MessageRecord>& messages) {
+    json arr = json::array();
+    for (const auto& message : messages) {
+        arr.push_back(MessageToDebugJson(message));
+    }
+    return arr;
+}
+
+json PromptSectionsToDebugJson(
+    const std::vector<std::pair<std::string, std::string>>& sections) {
+    json arr = json::array();
+    for (const auto& [title, content] : sections) {
+        arr.push_back({
+            {"title", title},
+            {"content", content},
+        });
+    }
+    return arr;
+}
+
+json ToolDefinitionsToDebugJson(const std::vector<ChatToolDefinition>& tools) {
+    json arr = json::array();
+    for (const auto& tool : tools) {
+        json item = {
+            {"name", tool.name},
+            {"description", tool.description},
+        };
+        if (!tool.parameters_json.empty()) {
+            try {
+                item["parameters"] = json::parse(tool.parameters_json);
+            } catch (...) {
+                item["parameters_json"] = tool.parameters_json;
+            }
+        }
+        item["estimated_tokens"] = EstimateToolTokens(tool);
+        arr.push_back(std::move(item));
+    }
+    return arr;
+}
+
+json NonModelMessagesToDebugJson(const std::vector<MessageRecord>& messages) {
+    json arr = json::array();
+    for (const auto& message : messages) {
+        if (message.role == "system" ||
+            message.role == "user" ||
+            message.role == "assistant" ||
+            message.role == "tool") {
+            continue;
+        }
+        arr.push_back(MessageToDebugJson(message));
+    }
+    return arr;
+}
+
+std::string FormatContextUsageText(size_t used_tokens, size_t total_tokens) {
+    std::ostringstream out;
+    out << "CTX: " << used_tokens;
+    if (total_tokens > 0) {
+        out << " / " << total_tokens;
+    }
+    return out.str();
+}
+
+json ProjectSettingsDebugJson(
+    const ProjectSettings& settings,
+    const std::string& effective_agentic_mode_id,
+    const std::string& resolved_mode_name,
+    const std::string& chat_selected_agentic_mode_id) {
+    return {
+        {"project_name", settings.project_name},
+        {"preferred_provider_id", settings.preferred_provider_id},
+        {"preferred_model_id", settings.preferred_model_id},
+        {"selected_compression_config_id", settings.selected_compression_config_id},
+        {"default_agentic_mode_id", settings.selected_agentic_mode_id},
+        {"chat_agentic_mode_id", chat_selected_agentic_mode_id},
+        {"effective_agentic_mode_id", effective_agentic_mode_id},
+        {"effective_agentic_mode_name", resolved_mode_name},
+        {"enable_chat_logging", settings.enable_chat_logging},
+        {"enable_web_debugging", settings.enable_web_debugging},
+        {"enable_automation", settings.enable_automation},
+        {"allow_manual_context_compression", settings.allow_manual_context_compression},
+        {"built_in_powershell_enabled", settings.built_in_powershell_enabled},
+        {"built_in_artifact_memory_enabled", settings.built_in_artifact_memory_enabled},
+        {"built_in_planner_enabled", settings.built_in_planner_enabled},
+        {"built_in_completion_driver_enabled", settings.built_in_completion_driver_enabled},
+        {"built_in_questionnaire_enabled", settings.built_in_questionnaire_enabled},
+        {"built_in_filesystem_enabled", settings.built_in_filesystem_enabled},
+        {"model_timeout_seconds", settings.model_timeout_seconds},
+    };
 }
 
 bool MaybeScheduleCompression(
@@ -3656,6 +3797,13 @@ WebServer::CallModel(const std::string& project_id,
             proj_settings,
             stored_messages,
             resolved_prompt_variables);
+        if (refreshed.compression_record) {
+            messages = stored_messages;
+            messages.push_back(*refreshed.compression_record);
+            messages.push_back(user_msg);
+            storage_->SaveMessages(project_id, chat_id, messages);
+            NotifyContentChanged();
+        }
         opts.messages = refreshed.request_history;
         opts.messages.push_back(user_msg);
         if (!refreshed.compressed_context.empty()) {
@@ -3670,11 +3818,8 @@ WebServer::CallModel(const std::string& project_id,
     }
 
     if (!tool_definitions.empty()) {
-        constexpr int kMaxToolRounds = 8;
-        constexpr int kMaxCompletionDriverRounds = 64;
         const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
             proj_settings, effective_agentic_mode_id);
-        const int max_rounds = completion_driver_enabled ? kMaxCompletionDriverRounds : kMaxToolRounds;
         std::vector<MessageRecord> working_messages = opts.messages;
         // Baseline snapshot before tool calls bloat context. Guard only triggers
         // if the *pre-loop* assembled request is already close to threshold,
@@ -3683,7 +3828,7 @@ WebServer::CallModel(const std::string& project_id,
         bool completion_driver_done = !completion_driver_enabled;
         bool success = false;
 
-        for (int round = 0; round < max_rounds; ++round) {
+        for (int round = 0; ; ++round) {
             // Tool-loop emergency: if pre-tool-loop request already exceeds threshold,
             // schedule compression for the *next* turn (preserves current tool chain).
             if (prepared_history.selected_config && opts.model.context_window > 0) {
@@ -3787,10 +3932,10 @@ WebServer::CallModel(const std::string& project_id,
       final_opts.messages = working_messages;
       if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
       final_opts.system_prompt +=
-        "The MCP tool-call round limit has been reached. Do not call or "
-        "request any more tools. Use the tool results already present in "
-        "the conversation to write the final answer. If the requested work "
-        "succeeded, say so and summarize the important output. If it did "
+        "The tool loop stopped before a final assistant answer was produced. "
+        "Do not call or request any more tools. Use the tool results already "
+        "present in the conversation to write the final answer. If the requested "
+        "work succeeded, say so and summarize the important output. If it did "
         "not fully succeed, explain the last observed state and what remains.";
 
       const auto final_completion =
@@ -3810,8 +3955,8 @@ WebServer::CallModel(const std::string& project_id,
             }
 
             result.error = final_completion.error.empty()
-                ? "The model exceeded the MCP tool-call loop limit."
-                : "The model exceeded the MCP tool-call loop limit, and the final summary failed: " +
+                ? "The tool loop stopped before producing a final answer."
+                : "The tool loop stopped before producing a final answer, and the final summary failed: " +
                       final_completion.error;
             storage_->SaveMessages(project_id, chat_id, messages);
             NotifyContentChanged();
@@ -4039,8 +4184,41 @@ std::string WebServer::StreamModel(const std::string& project_id,
     opts.system_prompt = system_prompt;
     opts.temperature   = 0.2;
     opts.max_tokens    = 4096;  // allow longer outputs when streaming
+    opts.model_timeout_seconds = proj_settings.model_timeout_seconds;
     opts.messages      = prepared_history.request_history;
     opts.messages.push_back(user_msg);
+    std::string active_compressed_context = prepared_history.compressed_context;
+
+    const std::string model_request_id = MakeId("modelreq");
+    Logger::Info("WebModel",
+        "start request_id=" + model_request_id +
+        " project=" + project_id +
+        " chat=" + chat_id +
+        " provider=" + selected_provider.name + "/" + selected_provider.id +
+        " model=" + selected_model.id +
+        " mode=" + resolved_mode_name +
+        " request_messages=" + std::to_string(opts.messages.size()) +
+        " user_chars=" + std::to_string(user_msg.content.size()) +
+        " timeout_seconds=" + std::to_string(opts.model_timeout_seconds));
+
+    auto persist_visible_error = [&](const std::string& err_msg) {
+        if (err_msg.empty()) return;
+        Logger::Error("WebModel",
+            "error request_id=" + model_request_id +
+            " project=" + project_id +
+            " chat=" + chat_id +
+            " provider=" + selected_provider.name + "/" + selected_provider.id +
+            " model=" + selected_model.id +
+            " message=" + err_msg);
+        MessageRecord error_msg;
+        error_msg.role = "error";
+        error_msg.content = err_msg;
+        error_msg.created_at = NowIso();
+        auto latest_messages = storage_->LoadMessages(project_id, chat_id);
+        latest_messages.push_back(std::move(error_msg));
+        storage_->SaveMessages(project_id, chat_id, latest_messages);
+        NotifyContentChanged();
+    };
 
     if (web_debug_requested && proj_settings.enable_web_debugging && on_prompt_debug) {
         on_prompt_debug(opts.system_prompt, user_msg.content, opts.messages);
@@ -4110,6 +4288,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
         opts.messages = refreshed.request_history;
         opts.messages.push_back(user_msg);
         if (!refreshed.compressed_context.empty()) {
+            active_compressed_context = refreshed.compressed_context;
             opts.system_prompt = built_system_prompt.full_prompt;
             const std::string old_comp = prepared_history.compressed_context;
             if (!old_comp.empty() && opts.system_prompt.rfind(old_comp, 0) == 0) {
@@ -4120,40 +4299,133 @@ std::string WebServer::StreamModel(const std::string& project_id,
         }
     }
 
+    std::vector<ChatToolDefinition> extra_tool_definitions = rag_tool_set.definitions;
+    extra_tool_definitions.insert(
+        extra_tool_definitions.end(),
+        artifact_tool_set.definitions.begin(),
+        artifact_tool_set.definitions.end());
+    extra_tool_definitions.insert(
+        extra_tool_definitions.end(),
+        built_in_tool_definitions.begin(),
+        built_in_tool_definitions.end());
+    const size_t estimated_input_tokens = EstimateRequestInputTokens(
+        opts,
+        exposed_tools,
+        extra_tool_definitions,
+        selected_model.supports_tools);
+    const size_t context_window = selected_model.context_window > 0
+        ? static_cast<size_t>(selected_model.context_window)
+        : 0;
+
     if (on_context_usage) {
-        std::vector<ChatToolDefinition> extra_tool_definitions = rag_tool_set.definitions;
-        extra_tool_definitions.insert(
-            extra_tool_definitions.end(),
-            artifact_tool_set.definitions.begin(),
-            artifact_tool_set.definitions.end());
-        extra_tool_definitions.insert(
-            extra_tool_definitions.end(),
-            built_in_tool_definitions.begin(),
-            built_in_tool_definitions.end());
-        const size_t estimated_input_tokens = EstimateRequestInputTokens(
-            opts,
-            exposed_tools,
-            extra_tool_definitions,
-            selected_model.supports_tools);
-        const size_t context_window = selected_model.context_window > 0
-            ? static_cast<size_t>(selected_model.context_window)
-            : 0;
         on_context_usage(estimated_input_tokens, context_window);
     }
 
+    const size_t user_message_index = messages.empty() ? 0 : messages.size() - 1;
+    const std::string audit_created_at = NowIso();
+    json context_payload = {
+        {"text", FormatContextUsageText(estimated_input_tokens, context_window)},
+        {"used_tokens", estimated_input_tokens},
+        {"total_tokens", context_window},
+        {"request_id", model_request_id},
+        {"provider_id", selected_provider.id},
+        {"provider_name", selected_provider.name},
+        {"model_id", selected_model.id},
+        {"mode_id", effective_agentic_mode_id},
+        {"mode_name", resolved_mode_name},
+    };
+    MessageRecord context_msg;
+    context_msg.role = "context";
+    context_msg.content = context_payload.dump();
+    context_msg.created_at = audit_created_at;
+
+    json debug_payload = {
+        {"request_id", model_request_id},
+        {"created_at", audit_created_at},
+        {"provider", {
+            {"id", selected_provider.id},
+            {"name", selected_provider.name},
+            {"type", selected_provider.provider_type},
+        }},
+        {"model", {
+            {"id", selected_model.id},
+            {"display_name", selected_model.display_name},
+            {"context_window", selected_model.context_window},
+            {"supports_tools", selected_model.supports_tools},
+        }},
+        {"mode", {
+            {"id", effective_agentic_mode_id},
+            {"name", resolved_mode_name},
+        }},
+        {"context_window", {
+            {"used_tokens", estimated_input_tokens},
+            {"total_tokens", context_window},
+            {"max_output_tokens", opts.max_tokens},
+            {"message_count", opts.messages.size()},
+            {"tool_count", selected_model.supports_tools ? tool_definitions.size() : 0},
+        }},
+        {"system_prompt", opts.system_prompt},
+        {"system_sections", PromptSectionsToDebugJson(built_system_prompt.sections)},
+        {"tools", selected_model.supports_tools
+            ? ToolDefinitionsToDebugJson(tool_definitions)
+            : json::array()},
+        {"request_messages", MessagesToDebugJson(opts.messages)},
+        {"compressible_messages", MessagesToDebugJson(opts.messages)},
+        {"non_model_chat_records", NonModelMessagesToDebugJson(messages)},
+        {"compression", {
+            {"config_id", prepared_history.selected_config
+                ? prepared_history.selected_config->id
+                : std::string{}},
+            {"config_name", prepared_history.selected_config
+                ? prepared_history.selected_config->name
+                : std::string{}},
+            {"compressed_context", active_compressed_context},
+            {"compressed_context_tokens", EstimateTokenCount(active_compressed_context)},
+        }},
+        {"project_settings", ProjectSettingsDebugJson(
+            proj_settings,
+            effective_agentic_mode_id,
+            resolved_mode_name,
+            chat_selected_agentic_mode_id)},
+        {"notes", {
+            {"system_prompt", "Sent to the model as the request system prompt. It is not compressed as chat history."},
+            {"tools", "Sent as tool/function definitions when the selected model supports tools. These definitions count toward the model request but are not compressed chat messages."},
+            {"compressible_messages", "Model-visible chat messages for this turn. Assistant tool calls and tool results here are part of the context history and are eligible for context compression."},
+            {"non_model_chat_records", "Stored chat-log records kept for audit/UI/debugging. These are not sent to provider chat APIs."},
+        }},
+    };
+    MessageRecord debug_msg;
+    debug_msg.role = "web_debug";
+    debug_msg.content = debug_payload.dump();
+    debug_msg.created_at = audit_created_at;
+
+    messages.push_back(std::move(debug_msg));
+    messages.push_back(std::move(context_msg));
+    storage_->SaveMessages(project_id, chat_id, messages);
+    NotifyContentChanged();
+
+    ChatContextDebugEntry context_debug_entry;
+    context_debug_entry.id = MakeId("ctxdbg");
+    context_debug_entry.created_at = audit_created_at;
+    context_debug_entry.kind = "request";
+    context_debug_entry.user_message_index = user_message_index;
+    context_debug_entry.provider_id = selected_provider.id;
+    context_debug_entry.model_id = selected_model.id;
+    context_debug_entry.system_prompt = opts.system_prompt;
+    context_debug_entry.request_messages = opts.messages;
+    context_debug_entry.compressed_context = active_compressed_context;
+    storage_->AppendChatContextDebugEntry(project_id, chat_id, context_debug_entry);
+
     if (!tool_definitions.empty()) {
-        constexpr int kMaxToolRounds = 8;
-        constexpr int kMaxCompletionDriverRounds = 64;
         const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
             proj_settings, effective_agentic_mode_id);
-        const int max_rounds = completion_driver_enabled ? kMaxCompletionDriverRounds : kMaxToolRounds;
         std::vector<MessageRecord> working_messages = opts.messages;
         bool completion_driver_done = !completion_driver_enabled;
         std::string accumulated;
         bool aborted = false;
         bool success = false;
 
-        for (int round = 0; round < max_rounds; ++round) {
+        for (int round = 0; ; ++round) {
             // Tool-loop emergency: if threshold exceeded mid-loop, schedule for next turn
             if (prepared_history.selected_config && opts.model.context_window > 0) {
                 ChatRequestOptions check;
@@ -4169,6 +4441,14 @@ std::string WebServer::StreamModel(const std::string& project_id,
             ChatRequestOptions loop_opts = opts;
             loop_opts.messages = working_messages;
 
+            Logger::Info("WebModel",
+                "provider-call request_id=" + model_request_id +
+                " round=" + std::to_string(round + 1) +
+                " project=" + project_id +
+                " chat=" + chat_id +
+                " messages=" + std::to_string(loop_opts.messages.size()) +
+                " tools=" + std::to_string(tool_definitions.size()));
+
             const auto completion = OpenAIClient::StreamToolAwareCompletion(
                 loop_opts, tool_definitions,
                 [&](const std::string& delta) {
@@ -4182,7 +4462,21 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     }
                 },
                 on_queue_status,
-                on_activity_status);
+                on_activity_status,
+                cancelled);
+
+            if (cancelled()) {
+                aborted = true;
+            }
+
+            Logger::Info("WebModel",
+                "provider-return request_id=" + model_request_id +
+                " round=" + std::to_string(round + 1) +
+                " success=" + std::to_string(completion.success) +
+                " cancelled=" + std::to_string(cancelled()) +
+                " assistant_chars=" + std::to_string(completion.assistant_text.size()) +
+                " tool_calls=" + std::to_string(completion.tool_calls.size()) +
+                (completion.error.empty() ? "" : " error=" + completion.error));
 
             if (!completion.success && !aborted) {
                 const std::string err_msg = completion.error.empty()
@@ -4192,10 +4486,16 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     ChatRequestLogger::Log(project_id, logging,
                         log_header + ChatRequestLogger::FormatErrorResponse(err_msg));
                 }
+                persist_visible_error(err_msg);
                 return err_msg;
             }
 
             if (aborted) {
+                Logger::Warn("WebModel",
+                    "aborted request_id=" + model_request_id +
+                    " project=" + project_id +
+                    " chat=" + chat_id +
+                    " accumulated_chars=" + std::to_string(accumulated.size()));
                 if (!accumulated.empty()) {
                     MessageRecord asst_msg;
                     asst_msg.role = "assistant";
@@ -4385,6 +4685,12 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     log_header + ChatRequestLogger::FormatSuccessResponse(
                         completion.assistant_text.empty() ? "(no text)" : completion.assistant_text));
             }
+            Logger::Info("WebModel",
+                "completed request_id=" + model_request_id +
+                " project=" + project_id +
+                " chat=" + chat_id +
+                " rounds=" + std::to_string(round + 1) +
+                " assistant_chars=" + std::to_string(completion.assistant_text.size()));
             break;
         }
 
@@ -4393,14 +4699,19 @@ std::string WebServer::StreamModel(const std::string& project_id,
             final_opts.messages = working_messages;
             if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
             final_opts.system_prompt +=
-                "The MCP tool-call round limit has been reached. Do not call or "
-                "request any more tools. Use the tool results already present in "
-                "the conversation to write the final answer. If the requested work "
-                "succeeded, say so and summarize the important output. If it did "
+                "The tool loop stopped before a final assistant answer was produced. "
+                "Do not call or request any more tools. Use the tool results already "
+                "present in the conversation to write the final answer. If the requested "
+                "work succeeded, say so and summarize the important output. If it did "
                 "not fully succeed, explain the last observed state and what remains.";
 
             std::string final_text;
             bool final_aborted = false;
+            Logger::Info("WebModel",
+                "provider-call-final request_id=" + model_request_id +
+                " project=" + project_id +
+                " chat=" + chat_id +
+                " messages=" + std::to_string(final_opts.messages.size()));
             const auto final_result = OpenAIClient::StreamChat(
                 final_opts,
                 [&](const std::string& delta) {
@@ -4414,17 +4725,29 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     }
                 },
                 on_queue_status,
-                on_activity_status);
+                on_activity_status,
+                cancelled);
+
+            if (cancelled()) {
+                final_aborted = true;
+            }
+            Logger::Info("WebModel",
+                "provider-return-final request_id=" + model_request_id +
+                " success=" + std::to_string(final_result.success) +
+                " cancelled=" + std::to_string(cancelled()) +
+                " assistant_chars=" + std::to_string(final_text.size()) +
+                (final_result.error.empty() ? "" : " error=" + final_result.error));
 
             if (!final_result.success && !final_aborted) {
                 const std::string err_msg = final_result.error.empty()
-                    ? "The model exceeded the MCP tool-call loop limit."
-                    : "The model exceeded the MCP tool-call loop limit, and the final summary failed: " +
+                    ? "The tool loop stopped before producing a final answer."
+                    : "The tool loop stopped before producing a final answer, and the final summary failed: " +
                           final_result.error;
                 if (logging) {
                     ChatRequestLogger::Log(project_id, logging,
                         log_header + ChatRequestLogger::FormatErrorResponse(err_msg));
                 }
+                persist_visible_error(err_msg);
                 return err_msg;
             }
 
@@ -4438,11 +4761,17 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 storage_->SaveMessages(project_id, chat_id, messages);
                 NotifyContentChanged();
             }
+            Logger::Info("WebModel",
+                "completed-after-tool-loop-stop request_id=" + model_request_id +
+                " project=" + project_id +
+                " chat=" + chat_id +
+                " assistant_chars=" + std::to_string(final_text.size()) +
+                " aborted=" + std::to_string(final_aborted));
             if (logging) {
                 if (!final_result.success) {
                     ChatRequestLogger::Log(project_id, logging,
                         log_header + ChatRequestLogger::FormatErrorResponse(
-                            final_result.error.empty() ? "Tool loop limit reached" : final_result.error));
+                            final_result.error.empty() ? "Tool loop stopped before final answer" : final_result.error));
                 } else {
                     ChatRequestLogger::Log(project_id, logging,
                         log_header + ChatRequestLogger::FormatSuccessResponse(
@@ -4462,6 +4791,13 @@ std::string WebServer::StreamModel(const std::string& project_id,
         return {};
     }
 
+    Logger::Info("WebModel",
+        "provider-call request_id=" + model_request_id +
+        " project=" + project_id +
+        " chat=" + chat_id +
+        " messages=" + std::to_string(opts.messages.size()) +
+        " tools=0");
+
     const auto stream_result = OpenAIClient::StreamChat(opts,
         [&](const std::string& delta) {
             if (cancelled()) {
@@ -4475,7 +4811,19 @@ std::string WebServer::StreamModel(const std::string& project_id,
             }
         },
         on_queue_status,
-        on_activity_status);
+        on_activity_status,
+        cancelled);
+
+    if (cancelled()) {
+        aborted = true;
+    }
+
+    Logger::Info("WebModel",
+        "provider-return request_id=" + model_request_id +
+        " success=" + std::to_string(stream_result.success) +
+        " cancelled=" + std::to_string(cancelled()) +
+        " assistant_chars=" + std::to_string(accumulated.size()) +
+        (stream_result.error.empty() ? "" : " error=" + stream_result.error));
 
     if (!stream_result.success && !aborted) {
         const std::string err_msg = stream_result.error.empty() ? "Streaming model call failed." : stream_result.error;
@@ -4484,6 +4832,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 log_header + ChatRequestLogger::FormatErrorResponse(err_msg));
         }
         // Nothing to save; return the error
+        persist_visible_error(err_msg);
         return err_msg;
     }
 
@@ -4498,6 +4847,13 @@ std::string WebServer::StreamModel(const std::string& project_id,
         storage_->SaveMessages(project_id, chat_id, messages);
         NotifyContentChanged();
     }
+
+    Logger::Info("WebModel",
+        "completed request_id=" + model_request_id +
+        " project=" + project_id +
+        " chat=" + chat_id +
+        " assistant_chars=" + std::to_string(accumulated.size()) +
+        " aborted=" + std::to_string(aborted));
 
     if (logging) {
         if (!stream_result.success && !aborted) {
@@ -4597,7 +4953,8 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             [&](const std::string& delta) -> bool {
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
-                    if (pipe->abort || cancel_token->cancelled.load()) return false;
+                    if (cancel_token->cancelled.load()) return false;
+                    if (pipe->abort) return true;
                     json ev = {{"delta", delta}};
                     pipe->pending += encode_sse(ev.dump());
                 }
@@ -4666,6 +5023,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
                     if (pipe->abort || cancel_token->cancelled.load()) return;
+                    const std::string timestamp = NowIso();
                     json ev = {
                         {"tool_event", tool_status == "live" ? "start" : "finish"},
                         {"tool_call_id", tool_call_id},
@@ -4673,6 +5031,8 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                         {"tool_arguments", tool_arguments},
                         {"tool_result", tool_result},
                         {"tool_status", tool_status},
+                        {"started_at", timestamp},
+                        {"updated_at", timestamp},
                     };
                     pipe->pending += encode_sse(ev.dump());
                 }
@@ -4746,7 +5106,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
         }
         pipe->cv.notify_one();
     });
-    producer.detach();  // HTTP content provider below drives lifetime
+    producer.detach();  // Server-side run continues even if the client unsubscribes.
 
     // ── Consumer: httplib chunked content provider ─────────────────────────────
     res->set_header("Cache-Control", "no-cache");
@@ -4765,7 +5125,8 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 std::swap(chunk, pipe->pending);
                 lk.unlock();
                 if (!sink.write(chunk.c_str(), chunk.size())) {
-                    // Client disconnected
+                    // Client disconnected. The server-side run continues and
+                    // persists its result unless the user explicitly cancels it.
                     std::lock_guard<std::mutex> lg(pipe->mtx);
                     pipe->abort = true;
                     return false;
@@ -4805,6 +5166,9 @@ void WebServer::HandleCancelStream(const void* req_ptr, void* res_ptr) {
 
     const std::string key = *project_id + ":" + chat_id;
     bool cancelled = false;
+    Logger::Warn("WebModel",
+        "cancel-stream-request project=" + *project_id +
+        " chat=" + chat_id);
     {
         std::lock_guard<std::mutex> lk(active_streams_mutex_);
         auto it = active_streams_.find(key);
@@ -4860,6 +5224,18 @@ std::string WebServer::SerializeAutomationJob(
 
     std::lock_guard<std::mutex> lk(job->mtx);
     const bool active = IsActiveAutomationStatus(job->status);
+    json live_tool_trace = json::array();
+    for (const auto& item : job->live_tool_trace) {
+        live_tool_trace.push_back({
+            {"tool_call_id", item.tool_call_id},
+            {"tool_name", item.tool_name},
+            {"arguments", item.arguments_json},
+            {"result", item.result_json},
+            {"status", item.status},
+            {"started_at", item.started_at},
+            {"updated_at", item.updated_at},
+        });
+    }
     json payload = {
         {"id", job->id},
         {"project_id", job->project_id},
@@ -4874,8 +5250,11 @@ std::string WebServer::SerializeAutomationJob(
         {"queue_provider", job->queue_provider},
         {"live_response", job->live_response},
         {"live_mode_name", job->live_mode_name},
+        {"live_started_at", job->live_started_at},
         {"current_tool_name", job->current_tool_name},
         {"current_tool_status", job->current_tool_status},
+        {"current_tool_at", job->current_tool_at},
+        {"live_tool_trace", live_tool_trace},
         {"heartbeat_at", job->heartbeat_at},
         {"heartbeat_message", job->heartbeat_message},
         {"queue_position", job->queue_position},
@@ -5012,18 +5391,27 @@ bool WebServer::CompressChatForAutomation(const std::string& project_id,
                 config->name));
     }
 
+    const std::string compression_created_at = NowIso();
     json record_payload = {
         {"status", "done"},
         {"message", "Context compressed successfully"},
+        {"created_at", compression_created_at},
         {"before_messages", visible.size()},
         {"after_messages", remaining},
         {"compressed_through", compressed_through},
+        {"before_tokens", EstimateMessagesTokens(visible)},
+        {"after_tokens", EstimateTokenCount(compressed) +
+            EstimateMessagesTokens(std::vector<MessageRecord>(
+                visible.begin() + static_cast<std::ptrdiff_t>(
+                    std::min(compressed_through, visible.size())),
+                visible.end()))},
+        {"compressed_context_tokens", EstimateTokenCount(compressed)},
     };
 
     MessageRecord comp_msg;
     comp_msg.role = "compression";
     comp_msg.content = record_payload.dump();
-    comp_msg.created_at = NowIso();
+    comp_msg.created_at = compression_created_at;
 
     messages = storage_->LoadMessages(project_id, chat_id);
     messages.push_back(comp_msg);
@@ -5083,6 +5471,10 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
         j.started_at = NowIso();
         j.updated_at = j.started_at;
     });
+    Logger::Info("Automation",
+        "started job=" + job->id +
+        " project=" + job->project_id +
+        " chat=" + job->chat_id);
 
     try {
         for (size_t si = 0; si < job->steps.size(); ++si) {
@@ -5106,8 +5498,11 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                     j.live_mode_name = !step.mode_name.empty()
                         ? step.mode_name
                         : (!step.mode_id.empty() ? step.mode_id : "Default");
+                    j.live_started_at = NowIso();
                     j.current_tool_name.clear();
                     j.current_tool_status.clear();
+                    j.current_tool_at.clear();
+                    j.live_tool_trace.clear();
                     j.heartbeat_at = NowIso();
                     j.heartbeat_message = "Automation worker is active.";
                     ++j.heartbeat_revision;
@@ -5236,14 +5631,43 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                         const std::string& tool_arguments,
                         const std::string& tool_result,
                         const std::string& tool_status) {
-                        (void)tool_arguments;
-                        (void)tool_result;
                         update([&](AutomationJob& j) {
+                            const std::string timestamp = NowIso();
                             j.current_tool_name = tool_name;
                             j.current_tool_status = tool_status;
+                            j.current_tool_at = timestamp;
                             j.message = tool_status == "live"
                                 ? "Running tool: " + tool_name
                                 : "Tool finished: " + tool_name;
+                            auto trace_it = std::find_if(
+                                j.live_tool_trace.begin(),
+                                j.live_tool_trace.end(),
+                                [&](const AutomationToolTraceItem& item) {
+                                    if (!tool_call_id.empty()) {
+                                        return item.tool_call_id == tool_call_id;
+                                    }
+                                    return item.tool_name == tool_name &&
+                                           item.status == "live";
+                                });
+                            if (trace_it == j.live_tool_trace.end()) {
+                                AutomationToolTraceItem item;
+                                item.tool_call_id = tool_call_id;
+                                item.tool_name = tool_name;
+                                item.started_at = timestamp;
+                                j.live_tool_trace.push_back(std::move(item));
+                                trace_it = j.live_tool_trace.end();
+                                --trace_it;
+                            }
+                            trace_it->tool_call_id = tool_call_id;
+                            trace_it->tool_name = tool_name;
+                            trace_it->arguments_json = tool_arguments;
+                            trace_it->result_json = tool_result;
+                            trace_it->status = tool_status;
+                            if (trace_it->started_at.empty()) {
+                                trace_it->started_at = timestamp;
+                            }
+                            trace_it->updated_at = timestamp;
+                            ++j.live_response_revision;
                             if (tool_name == built_in_tools::kPlannerToolName) {
                                 ++j.planner_revision;
                             }
@@ -5288,6 +5712,13 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                     break;
                 }
                 if (!err.empty()) {
+                    Logger::Error("Automation",
+                        "step-error job=" + job->id +
+                        " project=" + job->project_id +
+                        " chat=" + job->chat_id +
+                        " step=" + std::to_string(si + 1) +
+                        " repeat=" + std::to_string(ri + 1) +
+                        " error=" + err);
                     update([&](AutomationJob& j) {
                         j.status = "failed";
                         j.error = err;
@@ -5349,7 +5780,17 @@ automation_finished:
             }
             j.finished_at = NowIso();
         });
+        Logger::Info("Automation",
+            "finished job=" + job->id +
+            " project=" + job->project_id +
+            " chat=" + job->chat_id +
+            " cancelled=" + std::to_string(cancelled()));
     } catch (const std::exception& ex) {
+        Logger::Error("Automation",
+            "exception job=" + job->id +
+            " project=" + job->project_id +
+            " chat=" + job->chat_id +
+            " error=" + ex.what());
         update([&](AutomationJob& j) {
             j.status = "failed";
             j.error = ex.what();
@@ -5357,6 +5798,10 @@ automation_finished:
             j.finished_at = NowIso();
         });
     } catch (...) {
+        Logger::Error("Automation",
+            "unknown-exception job=" + job->id +
+            " project=" + job->project_id +
+            " chat=" + job->chat_id);
         update([](AutomationJob& j) {
             j.status = "failed";
             j.error = "Automation failed with an unknown error.";
@@ -5448,6 +5893,13 @@ void WebServer::HandleStartAutomation(const void* req_ptr, void* res_ptr) {
     job->started_at = NowIso();
     job->updated_at = job->started_at;
 
+    Logger::Info("Automation",
+        "queued job=" + job->id +
+        " project=" + *project_id +
+        " chat=" + chat_id +
+        " steps=" + std::to_string(job->steps.size()) +
+        " total_runs=" + std::to_string(job->total_runs));
+
     const std::string key = AutomationChatKey(*project_id, chat_id);
     {
         std::lock_guard<std::mutex> lk(automation_jobs_mutex_);
@@ -5519,6 +5971,10 @@ void WebServer::HandleCancelAutomation(const void* req_ptr, void* res_ptr) {
 
     bool cancelled = false;
     if (job) {
+        Logger::Warn("Automation",
+            "cancel-request job=" + job->id +
+            " project=" + *project_id +
+            " chat=" + chat_id);
         if (job->cancel_token) {
             job->cancel_token->cancelled.store(true);
         }

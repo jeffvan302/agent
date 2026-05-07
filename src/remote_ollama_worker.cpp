@@ -1330,7 +1330,7 @@ std::string OpenAiSseChunk(
     return OpenAiSseDeltaChunk(model, id, std::move(delta), finish_reason);
 }
 
-void WriteOllamaChatStreamAsOpenAiSse(
+bool WriteOllamaChatStreamAsOpenAiSse(
     const std::string& data,
     std::string& line_buffer,
     httplib::DataSink& sink,
@@ -1357,7 +1357,9 @@ void WriteOllamaChatStreamAsOpenAiSse(
             }
             if (!content.empty()) {
                 const std::string event = OpenAiSseChunk(item.value("model", fallback_model), stream_id, content);
-                sink.write(event.data(), event.size());
+                if (!sink.write(event.data(), event.size())) {
+                    return false;
+                }
             }
             if (item.contains("message") && item["message"].is_object()) {
                 const auto& message = item["message"];
@@ -1394,13 +1396,16 @@ void WriteOllamaChatStreamAsOpenAiSse(
                             item.value("model", fallback_model),
                             stream_id,
                             json{{"tool_calls", std::move(tool_call_deltas)}});
-                        sink.write(event.data(), event.size());
+                        if (!sink.write(event.data(), event.size())) {
+                            return false;
+                        }
                     }
                 }
             }
         } catch (...) {
         }
     }
+    return true;
 }
 
 BOOL WINAPI ConsoleControlHandler(DWORD control_type) {
@@ -1724,8 +1729,7 @@ int RunRemote(const fs::path& config_path) {
                         body,
                         "application/json",
                         [&](const char* data, size_t data_length) {
-                            sink.write(data, data_length);
-                            return true;
+                            return sink.write(data, data_length);
                         });
 
                     if (!response) {
@@ -1797,17 +1801,19 @@ int RunRemote(const fs::path& config_path) {
                         body,
                         "application/json",
                         [&](const char* data, size_t data_length) {
-                            WriteOllamaChatStreamAsOpenAiSse(
+                            return WriteOllamaChatStreamAsOpenAiSse(
                                 std::string(data, data_length),
                                 line_buffer,
                                 sink,
                                 fallback_model,
                                 stream_id);
-                            return true;
                         });
 
                     if (!line_buffer.empty()) {
-                        WriteOllamaChatStreamAsOpenAiSse("\n", line_buffer, sink, fallback_model, stream_id);
+                        if (!WriteOllamaChatStreamAsOpenAiSse("\n", line_buffer, sink, fallback_model, stream_id)) {
+                            sink.done();
+                            return true;
+                        }
                     }
 
                     if (!response) {

@@ -90,7 +90,12 @@ inline std::vector<MessageRecord> SanitizeModelVisibleMessages(
     std::vector<MessageRecord> visible;
     visible.reserve(messages.size());
     for (auto message : messages) {
-        if (message.role == "file" || message.role == "compression") {
+        // The stored chat log is the full record, including UI/debug/error
+        // records. Provider APIs only accept the chat protocol roles below.
+        if (message.role != "system" &&
+            message.role != "user" &&
+            message.role != "assistant" &&
+            message.role != "tool") {
             continue;
         }
         if (message.role == "assistant") {

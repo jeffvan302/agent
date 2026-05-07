@@ -12,8 +12,7 @@
   "built_in_questionnaire_enabled": true,
   "completion_driver_allowed_mode_ids": [
     "mode_1386991781",
-    "mode_1396697453",
-    "mode_1426853375"
+    "mode_1396697453"
   ],
   "compression_configs": [],
   "enable_automation": true,

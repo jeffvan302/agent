@@ -4782,7 +4782,6 @@ void MainWindow::SendCurrentMessage() {
     }
 
     std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, proj_settings, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_, selected_compression_config, compression_service = &compression_service_]() {
-        constexpr int kMaxToolRounds = 8;
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
         std::vector<ChatToolDefinition> tool_definitions;
@@ -4812,14 +4811,12 @@ void MainWindow::SendCurrentMessage() {
         // not on natural in-loop assistant/tool-result growth.
         const std::vector<MessageRecord> pre_tool_loop_messages = working_messages;
         std::string error;
-        constexpr int kMaxCompletionDriverRounds = 64;
         const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
             project_settings_for_tools, proj_settings.selected_agentic_mode_id);
-        const int max_rounds = completion_driver_enabled ? kMaxCompletionDriverRounds : kMaxToolRounds;
         bool completion_driver_done = !completion_driver_enabled;
         bool success = false;
 
-        for (int round = 0; round < max_rounds; ++round) {
+        for (int round = 0; ; ++round) {
             // Tool-loop emergency: if pre-tool-loop request already exceeds threshold,
             // schedule compression for the *next* turn (preserves current tool chain).
             if (selected_compression_config && request.model.context_window > 0) {
@@ -5079,10 +5076,10 @@ void MainWindow::SendCurrentMessage() {
                 final_request.system_prompt += "\n\n";
             }
             final_request.system_prompt +=
-                "The MCP tool-call round limit has been reached. Do not call or "
-                "request any more tools. Use the tool results already present in "
-                "the conversation to write the final answer. If the requested work "
-                "succeeded, say so and summarize the important output. If it did "
+                "The tool loop stopped before a final assistant answer was produced. "
+                "Do not call or request any more tools. Use the tool results already "
+                "present in the conversation to write the final answer. If the requested "
+                "work succeeded, say so and summarize the important output. If it did "
                 "not fully succeed, explain the last observed state and what remains.";
 
             const auto final_result = OpenAIClient::StreamChat(
@@ -5104,8 +5101,8 @@ void MainWindow::SendCurrentMessage() {
                 success = true;
             } else {
                 error = final_result.error.empty()
-                    ? "The model exceeded the MCP tool-call loop limit."
-                    : "The model exceeded the MCP tool-call loop limit, and the final summary failed: " + final_result.error;
+                    ? "The tool loop stopped before producing a final answer."
+                    : "The tool loop stopped before producing a final answer, and the final summary failed: " + final_result.error;
             }
         }
 
