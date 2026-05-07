@@ -33,11 +33,39 @@ html, body {
   background: var(--color-bg-header);
   flex-shrink: 0;
 }
+#header-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
 #header-title {
   color: var(--color-text-sidebar-active);
   font-size: var(--font-size-large);
   font-weight: 600;
   letter-spacing: 0.01em;
+}
+.mobile-header-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 32px;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--color-text-sidebar);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+.mobile-header-btn:hover,
+.mobile-header-btn[aria-expanded="true"] {
+  background: var(--color-bg-sidebar-hover);
+  color: var(--color-text-sidebar-active);
 }
 #header-user {
   display: flex;
@@ -322,6 +350,14 @@ body.sidebar-resizing {
 .planner-status.in_progress { background: rgba(59,130,246,0.32); }
 .planner-status.blocked { background: rgba(239,68,68,0.32); }
 .planner-status.cancelled { background: rgba(148,163,184,0.28); }
+.mobile-planner-panel,
+.mobile-automation-running-status {
+  display: none;
+}
+
+#mobile-panel-backdrop {
+  display: none;
+}
 
 /* ── Main area ────────────────────────────────────────────────────────── */
 #main {
@@ -606,8 +642,7 @@ body.sidebar-resizing {
   line-height: 1.35;
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
-.pro
-vider-queue-status-icon {
+.provider-queue-status-icon {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
@@ -1143,6 +1178,7 @@ color-accent-primary);
   padding: 6px 10px;
   margin: 6px 10px 8px;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .automation-status-detail,
 .automation-status-error,
@@ -1252,6 +1288,255 @@ color-accent-primary);
 }
 #empty-state .empty-icon { font-size: 40px; opacity: 0.4; }
 #empty-state p { font-size: var(--font-size-small); max-width: 280px; line-height: 1.6; }
+
+@media (max-width: 720px) {
+  #app {
+    height: 100dvh;
+  }
+
+  #header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  .mobile-header-btn {
+    display: inline-flex;
+  }
+
+  #mobile-plan-btn[hidden] {
+    display: none;
+  }
+
+  #header-center {
+    min-width: 0;
+  }
+
+  #header-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+  }
+
+  body.mobile-has-plan #header-title {
+    display: none;
+  }
+
+  #header-user {
+    justify-content: flex-end;
+    gap: 6px;
+    min-width: 0;
+    font-size: 11px;
+  }
+
+  #header-account-btn {
+    max-width: 88px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #logout-link {
+    white-space: nowrap;
+  }
+
+  #body-row {
+    position: relative;
+  }
+
+  #sidebar {
+    position: fixed;
+    top: 48px;
+    bottom: 0;
+    left: 0;
+    z-index: 80;
+    width: min(86vw, 360px);
+    min-width: 0;
+    max-width: none;
+    transform: translateX(-105%);
+    transition: transform 0.18s ease;
+    box-shadow: 12px 0 34px rgba(0,0,0,0.28);
+  }
+
+  body.mobile-sidebar-open #sidebar {
+    transform: translateX(0);
+  }
+
+  #sidebar-resizer {
+    display: none;
+  }
+
+  #sidebar #automation-running-status {
+    display: none !important;
+  }
+
+  #mobile-panel-backdrop {
+    position: fixed;
+    inset: 48px 0 0;
+    z-index: 70;
+    background: rgba(15,23,42,0.42);
+  }
+
+  #mobile-panel-backdrop:not([hidden]) {
+    display: block;
+  }
+
+  #main {
+    width: 100%;
+  }
+
+  #chat-title {
+    padding: 9px 12px;
+  }
+
+  #messages {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .message-row {
+    max-width: 100%;
+  }
+
+  .message-bubble {
+    padding: 10px 12px;
+  }
+
+  .mobile-automation-running-status {
+    margin: 0;
+    border-width: 0 0 1px;
+    border-radius: 0;
+    max-height: 32vh;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+
+  .mobile-automation-running-status:not([style*="display: none"]) {
+    display: block;
+  }
+
+  .mobile-planner-panel {
+    margin: 0;
+    padding: 10px 12px 14px;
+    border-top: 0;
+    border-bottom: 1px solid var(--color-border-main);
+    background: var(--color-bg-main);
+    color: var(--color-text-primary);
+    overflow-y: auto;
+  }
+
+  body.mobile-planner-open .mobile-planner-panel:not([hidden]) {
+    display: block;
+    flex: 1;
+    min-height: 0;
+  }
+
+  body.mobile-planner-open #messages {
+    display: none;
+  }
+
+  body.mobile-planner-open .mobile-automation-running-status {
+    display: none !important;
+  }
+
+  .mobile-planner-panel .planner-panel-title,
+  .mobile-planner-panel .planner-goal-text,
+  .mobile-planner-panel .planner-item-title {
+    color: var(--color-text-primary);
+  }
+
+  .mobile-planner-panel .planner-section-header,
+  .mobile-planner-panel .planner-item-title {
+    color: var(--color-text-secondary);
+  }
+
+  .mobile-planner-panel .planner-refresh-btn {
+    border-color: var(--color-border-input);
+    color: var(--color-text-secondary);
+  }
+
+  .mobile-planner-panel .planner-goal-text {
+    background: var(--color-bg-tool-call);
+  }
+
+  #attach-bar {
+    padding: 6px 10px 0;
+  }
+
+  #compose {
+    padding: 6px 10px 10px;
+  }
+
+  #compose-top {
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  #compose-top-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  #compose-bottom {
+    display: block;
+  }
+
+  #automation-panel {
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+
+  #automation-status {
+    min-width: auto;
+  }
+
+  .automation-step {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .automation-step .step-prompt {
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  #compose-bottom-row {
+    gap: 6px;
+  }
+
+  #attach-btn {
+    width: 40px;
+    height: 42px;
+  }
+
+  #message-input {
+    min-height: 42px;
+    padding: 9px 10px;
+  }
+
+  #send-btn {
+    height: 42px;
+    min-width: 62px;
+    padding: 0 12px;
+  }
+
+  body.automation-active #automation-panel,
+  body.automation-active #compose-bottom-row,
+  body.automation-active #agentic-mode-label,
+  body.automation-active #compress-btn,
+  body.automation-active #debug-btn,
+  body.automation-active #automate-btn {
+    display: none !important;
+  }
+
+  body.automation-active #compose-top {
+    justify-content: flex-end;
+  }
+}
 
 /* ── Login page ───────────────────────────────────────────────────────── */
 #login-page {
@@ -1480,4 +1765,65 @@ document.getElementById('login-form').addEventListener('submit', async function(
     btn.textContent = 'Sign In';
   }
 });
+
+
+
+
+
+
+
+
+
+
+'use strict';
+
+document.getElementById('login-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+
+  const btn = document.getElementById('login-btn');
+  const errEl = document.getElementById('login-error');
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  const rememberMe = !!document.getElementById('remember-me')?.checked;
+
+  btn.disabled = true;
+  btn.textContent = 'Signing in...';
+  errEl.style.display = 'none';
+
+  try {
+    const resp = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, remember_me: rememberMe }),
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      if (data.force_password_reset) {
+        sessionStorage.setItem('force_password_reset', 'true');
+        window.location.href = '/change-password';
+      } else {
+        window.location.href = '/';
+      }
+    } else {
+      errEl.textContent = data.error || 'Login failed.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    }
+  } catch (err) {
+    errEl.textContent = 'Network error - is the server running?';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+});
+
+
+
+
+
+
+
+
 

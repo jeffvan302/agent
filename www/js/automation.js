@@ -2,6 +2,7 @@
 
 
 
+
 /* global api, escapeHtml, loadMessages, messageInput, messagesEl, postProcessMessageBubble, renderMarkdown, resizeTextarea, renderCancelAgentButton, schedulePlannerRefresh, state */
 
 if (automateBtn) {
@@ -154,19 +155,31 @@ function formatAutomationTimestamp(value) {
   });
 }
 
-function renderSelectedAutomationJobStatus() {
-  const statusEl = $('automation-running-status');
-  if (!statusEl) return;
+function automationStatusTargets() {
+  return [
+    $('automation-running-status'),
+    $('mobile-automation-running-status'),
+  ].filter(Boolean);
+}
 
+function renderSelectedAutomationJobStatus() {
   const job = selectedAutomationJob();
+  const active = automationJobIsActive(job);
+  document.body.classList.toggle('automation-active', active);
+
+  for (const statusEl of automationStatusTargets()) {
+    renderAutomationJobStatusInto(statusEl, job, active);
+  }
+  renderCancelAgentButton();
+}
+
+function renderAutomationJobStatusInto(statusEl, job, active) {
   if (!job) {
     statusEl.style.display = 'none';
     statusEl.innerHTML = '';
-    renderCancelAgentButton();
     return;
   }
 
-  const active = automationJobIsActive(job);
   statusEl.style.display = '';
   statusEl.innerHTML = '';
 
@@ -270,8 +283,6 @@ function renderSelectedAutomationJobStatus() {
     });
     statusEl.appendChild(close);
   }
-
-  renderCancelAgentButton();
 }
 
 function clearAutomationLiveResponse() {

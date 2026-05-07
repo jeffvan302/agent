@@ -7,6 +7,7 @@
 
 
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -24,7 +25,11 @@
 <div id="app">
   <!-- Header -->
   <header id="header">
-    <span id="header-title">Agent Chat</span>
+    <button id="mobile-menu-btn" class="mobile-header-btn" type="button" aria-label="Open projects and chats" aria-expanded="false">Menu</button>
+    <div id="header-center">
+      <span id="header-title">Agent Chat</span>
+      <button id="mobile-plan-btn" class="mobile-header-btn" type="button" aria-label="Show project plan" aria-expanded="false" hidden>Plan</button>
+    </div>
     <div id="header-user">
       <button id="header-account-btn" type="button">
         <span id="header-username"></span>
@@ -50,6 +55,8 @@
     <!-- Main chat area -->
     <main id="main">
       <div id="chat-title">Select or create a chat</div>
+      <div id="mobile-automation-running-status" class="automation-running-status mobile-automation-running-status" style="display:none"></div>
+      <div id="mobile-planner-panel" class="planner-panel mobile-planner-panel" hidden></div>
       <div id="messages">
         <div id="empty-state">
           <div class="empty-icon">💬</div>
@@ -97,6 +104,8 @@
     </main>
   </div>
 </div>
+
+<div id="mobile-panel-backdrop" hidden></div>
 
 <div id="account-modal" class="app-modal" hidden>
   <div class="app-modal-backdrop" data-close-account-modal="true"></div>

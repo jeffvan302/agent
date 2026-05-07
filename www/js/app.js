@@ -85,6 +85,10 @@ const sidebarResizer = $('sidebar-resizer');
 const projectList  = $('project-list');
 const newChatBtn   = $('new-chat-btn');
 const plannerPanel = $('planner-panel');
+const mobilePlannerPanel = $('mobile-planner-panel');
+const mobileMenuBtn = $('mobile-menu-btn');
+const mobilePlanBtn = $('mobile-plan-btn');
+const mobilePanelBackdrop = $('mobile-panel-backdrop');
 const chatTitle    = $('chat-title');
 const messagesEl   = $('messages');
 const emptyState   = $('empty-state');
@@ -183,6 +187,70 @@ function setupSidebarResizer() {
 }
 
 setupSidebarResizer();
+
+function isMobileLayout() {
+  return window.matchMedia && window.matchMedia('(max-width: 720px)').matches;
+}
+
+function updateMobilePanelBackdrop() {
+  if (!mobilePanelBackdrop) return;
+  const open = document.body.classList.contains('mobile-sidebar-open') ||
+    document.body.classList.contains('mobile-planner-open');
+  mobilePanelBackdrop.hidden = !open;
+}
+
+function setMobileSidebarOpen(open) {
+  document.body.classList.toggle('mobile-sidebar-open', !!open);
+  if (open) document.body.classList.remove('mobile-planner-open');
+  if (mobileMenuBtn) {
+    mobileMenuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  if (mobilePlanBtn) {
+    mobilePlanBtn.setAttribute(
+      'aria-expanded',
+      document.body.classList.contains('mobile-planner-open') ? 'true' : 'false',
+    );
+  }
+  updateMobilePanelBackdrop();
+}
+
+function setMobilePlannerOpen(open) {
+  if (open && mobilePlanBtn && mobilePlanBtn.hidden) open = false;
+  document.body.classList.toggle('mobile-planner-open', !!open);
+  if (open) document.body.classList.remove('mobile-sidebar-open');
+  if (mobilePlanBtn) {
+    mobilePlanBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  if (mobileMenuBtn) {
+    mobileMenuBtn.setAttribute(
+      'aria-expanded',
+      document.body.classList.contains('mobile-sidebar-open') ? 'true' : 'false',
+    );
+  }
+  updateMobilePanelBackdrop();
+}
+
+function closeMobilePanels() {
+  setMobileSidebarOpen(false);
+  setMobilePlannerOpen(false);
+}
+
+if (mobileMenuBtn) {
+  mobileMenuBtn.addEventListener('click', () => {
+    setMobileSidebarOpen(!document.body.classList.contains('mobile-sidebar-open'));
+  });
+}
+if (mobilePlanBtn) {
+  mobilePlanBtn.addEventListener('click', () => {
+    setMobilePlannerOpen(!document.body.classList.contains('mobile-planner-open'));
+  });
+}
+if (mobilePanelBackdrop) {
+  mobilePanelBackdrop.addEventListener('click', closeMobilePanels);
+}
+window.addEventListener('resize', () => {
+  if (!isMobileLayout()) closeMobilePanels();
+});
 
 // ── API helpers ───────────────────────────────────────────────────────────
 async function api(method, path, body) {
@@ -296,6 +364,11 @@ if (accountModal) {
   });
 }
 window.addEventListener('keydown', e => {
+  if (e.key === 'Escape' &&
+      (document.body.classList.contains('mobile-sidebar-open') ||
+       document.body.classList.contains('mobile-planner-open'))) {
+    closeMobilePanels();
+  }
   if (e.key === 'Escape' && accountModal && !accountModal.hidden) {
     closeAccountModal();
   }
@@ -1830,7 +1903,7 @@ function applyPlannerPayload(data) {
 }
 
 async function loadPlanner(projectId, chatId) {
-  if (!plannerPanel || !chatId) {
+  if (!plannerPanels().length || !chatId) {
     resetPlannerState();
     return;
   }
@@ -1857,7 +1930,7 @@ async function loadPlanner(projectId, chatId) {
 }
 
 function schedulePlannerRefresh(delayMs = 250) {
-  if (!plannerPanel || !state.selectedChatId) return;
+  if (!plannerPanels().length || !state.selectedChatId) return;
   if (state.plannerRefreshTimer) clearTimeout(state.plannerRefreshTimer);
   state.plannerRefreshTimer = setTimeout(() => {
     state.plannerRefreshTimer = null;
@@ -1888,22 +1961,48 @@ async function updatePlannerItemStatus(id, status, checkbox) {
   }
 }
 
-function renderPlannerPanel() {
-  if (!plannerPanel) return;
-  plannerPanel.innerHTML = '';
+function plannerPanels() {
+  return [plannerPanel, mobilePlannerPanel].filter(Boolean);
+}
 
-  if (!state.selectedChatId) {
-    plannerPanel.hidden = true;
+function plannerPanelShouldShow() {
+  return !!(state.selectedChatId && (state.plannerEnabled || state.plannerError));
+}
+
+function renderMobilePlanButton() {
+  if (!mobilePlanBtn) return;
+  const visible = plannerPanelShouldShow();
+  document.body.classList.toggle('mobile-has-plan', visible);
+  mobilePlanBtn.hidden = !visible;
+  if (!visible) {
+    document.body.classList.remove('mobile-planner-open');
+  }
+  mobilePlanBtn.setAttribute(
+    'aria-expanded',
+    document.body.classList.contains('mobile-planner-open') ? 'true' : 'false',
+  );
+  updateMobilePanelBackdrop();
+}
+
+function renderPlannerPanel() {
+  const panels = plannerPanels();
+  if (!panels.length) return;
+  for (const panel of panels) {
+    renderPlannerPanelInto(panel);
+  }
+  renderMobilePlanButton();
+}
+
+function renderPlannerPanelInto(targetPanel) {
+  targetPanel.innerHTML = '';
+
+  if (!plannerPanelShouldShow()) {
+    targetPanel.hidden = true;
     return;
   }
 
   const hasContent = plannerHasContent(state.plannerPlan);
-  if (!state.plannerEnabled && !state.plannerError) {
-    plannerPanel.hidden = true;
-    return;
-  }
-
-  plannerPanel.hidden = false;
+  targetPanel.hidden = false;
 
   const header = document.createElement('div');
   header.className = 'planner-panel-header';
@@ -1917,13 +2016,13 @@ function renderPlannerPanel() {
   refresh.addEventListener('click', () => loadPlanner(state.selectedProjectId, state.selectedChatId));
   header.appendChild(title);
   header.appendChild(refresh);
-  plannerPanel.appendChild(header);
+  targetPanel.appendChild(header);
 
   if (state.plannerError) {
     const error = document.createElement('div');
     error.className = 'planner-error';
     error.textContent = state.plannerError;
-    plannerPanel.appendChild(error);
+    targetPanel.appendChild(error);
     return;
   }
 
@@ -1935,7 +2034,7 @@ function renderPlannerPanel() {
     if (stats.inProgress) parts.push(`${stats.inProgress} active`);
     if (stats.blocked) parts.push(`${stats.blocked} blocked`);
     summary.textContent = parts.join(' · ');
-    plannerPanel.appendChild(summary);
+    targetPanel.appendChild(summary);
   }
 
   const goal = String((state.plannerPlan && state.plannerPlan.goal) || '').trim();
@@ -1943,21 +2042,21 @@ function renderPlannerPanel() {
     const goalEl = document.createElement('div');
     goalEl.className = 'planner-goal-text';
     goalEl.textContent = goal;
-    plannerPanel.appendChild(goalEl);
+    targetPanel.appendChild(goalEl);
   }
 
   if (!hasContent) {
     const empty = document.createElement('div');
     empty.className = 'planner-empty';
     empty.textContent = 'Planner is ready. No plan items yet.';
-    plannerPanel.appendChild(empty);
+    targetPanel.appendChild(empty);
     return;
   }
 
   for (const section of PLANNER_SECTIONS) {
     const items = plannerArray(state.plannerPlan, section.key);
     if (!items.length) continue;
-    renderPlannerSection(section, items, plannerPanel);
+    renderPlannerSection(section, items, targetPanel);
   }
 }
 
@@ -2118,6 +2217,9 @@ async function selectChat(projectId, chatId, chatName) {
   state.selectedChatId    = chatId;
   state.selectedChatAgenticModeId = null;
   state.plannerExpanded = {};
+  if (typeof renderSelectedAutomationJobStatus === 'function') {
+    renderSelectedAutomationJobStatus();
+  }
   document.querySelectorAll('.chat-entry').forEach(el =>
     el.classList.toggle('active', el.dataset.chatId === chatId));
   chatTitle.textContent = stripUserSuffix(chatName);
@@ -2134,6 +2236,7 @@ async function selectChat(projectId, chatId, chatName) {
   if (typeof refreshAutomationStatusForChat === 'function') {
     refreshAutomationStatusForChat(chatId, { reloadMessages: false });
   }
+  if (isMobileLayout()) setMobileSidebarOpen(false);
 }
 
 async function loadProjectAgenticModes(projectId) {
