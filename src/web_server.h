@@ -213,6 +213,9 @@ private:
     void HandleSendMessage    (const void* req, void* res);
     void HandleStreamMessage  (const void* req, void* res);  // SSE streaming
     void HandleCancelStream   (const void* req, void* res);
+    void HandleStartAutomation(const void* req, void* res);
+    void HandleGetAutomationStatus(const void* req, void* res);
+    void HandleCancelAutomation(const void* req, void* res);
     void HandleUpload         (const void* req, void* res);  // multipart file upload
     void HandleProjectDataDownload(const void* req, void* res);
     void HandleRagDocumentDownload(const void* req, void* res);
@@ -286,6 +289,81 @@ private:
 
     void NotifyContentChanged() const;
 
+    struct ActiveStreamCancellation {
+        std::atomic<bool> cancelled{false};
+    };
+
+    struct AutomationStep {
+        std::string mode_id;
+        std::string mode_name;
+        std::string prompt;
+        bool compress = false;
+        int repeat = 1;
+    };
+
+    // Server-owned automation jobs let the browser leave, reload, or switch
+    // chats while a sequence keeps running. The worker calls StreamModel, so
+    // each step inherits the normal tool loop, completion-driver continuation,
+    // provider queue callbacks, cancellation checks, and compression behavior.
+    struct AutomationJob {
+        std::string id;
+        std::string project_id;
+        std::string chat_id;
+        std::string username;
+        std::vector<AutomationStep> steps;
+        std::shared_ptr<ActiveStreamCancellation> cancel_token;
+
+        mutable std::mutex mtx;
+        std::string status = "queued"; // queued | running | cancelling | completed | failed | cancelled
+        std::string message;
+        std::string error;
+        std::string activity_status;
+        std::string activity_message;
+        std::string queue_state;
+        std::string queue_provider;
+        std::string live_response;
+        std::string live_mode_name;
+        std::string current_tool_name;
+        std::string current_tool_status;
+        std::string heartbeat_at;
+        std::string heartbeat_message;
+        int queue_position = 0;
+        int queue_depth = 0;
+        int queue_active = 0;
+        int queue_max_active = 0;
+        int current_step = 0;   // 1-based for API display
+        int total_steps = 0;
+        int current_repeat = 0; // 1-based for API display
+        int total_repeats = 0;
+        int completed_runs = 0;
+        int total_runs = 0;
+        bool cancel_requested = false;
+        unsigned long long revision = 0;
+        unsigned long long messages_revision = 0;
+        unsigned long long live_response_revision = 0;
+        unsigned long long planner_revision = 0;
+        unsigned long long heartbeat_revision = 0;
+        std::string started_at;
+        std::string updated_at;
+        std::string finished_at;
+        std::string questionnaire_tool_call_id;
+        std::string questionnaire_question;
+        std::vector<std::string> questionnaire_options;
+        bool questionnaire_allow_multiple = false;
+    };
+
+    void RunAutomationJob(std::shared_ptr<AutomationJob> job);
+    std::string SerializeAutomationJob(const std::shared_ptr<AutomationJob>& job) const;
+    bool SetChatAgenticModeForAutomation(const std::string& project_id,
+                                         const std::string& chat_id,
+                                         const std::string& selected_mode_id,
+                                         std::string* error);
+    bool CompressChatForAutomation(const std::string& project_id,
+                                   const std::string& chat_id,
+                                   const std::string& username,
+                                   std::string* status_message,
+                                   std::string* error);
+
     // ── Rate limiting ─────────────────────────────────────────────────────
     // Tracks per-IP failed login attempts.  After kMaxLoginFailures failures
     // the IP is locked out for kLockoutMinutes minutes.
@@ -357,11 +435,12 @@ private:
     std::thread                       server_thread_;
     std::thread                       redirect_thread_;
 
-    struct ActiveStreamCancellation {
-        std::atomic<bool> cancelled{false};
-    };
     mutable std::mutex                active_streams_mutex_;
     std::unordered_map<std::string, std::shared_ptr<ActiveStreamCancellation>> active_streams_;
+
+    mutable std::mutex                automation_jobs_mutex_;
+    std::unordered_map<std::string, std::shared_ptr<AutomationJob>> automation_jobs_;
+    std::atomic<unsigned long long>   automation_job_counter_{0};
 
     mutable std::mutex                sessions_mutex_;
     std::unordered_map<std::string, Session> sessions_;

@@ -64,7 +64,8 @@ let state = {
   projectEnableAutomation: false,
   automationSequence: [],
   automationPanelOpen: false,
-  automationRunning: false,
+  automationJobs: {},
+  automationStatusTimer: null,
   selectedAutomationStepIndex: -1,
   webDebuggingActive: false,
   plannerEnabled: false,
@@ -78,6 +79,9 @@ let state = {
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
+const bodyRow      = $('body-row');
+const sidebar      = $('sidebar');
+const sidebarResizer = $('sidebar-resizer');
 const projectList  = $('project-list');
 const newChatBtn   = $('new-chat-btn');
 const plannerPanel = $('planner-panel');
@@ -118,6 +122,67 @@ const accountNewPasswordInput = $('account-new-password');
 const accountConfirmPasswordInput = $('account-confirm-password');
 const accountSaveBtn = $('account-save-btn');
 const accountError = $('account-error');
+
+const SIDEBAR_WIDTH_STORAGE_KEY = 'agent.sidebar.width';
+
+function sidebarWidthBounds() {
+  const viewport = Math.max(0, window.innerWidth || 0);
+  const min = 220;
+  const max = Math.max(min, Math.min(620, viewport ? viewport - 420 : 620));
+  return { min, max };
+}
+
+function clampSidebarWidth(width) {
+  const bounds = sidebarWidthBounds();
+  const numeric = Number.isFinite(width) ? width : 280;
+  return Math.max(bounds.min, Math.min(bounds.max, numeric));
+}
+
+function applySidebarWidth(width, persist = false) {
+  if (!sidebar) return;
+  const clamped = clampSidebarWidth(width);
+  sidebar.style.setProperty('--sidebar-width', clamped + 'px');
+  if (persist) {
+    try { localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(Math.round(clamped))); } catch (_) {}
+  }
+}
+
+function setupSidebarResizer() {
+  if (!sidebar || !sidebarResizer) return;
+  try {
+    const saved = parseInt(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY) || '', 10);
+    if (Number.isFinite(saved)) applySidebarWidth(saved, false);
+  } catch (_) {}
+
+  let resizing = false;
+  const updateFromPointer = ev => {
+    const origin = bodyRow ? bodyRow.getBoundingClientRect().left : 0;
+    applySidebarWidth(ev.clientX - origin, true);
+  };
+  sidebarResizer.addEventListener('pointerdown', ev => {
+    resizing = true;
+    sidebarResizer.setPointerCapture(ev.pointerId);
+    document.body.classList.add('sidebar-resizing');
+    updateFromPointer(ev);
+    ev.preventDefault();
+  });
+  sidebarResizer.addEventListener('pointermove', ev => {
+    if (resizing) updateFromPointer(ev);
+  });
+  const finish = ev => {
+    if (!resizing) return;
+    resizing = false;
+    try { sidebarResizer.releasePointerCapture(ev.pointerId); } catch (_) {}
+    document.body.classList.remove('sidebar-resizing');
+  };
+  sidebarResizer.addEventListener('pointerup', finish);
+  sidebarResizer.addEventListener('pointercancel', finish);
+  window.addEventListener('resize', () => {
+    applySidebarWidth(sidebar.getBoundingClientRect().width, true);
+  });
+}
+
+setupSidebarResizer();
 
 // ── API helpers ───────────────────────────────────────────────────────────
 async function api(method, path, body) {
@@ -589,10 +654,13 @@ function renderMessages(messages) {
         msg.role === 'assistant' &&
         Array.isArray(msg.ui_trace) &&
         msg.ui_trace.length) {
-      messagesEl.appendChild(buildAssistantTraceRow(msg.ui_trace, msg.content || ''));
+      messagesEl.appendChild(buildAssistantTraceRow(msg.ui_trace, msg.content || '', msg.name || ''));
     } else {
       messagesEl.appendChild(buildMessageRow(msg.role, msg.content, msg.name));
     }
+  }
+  if (typeof renderAutomationLiveResponse === 'function') {
+    renderAutomationLiveResponse();
   }
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -1285,13 +1353,13 @@ function renderAssistantTraceBubble(bubble, trace, options = {}) {
   return normalized;
 }
 
-function buildAssistantTraceRow(trace, fallbackContent = '') {
+function buildAssistantTraceRow(trace, fallbackContent = '', modeName = '') {
   const row = document.createElement('div');
   row.className = 'message-row model';
 
   const lbl = document.createElement('div');
   lbl.className = 'message-role-label';
-  lbl.textContent = 'Assistant';
+  lbl.textContent = modeName ? 'Assistant (' + modeName + ')' : 'Assistant';
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
@@ -1425,14 +1493,14 @@ function buildMessageRow(role, content, modeName) {
   return row;
 }
 
-function createAssistantTurnRow(initialTrace = []) {
+function createAssistantTurnRow(initialTrace = [], modeName = '') {
   const row = document.createElement('div');
   row.className = 'message-row model';
   row.id = 'streaming-row';
 
   const lbl = document.createElement('div');
   lbl.className = 'message-role-label';
-  lbl.textContent = 'Assistant';
+  lbl.textContent = modeName ? 'Assistant (' + modeName + ')' : 'Assistant';
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble streaming';
@@ -1834,10 +1902,6 @@ function renderPlannerPanel() {
     plannerPanel.hidden = true;
     return;
   }
-  if (state.plannerEnabled && !hasContent && !state.plannerError) {
-    plannerPanel.hidden = true;
-    return;
-  }
 
   plannerPanel.hidden = false;
 
@@ -1885,7 +1949,7 @@ function renderPlannerPanel() {
   if (!hasContent) {
     const empty = document.createElement('div');
     empty.className = 'planner-empty';
-    empty.textContent = 'No plan items yet.';
+    empty.textContent = 'Planner is ready. No plan items yet.';
     plannerPanel.appendChild(empty);
     return;
   }
@@ -2067,6 +2131,9 @@ async function selectChat(projectId, chatId, chatName) {
     loadPlanner(projectId, chatId),
   ]);
   renderAgenticModeLabel();
+  if (typeof refreshAutomationStatusForChat === 'function') {
+    refreshAutomationStatusForChat(chatId, { reloadMessages: false });
+  }
 }
 
 async function loadProjectAgenticModes(projectId) {
@@ -2102,6 +2169,13 @@ async function loadProjectAgenticModes(projectId) {
 function currentAgenticModeId() {
   if (state.selectedChatAgenticModeId != null) return state.selectedChatAgenticModeId || '';
   return state.projectDefaultAgenticModeId || '';
+}
+
+function currentAgenticModeName() {
+  const activeId = currentAgenticModeId();
+  const mode = state.projectAgenticModes.find(m => m.id === activeId);
+  if (mode && mode.name) return mode.name;
+  return activeId || 'Default';
 }
 
 function removeWebDebugBubbles() {
@@ -2144,26 +2218,51 @@ function renderDebugButton() {
 
 function renderCancelAgentButton() {
   if (!cancelAgentBtn) return;
-  const canCancel = !!(state.sending && state.selectedChatId);
+  const automationJob = state.selectedChatId && state.automationJobs
+    ? state.automationJobs[state.selectedChatId]
+    : null;
+  const automationActive = !!(automationJob && automationJob.active);
+  const canCancel = !!((state.sending || automationActive) && state.selectedChatId);
   cancelAgentBtn.style.display = canCancel ? '' : 'none';
   cancelAgentBtn.disabled = !canCancel;
-  if (!canCancel) cancelAgentBtn.textContent = 'Cancel Agent';
+  if (canCancel) {
+    cancelAgentBtn.textContent = automationActive && !state.sending
+      ? 'Cancel Automation'
+      : 'Cancel Agent';
+  } else {
+    cancelAgentBtn.textContent = 'Cancel Agent';
+  }
 }
 
 async function cancelActiveAgent() {
-  if (!state.selectedChatId || !state.activeAbortController) return;
+  if (!state.selectedChatId) return;
+  const automationJob = state.automationJobs
+    ? state.automationJobs[state.selectedChatId]
+    : null;
+  const automationActive = !!(automationJob && automationJob.active);
+  if (!state.activeAbortController && !automationActive) return;
   if (cancelAgentBtn) {
     cancelAgentBtn.disabled = true;
     cancelAgentBtn.textContent = 'Cancelling...';
   }
   try {
-    await fetch(`/api/chats/${state.selectedChatId}/stream`, {
-      method: 'DELETE',
-      credentials: 'same-origin',
-    });
+    if (automationActive && !state.activeAbortController) {
+      await fetch(`/api/chats/${state.selectedChatId}/automation`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      if (typeof refreshAutomationStatusForChat === 'function') {
+        await refreshAutomationStatusForChat(state.selectedChatId, { reloadMessages: false });
+      }
+    } else {
+      await fetch(`/api/chats/${state.selectedChatId}/stream`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+    }
   } catch (_) {}
   try {
-    state.activeAbortController.abort();
+    if (state.activeAbortController) state.activeAbortController.abort();
   } catch (_) {}
 }
 
@@ -2644,6 +2743,7 @@ async function sendMessage() {
   if (uploadedFiles.length) {
     displayContent += '\n\n\uD83D\uDCCE ' + uploadedFiles.join(', ');
   }
+  const assistantModeName = currentAgenticModeName();
 
   // Show user message immediately
   state.messages.push({ role: 'user', content: displayContent, created_at: '' });
@@ -2653,7 +2753,7 @@ async function sendMessage() {
   messagesEl.appendChild(pendingContextRow);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 
-  const assistantTurn = createAssistantTurnRow();
+  const assistantTurn = createAssistantTurnRow([], assistantModeName);
 
   const abortCtrl = new AbortController();
   state.activeAbortController = abortCtrl;
@@ -2902,6 +3002,7 @@ async function sendMessage() {
           role: 'assistant',
           content: partialAssistant.text,
           ui_trace: partialAssistant.ui_trace,
+          name: assistantModeName,
           created_at: '',
         });
       } else {
@@ -2915,6 +3016,7 @@ async function sendMessage() {
           role: 'assistant',
           content: partialAssistant.text,
           ui_trace: partialAssistant.ui_trace,
+          name: assistantModeName,
           created_at: '',
         });
       } else {
@@ -2928,6 +3030,7 @@ async function sendMessage() {
         role: 'assistant',
         content: finalAssistant.text,
         ui_trace: finalAssistant.ui_trace,
+        name: assistantModeName,
         created_at: '',
       });
     }
@@ -2940,6 +3043,7 @@ async function sendMessage() {
           role: 'assistant',
           content: partialAssistant.text,
           ui_trace: partialAssistant.ui_trace,
+          name: assistantModeName,
           created_at: '',
         });
       } else {
@@ -2953,6 +3057,7 @@ async function sendMessage() {
           role: 'assistant',
           content: partialAssistant.text,
           ui_trace: partialAssistant.ui_trace,
+          name: assistantModeName,
           created_at: '',
         });
       } else {

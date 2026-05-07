@@ -69,8 +69,8 @@ struct ModelConfig {
     int ollama_context_length = 0;       // 0 = model default
     bool ollama_verbose = false;           // show LLM stats in CLI output
     bool is_binding_model = false;
-    int max_active_requests = 0;       // 0 = use provider default
-    int max_queue_size = 0;            // 0 = use provider default (0 at both levels means default gate = 1 active / 100 queue)
+    int max_active_requests = 0;       // 0 = use provider default; 0 at both levels disables the local gate
+    int max_queue_size = 0;            // 0 = use provider default; only applies when an active limit is set
     bool self_managed_queue = false;   // true = remote worker manages its own queue, local gate bypasses
     BindingRoutingMode binding_routing_mode = BindingRoutingMode::TopDownFailover;
     std::vector<BindingTargetConfig> binding_targets;

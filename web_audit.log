@@ -181,3 +181,10 @@
 2026-05-05T10:47:08Z [127.0.0.1] chat_created user=admin project=project_1777616659667_10 chat=chat_1777978028890_10
 2026-05-05T19:31:57Z [127.0.0.1] chat_created user=admin project=project_1777616659667_10 chat=chat_1778009517356_20
 2026-05-05T21:22:18Z [127.0.0.1] chat_created user=admin project=project_1777619213693_10 chat=chat_1778016138403_74
+2026-05-06T10:12:43Z [127.0.0.1] chat_created user=admin project=project_1777619213693_10 chat=chat_1778062363710_10
+2026-05-06T10:23:50Z [127.0.0.1] chat_created user=admin project=project_1777616659667_10 chat=chat_1778063030494_18
+2026-05-06T11:25:58Z [127.0.0.1] chat_created user=admin project=project_1777616659667_10 chat=chat_1778066758514_10
+2026-05-06T11:26:06Z [127.0.0.1] chat_created user=admin project=project_1777616659667_10 chat=chat_1778066766308_11
+2026-05-06T11:28:30Z [127.0.0.1] chat_deleted user=admin chat=chat_1778066758514_10
+2026-05-06T12:51:29Z [10.240.0.120] login_success user=admin
+2026-05-06T14:25:01Z [127.0.0.1] chat_created user=admin project=project_1777616659667_10 chat=chat_1778077501767_10

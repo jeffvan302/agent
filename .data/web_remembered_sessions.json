@@ -15,12 +15,24 @@
     {
       "created_at_unix": 1777886873,
       "force_password_reset": false,
-      "last_activity_unix": 1777886873,
+      "last_activity_unix": 1778071889,
       "needs_password_reset": false,
       "persistent": true,
       "persistent_until_unix": 1780478873,
       "remote_addr": "127.0.0.1",
       "token": "ac12277e7b052411eb9f3ebdcc31ac56190fb341aa8ee0595f612178a676d17e",
+      "user_id": "3593868E-3A09-47E2-BEF0-CCBDFFAB7292",
+      "username": "admin"
+    },
+    {
+      "created_at_unix": 1778071889,
+      "force_password_reset": false,
+      "last_activity_unix": 1778071889,
+      "needs_password_reset": false,
+      "persistent": true,
+      "persistent_until_unix": 1780663889,
+      "remote_addr": "10.240.0.120",
+      "token": "e270bc01eac5fc72f4edd4ff5cdda2421db969169e5f507f6d8f4d7e822185d3",
       "user_id": "3593868E-3A09-47E2-BEF0-CCBDFFAB7292",
       "username": "admin"
     }

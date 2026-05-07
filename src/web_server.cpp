@@ -42,6 +42,7 @@
 #include <winhttp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
@@ -130,6 +131,17 @@ std::string LowerAscii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
         [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
+}
+
+bool IsActiveAutomationStatus(const std::string& status) {
+    return status == "queued" ||
+           status == "running" ||
+           status == "cancelling";
+}
+
+std::string AutomationChatKey(const std::string& project_id,
+                              const std::string& chat_id) {
+    return project_id + ":" + chat_id;
 }
 
 bool HasPathSeparator(const std::string& value) {
@@ -1134,11 +1146,13 @@ std::string BuildWebFormattingContext(const std::string& server_address,
 }
 
 void AppendAssistantToolRequest(std::vector<MessageRecord>& messages,
-                                const ChatCompletionResult& completion) {
+                                const ChatCompletionResult& completion,
+                                const std::string& mode_name = {}) {
     MessageRecord assistant_msg;
     assistant_msg.role = "assistant";
     assistant_msg.content = completion.assistant_text;
     assistant_msg.created_at = NowIso();
+    assistant_msg.name = mode_name;
 
     if (!completion.raw_message_json.empty()) {
         try {
@@ -2891,10 +2905,17 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
     json pending_ui_trace = json::array();
     std::unordered_map<std::string, size_t> tool_trace_indices;
     std::string pending_created_at;
+    std::string pending_mode_name;
 
     auto ensure_pending_created_at = [&](const std::string& created_at) {
         if (pending_created_at.empty()) {
             pending_created_at = created_at;
+        }
+    };
+
+    auto ensure_pending_mode_name = [&](const std::string& mode_name) {
+        if (pending_mode_name.empty() && !mode_name.empty()) {
+            pending_mode_name = mode_name;
         }
     };
 
@@ -2968,20 +2989,24 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
 
     auto flush_pending_assistant = [&]() {
         if (pending_ui_trace.empty()) return;
-        arr.push_back({
+        json item = {
             {"role", "assistant"},
             {"content", ""},
             {"created_at", pending_created_at},
             {"ui_trace", pending_ui_trace},
-        });
+        };
+        if (!pending_mode_name.empty()) item["name"] = pending_mode_name;
+        arr.push_back(std::move(item));
         pending_ui_trace = json::array();
         tool_trace_indices.clear();
         pending_created_at.clear();
+        pending_mode_name.clear();
     };
 
     for (const auto& m : messages) {
         if (m.role == "assistant" && !m.tool_calls_json.empty()) {
             ensure_pending_created_at(m.created_at);
+            ensure_pending_mode_name(m.name);
             append_pending_text(m.content);
             append_pending_tool_calls(m.tool_calls_json);
             continue;
@@ -2994,6 +3019,7 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
         if (m.role == "assistant") {
             if (!pending_ui_trace.empty()) {
                 ensure_pending_created_at(m.created_at);
+                ensure_pending_mode_name(m.name);
                 append_pending_text(m.content);
                 flush_pending_assistant();
                 continue;
@@ -3516,6 +3542,11 @@ WebServer::CallModel(const std::string& project_id,
             }
         }
     }
+    if (resolved_mode_name.empty()) {
+        resolved_mode_name = effective_agentic_mode_id.empty()
+            ? std::string("Default")
+            : effective_agentic_mode_id;
+    }
 
     // Load existing message history and prepare any compressed request view.
     const auto stored_messages = storage_->LoadMessages(project_id, chat_id);
@@ -3685,8 +3716,8 @@ WebServer::CallModel(const std::string& project_id,
             }
 
             if (!completion.tool_calls.empty()) {
-                AppendAssistantToolRequest(messages, completion);
-                AppendAssistantToolRequest(working_messages, completion);
+                AppendAssistantToolRequest(messages, completion, resolved_mode_name);
+                AppendAssistantToolRequest(working_messages, completion, resolved_mode_name);
                 for (const auto& tool_call : completion.tool_calls) {
                     McpToolCallResult tool_result;
                     if (!tool_call.arguments_valid) {
@@ -3813,6 +3844,7 @@ WebServer::CallModel(const std::string& project_id,
     asst_msg.role       = "assistant";
     asst_msg.content    = call_result.assistant_text;
     asst_msg.created_at = NowIso();
+    asst_msg.name       = resolved_mode_name;
     messages.push_back(asst_msg);
 
     // Persist
@@ -3962,6 +3994,11 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 break;
             }
         }
+    }
+    if (resolved_mode_name.empty()) {
+        resolved_mode_name = effective_agentic_mode_id.empty()
+            ? std::string("Default")
+            : effective_agentic_mode_id;
     }
 
     const auto prepared_history = PrepareWebRequestHistory(
@@ -4191,8 +4228,8 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     message << "...";
                     on_activity_status("waiting_for_tools", message.str());
                 }
-                AppendAssistantToolRequest(messages, completion);
-                AppendAssistantToolRequest(working_messages, completion);
+                AppendAssistantToolRequest(messages, completion, resolved_mode_name);
+                AppendAssistantToolRequest(working_messages, completion, resolved_mode_name);
                 for (const auto& tool_call : completion.tool_calls) {
                     if (cancelled()) {
                         aborted = true;
@@ -4777,6 +4814,28 @@ void WebServer::HandleCancelStream(const void* req_ptr, void* res_ptr) {
         }
     }
     {
+        std::shared_ptr<AutomationJob> job;
+        {
+            std::lock_guard<std::mutex> lk(automation_jobs_mutex_);
+            auto it = automation_jobs_.find(key);
+            if (it != automation_jobs_.end()) job = it->second;
+        }
+        if (job) {
+            if (job->cancel_token) {
+                job->cancel_token->cancelled.store(true);
+            }
+            std::lock_guard<std::mutex> lk(job->mtx);
+            if (IsActiveAutomationStatus(job->status)) {
+                job->cancel_requested = true;
+                job->status = "cancelling";
+                job->message = "Cancellation requested.";
+                job->updated_at = NowIso();
+                ++job->revision;
+                cancelled = true;
+            }
+        }
+    }
+    {
         std::shared_ptr<PendingQuestionnaire> pending;
         {
             std::lock_guard<std::mutex> lk(questionnaire_mutex_);
@@ -4791,6 +4850,717 @@ void WebServer::HandleCancelStream(const void* req_ptr, void* res_ptr) {
     }
 
     SendJson(res_ptr, 200, json{{"ok", true}, {"cancelled", cancelled}}.dump());
+}
+
+std::string WebServer::SerializeAutomationJob(
+    const std::shared_ptr<AutomationJob>& job) const {
+    if (!job) {
+        return json{{"active", false}}.dump();
+    }
+
+    std::lock_guard<std::mutex> lk(job->mtx);
+    const bool active = IsActiveAutomationStatus(job->status);
+    json payload = {
+        {"id", job->id},
+        {"project_id", job->project_id},
+        {"chat_id", job->chat_id},
+        {"active", active},
+        {"status", job->status},
+        {"message", job->message},
+        {"error", job->error},
+        {"activity_status", job->activity_status},
+        {"activity_message", job->activity_message},
+        {"queue_state", job->queue_state},
+        {"queue_provider", job->queue_provider},
+        {"live_response", job->live_response},
+        {"live_mode_name", job->live_mode_name},
+        {"current_tool_name", job->current_tool_name},
+        {"current_tool_status", job->current_tool_status},
+        {"heartbeat_at", job->heartbeat_at},
+        {"heartbeat_message", job->heartbeat_message},
+        {"queue_position", job->queue_position},
+        {"queue_depth", job->queue_depth},
+        {"queue_active", job->queue_active},
+        {"queue_max_active", job->queue_max_active},
+        {"current_step", job->current_step},
+        {"total_steps", job->total_steps},
+        {"current_repeat", job->current_repeat},
+        {"total_repeats", job->total_repeats},
+        {"completed_runs", job->completed_runs},
+        {"total_runs", job->total_runs},
+        {"cancel_requested", job->cancel_requested},
+        {"revision", job->revision},
+        {"messages_revision", job->messages_revision},
+        {"live_response_revision", job->live_response_revision},
+        {"planner_revision", job->planner_revision},
+        {"heartbeat_revision", job->heartbeat_revision},
+        {"started_at", job->started_at},
+        {"updated_at", job->updated_at},
+        {"finished_at", job->finished_at},
+    };
+
+    if (!job->questionnaire_tool_call_id.empty()) {
+        payload["questionnaire"] = {
+            {"tool_call_id", job->questionnaire_tool_call_id},
+            {"question", job->questionnaire_question},
+            {"options", job->questionnaire_options},
+            {"allow_multiple", job->questionnaire_allow_multiple},
+        };
+    } else {
+        payload["questionnaire"] = nullptr;
+    }
+    return payload.dump();
+}
+
+bool WebServer::SetChatAgenticModeForAutomation(
+    const std::string& project_id,
+    const std::string& chat_id,
+    const std::string& selected_mode_id,
+    std::string* error) {
+    const auto all_projects = storage_->LoadProjects();
+    for (const auto& proj : all_projects) {
+        if (proj.info.id != project_id) continue;
+        for (const auto& chat : proj.chats) {
+            if (chat.id != chat_id) continue;
+            ChatInfo updated = chat;
+            updated.selected_agentic_mode_id = selected_mode_id;
+            storage_->SaveChat(project_id, updated);
+            NotifyContentChanged();
+            return true;
+        }
+        break;
+    }
+    if (error) *error = "Chat not found";
+    return false;
+}
+
+bool WebServer::CompressChatForAutomation(const std::string& project_id,
+                                          const std::string& chat_id,
+                                          const std::string& username,
+                                          std::string* status_message,
+                                          std::string* error) {
+    auto proj_settings = storage_->LoadProjectSettings(project_id);
+    if (!proj_settings.allow_manual_context_compression) {
+        if (status_message) {
+            *status_message = "Compression skipped because it is not enabled for this project.";
+        }
+        return true;
+    }
+    if (proj_settings.selected_compression_config_id.empty()) {
+        if (status_message) {
+            *status_message = "Compression skipped because no compression config is selected.";
+        }
+        return true;
+    }
+
+    auto config =
+        compression_service_.GetGlobalConfig(proj_settings.selected_compression_config_id);
+    if (!config) {
+        if (error) *error = "Compression config not found";
+        return false;
+    }
+
+    OpenAIClient::SetProviderCache(storage_->LoadProviders());
+    OpenAIClient::SetStorage(storage_);
+
+    auto messages = storage_->LoadMessages(project_id, chat_id);
+    auto visible = ModelVisibleMessages(messages);
+    const auto runtime_variables = BuildWebRuntimeVariables(
+        storage_, user_store_, project_id, chat_id, username, proj_settings);
+    const auto resolved_prompt_variables = BuildResolvedProjectVariables(
+        mcp_manager_, storage_, project_id, runtime_variables);
+
+    auto model_caller =
+        [&](const ChatRequestOptions& opts) -> std::optional<ChatCompletionResult> {
+        auto result = OpenAIClient::CreateSimpleCompletion(opts);
+        return result.success ? std::make_optional(result) : std::nullopt;
+    };
+
+    std::string compressed = compression_service_.CompressConversation(
+        visible,
+        project_id,
+        chat_id,
+        proj_settings.selected_compression_config_id,
+        model_caller,
+        true,
+        "automation",
+        resolved_prompt_variables);
+
+    if (compressed.empty()) {
+        if (status_message) {
+            *status_message = "Compression checked; nothing needed compression.";
+        }
+        return true;
+    }
+
+    const auto state_after = compression_service_.LoadChatState(project_id, chat_id);
+    const size_t compressed_through = state_after.last_compression_message_index;
+    const size_t remaining = visible.size() > compressed_through
+        ? visible.size() - compressed_through
+        : 0;
+
+    ChatRequestLogger::MaybeInitialize(
+        runtime_paths_.data_root, project_id, proj_settings.enable_chat_logging);
+    if (proj_settings.enable_chat_logging) {
+        ChatRequestLogger::Log(project_id, true,
+            ChatRequestLogger::FormatCompressionBlock(
+                "automation",
+                visible.size(),
+                remaining,
+                compressed_through,
+                compressed,
+                config->name));
+    }
+
+    json record_payload = {
+        {"status", "done"},
+        {"message", "Context compressed successfully"},
+        {"before_messages", visible.size()},
+        {"after_messages", remaining},
+        {"compressed_through", compressed_through},
+    };
+
+    MessageRecord comp_msg;
+    comp_msg.role = "compression";
+    comp_msg.content = record_payload.dump();
+    comp_msg.created_at = NowIso();
+
+    messages = storage_->LoadMessages(project_id, chat_id);
+    messages.push_back(comp_msg);
+    storage_->SaveMessages(project_id, chat_id, messages);
+    NotifyContentChanged();
+
+    if (status_message) {
+        *status_message = "Context compressed successfully.";
+    }
+    return true;
+}
+
+void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
+    if (!job || !job->cancel_token) return;
+
+    auto update = [&](const std::function<void(AutomationJob&)>& fn) {
+        std::lock_guard<std::mutex> lk(job->mtx);
+        fn(*job);
+        job->updated_at = NowIso();
+        ++job->revision;
+    };
+
+    auto mark_messages_changed = [&]() {
+        std::lock_guard<std::mutex> lk(job->mtx);
+        job->updated_at = NowIso();
+        ++job->revision;
+        ++job->messages_revision;
+    };
+
+    auto mark_heartbeat = [&](const std::string& message) {
+        std::lock_guard<std::mutex> lk(job->mtx);
+        job->heartbeat_at = NowIso();
+        job->heartbeat_message = message;
+        job->updated_at = job->heartbeat_at;
+        ++job->revision;
+        ++job->heartbeat_revision;
+    };
+
+    auto cancelled = [&]() -> bool {
+        return job->cancel_token->cancelled.load();
+    };
+
+    const std::string stream_key =
+        AutomationChatKey(job->project_id, job->chat_id);
+    {
+        std::lock_guard<std::mutex> lk(active_streams_mutex_);
+        auto existing = active_streams_.find(stream_key);
+        if (existing != active_streams_.end() && existing->second) {
+            existing->second->cancelled.store(true);
+        }
+        active_streams_[stream_key] = job->cancel_token;
+    }
+
+    update([](AutomationJob& j) {
+        j.status = "running";
+        j.message = "Automation started.";
+        j.started_at = NowIso();
+        j.updated_at = j.started_at;
+    });
+
+    try {
+        for (size_t si = 0; si < job->steps.size(); ++si) {
+            const AutomationStep step = job->steps[si];
+            const int repeats = std::max(1, step.repeat);
+
+            for (int ri = 0; ri < repeats; ++ri) {
+                if (cancelled()) {
+                    break;
+                }
+
+                update([&](AutomationJob& j) {
+                    j.current_step = static_cast<int>(si) + 1;
+                    j.total_repeats = repeats;
+                    j.current_repeat = ri + 1;
+                    j.activity_status.clear();
+                    j.activity_message.clear();
+                    j.queue_state.clear();
+                    j.queue_provider.clear();
+                    j.live_response.clear();
+                    j.live_mode_name = !step.mode_name.empty()
+                        ? step.mode_name
+                        : (!step.mode_id.empty() ? step.mode_id : "Default");
+                    j.current_tool_name.clear();
+                    j.current_tool_status.clear();
+                    j.heartbeat_at = NowIso();
+                    j.heartbeat_message = "Automation worker is active.";
+                    ++j.heartbeat_revision;
+                    ++j.live_response_revision;
+                    j.questionnaire_tool_call_id.clear();
+                    j.questionnaire_question.clear();
+                    j.questionnaire_options.clear();
+                    j.questionnaire_allow_multiple = false;
+                    j.message = "Preparing automation step.";
+                });
+
+                if (!step.mode_id.empty()) {
+                    std::string mode_error;
+                    if (!SetChatAgenticModeForAutomation(
+                            job->project_id, job->chat_id, step.mode_id, &mode_error)) {
+                        update([&](AutomationJob& j) {
+                            j.status = "failed";
+                            j.error = mode_error.empty()
+                                ? "Could not set the automation step mode."
+                                : mode_error;
+                            j.message = j.error;
+                        });
+                        goto automation_finished;
+                    }
+                }
+
+                bool user_message_observed = false;
+                auto observe_user_message = [&]() {
+                    if (!user_message_observed) {
+                        user_message_observed = true;
+                        mark_messages_changed();
+                    }
+                };
+
+                update([&](AutomationJob& j) {
+                    const std::string mode_label =
+                        !step.mode_name.empty()
+                            ? step.mode_name
+                            : (!step.mode_id.empty() ? step.mode_id : "default");
+                    j.message = "Running step " +
+                        std::to_string(static_cast<int>(si) + 1) + "/" +
+                        std::to_string(j.total_steps) + " using " + mode_label + ".";
+                });
+
+                auto last_delta_update = std::chrono::steady_clock::now();
+                std::string err;
+                std::atomic<bool> model_call_running{true};
+                std::thread heartbeat_thread([&]() {
+                    while (model_call_running.load() && !cancelled()) {
+                        for (int i = 0; i < 5 && model_call_running.load() && !cancelled(); ++i) {
+                            std::this_thread::sleep_for(std::chrono::seconds(1));
+                        }
+                        if (!model_call_running.load() || cancelled()) break;
+                        mark_heartbeat("Automation worker is still active.");
+                    }
+                });
+                try {
+                    err = StreamModel(
+                        job->project_id,
+                        job->chat_id,
+                        step.prompt,
+                        job->username,
+                        [&](const std::string& delta) -> bool {
+                        if (cancelled()) return false;
+                        const auto now = std::chrono::steady_clock::now();
+                        update([&](AutomationJob& j) {
+                            j.live_response += delta;
+                            ++j.live_response_revision;
+                            if (now - last_delta_update >= std::chrono::seconds(1)) {
+                                j.activity_status = "receiving_response";
+                                j.activity_message = "Receiving model response...";
+                                j.message = j.activity_message;
+                                last_delta_update = now;
+                            }
+                        });
+                        return true;
+                    },
+                    {},
+                    [&](size_t used_tokens, size_t total_tokens) {
+                        observe_user_message();
+                        update([&](AutomationJob& j) {
+                            j.message = "Context: " + std::to_string(used_tokens) +
+                                (total_tokens > 0
+                                    ? "/" + std::to_string(total_tokens)
+                                    : "") + " tokens.";
+                        });
+                    },
+                    [&](const std::string& status, const std::string& message) {
+                        update([&](AutomationJob& j) {
+                            j.activity_status = status;
+                            j.activity_message = message;
+                            j.message = message;
+                        });
+                    },
+                    [&](const ProviderQueueStatus& status) {
+                        update([&](AutomationJob& j) {
+                            j.queue_state = status.state;
+                            j.queue_provider = status.provider_name;
+                            j.queue_position = status.queue_position;
+                            j.queue_depth = status.queue_depth;
+                            j.queue_active = status.active_requests;
+                            j.queue_max_active = status.max_active_requests;
+                            j.heartbeat_at = NowIso();
+                            ++j.heartbeat_revision;
+                            if (status.state == "queued") {
+                                j.message = "Waiting in provider queue.";
+                                j.heartbeat_message = "Still waiting for a provider slot.";
+                            } else {
+                                j.heartbeat_message =
+                                    "Provider slot acquired; waiting for the model response.";
+                                if (j.message == "Waiting in provider queue.") {
+                                    j.message = j.heartbeat_message;
+                                }
+                            }
+                        });
+                    },
+                    [&](const std::string& status, const std::string& message) {
+                        update([&](AutomationJob& j) {
+                            j.activity_status = status;
+                            j.activity_message = message;
+                            j.message = message;
+                        });
+                    },
+                    [&](const std::string& tool_call_id,
+                        const std::string& tool_name,
+                        const std::string& tool_arguments,
+                        const std::string& tool_result,
+                        const std::string& tool_status) {
+                        (void)tool_arguments;
+                        (void)tool_result;
+                        update([&](AutomationJob& j) {
+                            j.current_tool_name = tool_name;
+                            j.current_tool_status = tool_status;
+                            j.message = tool_status == "live"
+                                ? "Running tool: " + tool_name
+                                : "Tool finished: " + tool_name;
+                            if (tool_name == built_in_tools::kPlannerToolName) {
+                                ++j.planner_revision;
+                            }
+                            if (!j.questionnaire_tool_call_id.empty() &&
+                                j.questionnaire_tool_call_id == tool_call_id &&
+                                tool_status != "live") {
+                                j.questionnaire_tool_call_id.clear();
+                                j.questionnaire_question.clear();
+                                j.questionnaire_options.clear();
+                                j.questionnaire_allow_multiple = false;
+                            }
+                        });
+                    },
+                    false,
+                    {},
+                    [&](const std::string& tool_call_id,
+                        const std::string& question,
+                        const std::vector<std::string>& options,
+                        bool allow_multiple) {
+                        update([&](AutomationJob& j) {
+                            j.questionnaire_tool_call_id = tool_call_id;
+                            j.questionnaire_question = question;
+                            j.questionnaire_options = options;
+                            j.questionnaire_allow_multiple = allow_multiple;
+                            j.message = "Automation is waiting for questionnaire input.";
+                        });
+                    },
+                        [&]() {
+                            return cancelled();
+                        });
+                } catch (...) {
+                    model_call_running.store(false);
+                    if (heartbeat_thread.joinable()) heartbeat_thread.join();
+                    throw;
+                }
+                model_call_running.store(false);
+                if (heartbeat_thread.joinable()) heartbeat_thread.join();
+
+                mark_messages_changed();
+
+                if (cancelled()) {
+                    break;
+                }
+                if (!err.empty()) {
+                    update([&](AutomationJob& j) {
+                        j.status = "failed";
+                        j.error = err;
+                        j.message = err;
+                    });
+                    goto automation_finished;
+                }
+
+                if (step.compress) {
+                    update([](AutomationJob& j) {
+                        j.message = "Compressing context after automation step.";
+                    });
+                    std::string compression_status;
+                    std::string compression_error;
+                    if (!CompressChatForAutomation(
+                            job->project_id,
+                            job->chat_id,
+                            job->username,
+                            &compression_status,
+                            &compression_error)) {
+                        update([&](AutomationJob& j) {
+                            j.status = "failed";
+                            j.error = compression_error.empty()
+                                ? "Context compression failed."
+                                : compression_error;
+                            j.message = j.error;
+                        });
+                        goto automation_finished;
+                    }
+                    mark_messages_changed();
+                    update([&](AutomationJob& j) {
+                        j.message = compression_status.empty()
+                            ? "Compression step finished."
+                            : compression_status;
+                    });
+                }
+
+                update([](AutomationJob& j) {
+                    ++j.completed_runs;
+                });
+            }
+
+            if (cancelled()) {
+                break;
+            }
+        }
+
+automation_finished:
+        update([&](AutomationJob& j) {
+            if (j.status != "failed") {
+                if (cancelled()) {
+                    j.status = "cancelled";
+                    j.cancel_requested = true;
+                    j.message = "Automation cancelled.";
+                } else {
+                    j.status = "completed";
+                    j.message = "Automation completed.";
+                }
+            }
+            j.finished_at = NowIso();
+        });
+    } catch (const std::exception& ex) {
+        update([&](AutomationJob& j) {
+            j.status = "failed";
+            j.error = ex.what();
+            j.message = j.error;
+            j.finished_at = NowIso();
+        });
+    } catch (...) {
+        update([](AutomationJob& j) {
+            j.status = "failed";
+            j.error = "Automation failed with an unknown error.";
+            j.message = j.error;
+            j.finished_at = NowIso();
+        });
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(active_streams_mutex_);
+        auto it = active_streams_.find(stream_key);
+        if (it != active_streams_.end() && it->second == job->cancel_token) {
+            active_streams_.erase(it);
+        }
+    }
+}
+
+void WebServer::HandleStartAutomation(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string chat_id = req->path_params.at("id");
+
+    json body_j;
+    try { body_j = json::parse(req->body); } catch (...) {
+        SendError(res_ptr, 400, "Invalid JSON");
+        return;
+    }
+
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    const auto proj_settings = storage_->LoadProjectSettings(*project_id);
+    if (!proj_settings.enable_automation) {
+        SendError(res_ptr, 403, "Automation is not enabled for this project");
+        return;
+    }
+
+    if (!body_j.contains("steps") || !body_j["steps"].is_array()) {
+        SendError(res_ptr, 400, "Automation steps are required");
+        return;
+    }
+
+    constexpr size_t kMaxAutomationSteps = 100;
+    constexpr int kMaxAutomationRuns = 1000;
+    std::vector<AutomationStep> steps;
+    int total_runs = 0;
+
+    for (const auto& item : body_j["steps"]) {
+        if (!item.is_object()) {
+            SendError(res_ptr, 400, "Automation steps must be objects");
+            return;
+        }
+        AutomationStep step;
+        step.mode_id = item.value("mode_id", "");
+        step.mode_name = item.value("mode_name", "");
+        step.prompt = item.value("prompt", "");
+        step.compress = item.value("compress", false);
+        step.repeat = std::clamp(item.value("repeat", 1), 1, 50);
+        if (Trim(step.prompt).empty()) {
+            SendError(res_ptr, 400, "Automation step prompt is required");
+            return;
+        }
+        steps.push_back(std::move(step));
+        total_runs += steps.back().repeat;
+        if (steps.size() > kMaxAutomationSteps || total_runs > kMaxAutomationRuns) {
+            SendError(res_ptr, 400, "Automation sequence is too large");
+            return;
+        }
+    }
+
+    if (steps.empty()) {
+        SendError(res_ptr, 400, "Automation steps are required");
+        return;
+    }
+
+    auto job = std::make_shared<AutomationJob>();
+    job->id = "automation_" +
+        std::to_string(automation_job_counter_.fetch_add(1) + 1);
+    job->project_id = *project_id;
+    job->chat_id = chat_id;
+    job->username = session->username;
+    job->steps = std::move(steps);
+    job->cancel_token = std::make_shared<ActiveStreamCancellation>();
+    job->total_steps = static_cast<int>(job->steps.size());
+    job->total_runs = total_runs;
+    job->message = "Automation queued.";
+    job->started_at = NowIso();
+    job->updated_at = job->started_at;
+
+    const std::string key = AutomationChatKey(*project_id, chat_id);
+    {
+        std::lock_guard<std::mutex> lk(automation_jobs_mutex_);
+        auto existing = automation_jobs_.find(key);
+        if (existing != automation_jobs_.end() && existing->second) {
+            std::string existing_status;
+            {
+                std::lock_guard<std::mutex> job_lk(existing->second->mtx);
+                existing_status = existing->second->status;
+            }
+            if (IsActiveAutomationStatus(existing_status)) {
+                SendError(res_ptr, 409, "An automation is already running for this chat");
+                return;
+            }
+        }
+        automation_jobs_[key] = job;
+    }
+
+    std::thread([this, job]() {
+        RunAutomationJob(job);
+    }).detach();
+
+    json job_json = json::parse(SerializeAutomationJob(job));
+    SendJson(res_ptr, 202, json{{"ok", true}, {"job", job_json}}.dump());
+}
+
+void WebServer::HandleGetAutomationStatus(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string chat_id = req->path_params.at("id");
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    std::shared_ptr<AutomationJob> job;
+    {
+        std::lock_guard<std::mutex> lk(automation_jobs_mutex_);
+        auto it = automation_jobs_.find(AutomationChatKey(*project_id, chat_id));
+        if (it != automation_jobs_.end()) job = it->second;
+    }
+
+    if (!job) {
+        SendJson(res_ptr, 200, R"({"ok":true,"active":false,"job":null})");
+        return;
+    }
+
+    json job_json = json::parse(SerializeAutomationJob(job));
+    SendJson(res_ptr, 200,
+        json{{"ok", true}, {"active", job_json.value("active", false)}, {"job", job_json}}.dump());
+}
+
+void WebServer::HandleCancelAutomation(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string chat_id = req->path_params.at("id");
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    const std::string key = AutomationChatKey(*project_id, chat_id);
+    std::shared_ptr<AutomationJob> job;
+    {
+        std::lock_guard<std::mutex> lk(automation_jobs_mutex_);
+        auto it = automation_jobs_.find(key);
+        if (it != automation_jobs_.end()) job = it->second;
+    }
+
+    bool cancelled = false;
+    if (job) {
+        if (job->cancel_token) {
+            job->cancel_token->cancelled.store(true);
+        }
+        {
+            std::lock_guard<std::mutex> lk(job->mtx);
+            if (IsActiveAutomationStatus(job->status)) {
+                job->status = "cancelling";
+                job->cancel_requested = true;
+                job->message = "Cancellation requested.";
+                job->updated_at = NowIso();
+                ++job->revision;
+                cancelled = true;
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(active_streams_mutex_);
+        auto it = active_streams_.find(key);
+        if (it != active_streams_.end() && it->second) {
+            it->second->cancelled.store(true);
+            cancelled = true;
+        }
+    }
+    {
+        std::shared_ptr<PendingQuestionnaire> pending;
+        {
+            std::lock_guard<std::mutex> lk(questionnaire_mutex_);
+            auto it = pending_questionnaires_.find(key);
+            if (it != pending_questionnaires_.end()) pending = it->second;
+        }
+        if (pending) {
+            std::lock_guard<std::mutex> lk(pending->mtx);
+            pending->abandoned = true;
+            pending->cv.notify_one();
+            cancelled = true;
+        }
+    }
+
+    json job_json = job ? json::parse(SerializeAutomationJob(job)) : json(nullptr);
+    SendJson(res_ptr, 200,
+        json{{"ok", true}, {"cancelled", cancelled}, {"job", job_json}}.dump());
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -5234,6 +6004,18 @@ void WebServer::RegisterRoutes() {
     srv.Delete(R"(/api/chats/([^/]+)/stream)", [this](const httplib::Request& req, httplib::Response& res) {
         const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
         HandleCancelStream(&req, &res);
+    });
+    srv.Post(R"(/api/chats/([^/]+)/automation/run)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleStartAutomation(&req, &res);
+    });
+    srv.Get(R"(/api/chats/([^/]+)/automation)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleGetAutomationStatus(&req, &res);
+    });
+    srv.Delete(R"(/api/chats/([^/]+)/automation)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleCancelAutomation(&req, &res);
     });
     // File upload
     srv.Post(R"(/api/chats/([^/]+)/upload)", [this](const httplib::Request& req, httplib::Response& res) {
