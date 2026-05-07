@@ -3,6 +3,7 @@
 
 
 
+
 /* global api, escapeHtml, loadMessages, messageInput, messagesEl, postProcessMessageBubble, renderMarkdown, resizeTextarea, renderCancelAgentButton, schedulePlannerRefresh, state */
 
 if (automateBtn) {

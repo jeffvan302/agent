@@ -1419,22 +1419,29 @@ color-accent-primary);
 
   .mobile-planner-panel {
     margin: 0;
-    padding: 10px 12px 14px;
+    padding: 10px 12px 24px;
     border-top: 0;
     border-bottom: 1px solid var(--color-border-main);
     background: var(--color-bg-main);
     color: var(--color-text-primary);
     overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
 
   body.mobile-planner-open .mobile-planner-panel:not([hidden]) {
     display: block;
-    flex: 1;
+    flex: 1 1 auto;
     min-height: 0;
   }
 
   body.mobile-planner-open #messages {
     display: none;
+  }
+
+  body.mobile-planner-open #attach-bar,
+  body.mobile-planner-open #compose {
+    display: none !important;
   }
 
   body.mobile-planner-open .mobile-automation-running-status {
@@ -1818,7 +1825,6 @@ document.getElementById('login-form').addEventListener('submit', async function(
     btn.textContent = 'Sign In';
   }
 });
-
 
 
 
