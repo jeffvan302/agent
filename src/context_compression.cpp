@@ -85,6 +85,45 @@ std::string ReplaceAllCopy(std::string text, const std::string& from, const std:
     return text;
 }
 
+std::string TruncateMiddleForCompressedContext(const std::string& content,
+                                               size_t max_chars,
+                                               const std::string& reason) {
+    if (max_chars == 0 || content.size() <= max_chars) {
+        return content;
+    }
+
+    const std::string note =
+        "\n\n[Compressed context truncated this message: original " +
+        std::to_string(content.size()) + " chars. " + reason + "]\n\n";
+
+    if (max_chars <= note.size() + 32) {
+        return content.substr(0, max_chars) + note;
+    }
+
+    const size_t available = max_chars - note.size();
+    const size_t head = (available * 2) / 3;
+    const size_t tail = available - head;
+    return content.substr(0, head) + note + content.substr(content.size() - tail);
+}
+
+std::string CompressionMessageLabel(const MessageRecord& message) {
+    std::string label = message.role;
+    if (!message.name.empty()) {
+        label += "/";
+        label += message.name;
+    }
+    return label;
+}
+
+void AppendMessageToCompressedContext(std::ostringstream& block,
+                                      const MessageRecord& message,
+                                      size_t max_chars,
+                                      const std::string& reason) {
+    block << "[" << CompressionMessageLabel(message) << "]: "
+          << TruncateMiddleForCompressedContext(message.content, max_chars, reason)
+          << "\n\n";
+}
+
 std::string ResolveLayer2PromptTemplate(const Layer2Config& config) {
     return TrimStr(config.prompt_template).empty()
         ? ContextCompressionService::DefaultLayer2PromptTemplate()
@@ -1334,6 +1373,12 @@ std::string ContextCompressionService::DefaultLayer3PromptTemplate() {
 
 bool MessageMatchesPinPattern(const MessageRecord& message, bool match_code, bool match_urls,
                             bool match_numbers, bool match_explicit_instructions, bool match_user_flagged) {
+    // Layer 1 is for user-authored anchors, not historical tool transcripts.
+    // Tool output often contains paths, numbers, and code, so allowing tools
+    // here causes compression to pin exactly the noisy data it should replace.
+    if (message.role != "user") {
+        return false;
+    }
     const std::string& content = message.content;
     if (match_code && content.find("```") != std::string::npos) {
         return true;
@@ -1593,7 +1638,11 @@ std::string ContextCompressionService::BuildTruncateTopBlock(
         ? messages.size() - static_cast<size_t>(keep)
         : 0;
     for (size_t i = start; i < messages.size(); ++i) {
-        block << "[" << messages[i].role << "]: " << messages[i].content << "\n\n";
+        AppendMessageToCompressedContext(
+            block,
+            messages[i],
+            messages[i].role == "tool" ? 6000 : 12000,
+            "Rolling-window context keeps a bounded copy of each message.");
     }
     if (messages.empty()) {
         block << "(No messages in this chat yet)\n\n";
@@ -1649,7 +1698,11 @@ std::string ContextCompressionService::BuildHierarchicalContextBlock(
     block << "## Pinned Messages - Verbatim (Layer 1)\n";
     if (!pinned.empty()) {
         for (const auto& p : pinned) {
-            block << "[" << p.role << "]: " << p.content << "\n\n";
+            AppendMessageToCompressedContext(
+                block,
+                p,
+                4000,
+                "Pinned messages preserve user intent, while large verbatim text remains in the full chat log.");
         }
     } else {
         block << "(No pinned messages)\n\n";
@@ -1658,7 +1711,11 @@ std::string ContextCompressionService::BuildHierarchicalContextBlock(
     block << "## Recent Conversation - Verbatim (Layer 4)\n";
     if (!recency.empty()) {
         for (const auto& r : recency) {
-            block << "[" << r.role << "]: " << r.content << "\n\n";
+            AppendMessageToCompressedContext(
+                block,
+                r,
+                r.role == "tool" ? 6000 : 12000,
+                "Recent compressed context keeps tool output bounded; re-run or re-read tools for exact details.");
         }
     } else {
         block << "(No recent turns in window)\n\n";
@@ -2137,6 +2194,41 @@ std::string ContextCompressionService::CompressConversation(
         storage_->AppendChatCompressionSnapshot(project_id, chat_id, snapshot);
     }
     SaveChatState(project_id, chat_id, state);
+    return block;
+}
+
+std::string ContextCompressionService::RebuildCompressedContextFromExistingState(
+    const std::vector<MessageRecord>& messages,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const std::string& config_id) {
+    auto config_opt = GetGlobalConfig(config_id);
+    if (!config_opt) {
+        return "";
+    }
+
+    ChatCompressionState state = LoadChatState(project_id, chat_id);
+    const size_t compressed_through =
+        state.last_compression_message_index == 0
+            ? messages.size()
+            : std::min(state.last_compression_message_index, messages.size());
+    std::vector<MessageRecord> compressed_prefix(
+        messages.begin(),
+        messages.begin() + compressed_through);
+
+    std::string block;
+    if (config_opt->strategy == ContextCompressionStrategy::TruncateTop) {
+        block = BuildTruncateTopBlock(compressed_prefix, *config_opt, state);
+    } else if (config_opt->strategy == ContextCompressionStrategy::HierarchicalStructured) {
+        state.layer1_pinned_messages = Layer1_Pin(compressed_prefix, config_opt->layers.layer1);
+        state.last_compression_message_index = compressed_through;
+        block = BuildHierarchicalContextBlock(compressed_prefix, *config_opt, state);
+    }
+
+    if (!block.empty()) {
+        state.current_compressed_context = block;
+        SaveChatState(project_id, chat_id, state);
+    }
     return block;
 }
 

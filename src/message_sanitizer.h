@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cctype>
+#include <algorithm>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -44,12 +45,90 @@ inline std::string StripTaggedBlocks(
     return value;
 }
 
+inline std::string LowerAsciiCopy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+inline std::string StripTaggedBlocksCaseInsensitive(
+    std::string value,
+    const std::string& open_tag,
+    const std::string& close_tag) {
+    const std::string open_lower = LowerAsciiCopy(open_tag);
+    const std::string close_lower = LowerAsciiCopy(close_tag);
+
+    for (;;) {
+        const std::string lowered = LowerAsciiCopy(value);
+        const size_t open = lowered.find(open_lower);
+        if (open == std::string::npos) break;
+
+        const size_t close = lowered.find(close_lower, open + open_lower.size());
+        if (close == std::string::npos) {
+            value.erase(open);
+            break;
+        }
+        value.erase(open, close + close_tag.size() - open);
+    }
+    return value;
+}
+
 inline std::string StripRawProviderToolCallBlocks(const std::string& content) {
     std::string sanitized = StripTaggedBlocks(
         content,
         "<minimax:tool_call>",
         "</minimax:tool_call>");
     return TrimAscii(sanitized);
+}
+
+inline std::string StripProviderInternalReasoningBlocks(const std::string& content) {
+    std::string sanitized = content;
+    sanitized = StripTaggedBlocksCaseInsensitive(sanitized, "<think>", "</think>");
+    sanitized = StripTaggedBlocksCaseInsensitive(sanitized, "<thinking>", "</thinking>");
+    sanitized = StripTaggedBlocksCaseInsensitive(sanitized, "<thought>", "</thought>");
+    return TrimAscii(sanitized);
+}
+
+inline std::string SanitizeAssistantContentForModel(const std::string& content) {
+    return StripProviderInternalReasoningBlocks(
+        StripRawProviderToolCallBlocks(content));
+}
+
+inline std::string TruncateMiddleForModel(const std::string& content,
+                                          size_t max_chars,
+                                          const std::string& reason) {
+    if (max_chars == 0 || content.size() <= max_chars) {
+        return content;
+    }
+
+    const std::string note =
+        "\n\n[Model-visible history truncated this older tool result: original " +
+        std::to_string(content.size()) + " chars. " + reason +
+        " Re-run or re-read the tool if exact output is needed.]\n\n";
+
+    if (max_chars <= note.size() + 32) {
+        return content.substr(0, max_chars) + note;
+    }
+
+    const size_t available = max_chars - note.size();
+    const size_t head = (available * 2) / 3;
+    const size_t tail = available - head;
+    return content.substr(0, head) + note + content.substr(content.size() - tail);
+}
+
+inline std::string SanitizeToolContentForModel(const std::string& content,
+                                               bool recent_result) {
+    // Full chat logs keep exact tool output. The provider-visible replay gets
+    // a bounded version for older tool results so long chats do not become a
+    // transcript of every historical file read, install log, and command run.
+    constexpr size_t kRecentToolResultMaxChars = 64000;
+    constexpr size_t kOlderToolResultMaxChars = 6000;
+    return TruncateMiddleForModel(
+        content,
+        recent_result ? kRecentToolResultMaxChars : kOlderToolResultMaxChars,
+        recent_result
+            ? "The output was unusually large."
+            : "Older tool output is summarized to keep the active context responsive.");
 }
 
 inline std::vector<std::string> ToolCallIdsFromJson(
@@ -87,6 +166,8 @@ inline bool HasImmediateToolResultsForAll(
 
 inline std::vector<MessageRecord> SanitizeModelVisibleMessages(
     const std::vector<MessageRecord>& messages) {
+    constexpr size_t kRecentToolResultWindowMessages = 24;
+
     std::vector<MessageRecord> visible;
     visible.reserve(messages.size());
     for (auto message : messages) {
@@ -99,7 +180,7 @@ inline std::vector<MessageRecord> SanitizeModelVisibleMessages(
             continue;
         }
         if (message.role == "assistant") {
-            message.content = StripRawProviderToolCallBlocks(message.content);
+            message.content = SanitizeAssistantContentForModel(message.content);
         }
         visible.push_back(std::move(message));
     }
@@ -114,6 +195,10 @@ inline std::vector<MessageRecord> SanitizeModelVisibleMessages(
         if (message.role == "tool") {
             if (!message.tool_call_id.empty() &&
                 expected_tool_result_ids.erase(message.tool_call_id) > 0) {
+                const bool recent_result =
+                    visible.size() - index <= kRecentToolResultWindowMessages;
+                message.content =
+                    SanitizeToolContentForModel(message.content, recent_result);
                 sanitized.push_back(std::move(message));
             }
             continue;

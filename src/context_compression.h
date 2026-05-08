@@ -55,6 +55,15 @@ public:
         const ContextCompressionConfig& config,
         const ChatCompressionState& state) const;
 
+    // Rebuild the injected context from existing state without making model
+    // calls. Used to repair older states whose Layer 1 pins captured large
+    // tool outputs before pinning became user-message-only.
+    std::string RebuildCompressedContextFromExistingState(
+        const std::vector<MessageRecord>& messages,
+        const std::string& project_id,
+        const std::string& chat_id,
+        const std::string& config_id);
+
     // Token estimation for a single message
     static size_t EstimateMessageTokens(const MessageRecord& message);
     static std::string DefaultLayer0CapturePromptTemplate();

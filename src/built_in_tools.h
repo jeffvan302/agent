@@ -186,6 +186,7 @@ inline MessageRecord MakeCompletionDriverContinuationMessage(int turn_index,
     std::ostringstream text;
     text << kCompletionDriverContinuationPrefix
          << "\nThis is not a new user message. Continue the current task from the previous state. "
+         << "If your previous response only contained hidden thinking/reasoning, do not continue with more hidden-only text; either call the concrete tool needed for the next action or provide a visible final answer. "
          << "If the user's objective is now fully complete, call completion_driver with completed=true/status=completed and then provide the final answer. "
          << "Otherwise continue making progress and use available tools as needed.\nContinuation turn: "
          << turn_index;

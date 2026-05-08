@@ -4455,6 +4455,33 @@ void MainWindow::SendCurrentMessage() {
             auto compression_state = compression_service_.LoadChatState(active_project_id_, active_chat_id_);
             if (compressed_context.empty()) {
                 compressed_context = compression_state.current_compressed_context;
+                bool needs_legacy_repair = compressed_context.size() >= 40000;
+                if (needs_legacy_repair) {
+                    needs_legacy_repair = false;
+                    for (const auto& pinned : compression_state.layer1_pinned_messages) {
+                        if (pinned.role == "tool") {
+                            needs_legacy_repair = true;
+                            break;
+                        }
+                    }
+                }
+                if (needs_legacy_repair) {
+                    const std::string repaired_context =
+                        compression_service_.RebuildCompressedContextFromExistingState(
+                            compression_messages,
+                            active_project_id_,
+                            active_chat_id_,
+                            proj_settings.selected_compression_config_id);
+                    if (!repaired_context.empty()) {
+                        compressed_context = repaired_context;
+                        compression_state =
+                            compression_service_.LoadChatState(active_project_id_, active_chat_id_);
+                        Logger::Info("Compression",
+                            "repaired legacy compressed context project=" + active_project_id_ +
+                            " chat=" + active_chat_id_ +
+                            " chars=" + std::to_string(repaired_context.size()));
+                    }
+                }
             }
             if (!compressed_context.empty() && compression_state.last_compression_message_index > 0) {
                 const size_t first_uncompressed = std::min(compression_state.last_compression_message_index, request_history.size());
@@ -4941,7 +4968,7 @@ void MainWindow::SendCurrentMessage() {
                 ChatRequestOptions check;
                 check.system_prompt = request.system_prompt;
                 check.model = request.model;
-                check.messages = pre_tool_loop_messages;
+                check.messages = ModelVisibleMessages(pre_tool_loop_messages);
                 const size_t est_tool = EstimateRequestInputTokens(check, {}, false);
                 const size_t trigger_tool = request.model.context_window * selected_compression_config->context_window_trigger_percent / 100;
                 if (est_tool > trigger_tool) {
@@ -4949,7 +4976,7 @@ void MainWindow::SendCurrentMessage() {
                 }
             }
             ChatRequestOptions loop_request = request;
-            loop_request.messages = working_messages;
+            loop_request.messages = ModelVisibleMessages(working_messages);
 
             const auto completion = OpenAIClient::StreamToolAwareCompletion(loop_request, tool_definitions, [hwnd, project_id, chat_id](const std::string& piece) {
                 auto* payload = new ChatDeltaPayload;
@@ -5201,7 +5228,7 @@ void MainWindow::SendCurrentMessage() {
 
         if (!success && error.empty()) {
             ChatRequestOptions final_request = request;
-            final_request.messages = working_messages;
+            final_request.messages = ModelVisibleMessages(working_messages);
             if (!final_request.system_prompt.empty()) {
                 final_request.system_prompt += "\n\n";
             }

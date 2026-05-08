@@ -168,6 +168,35 @@ function automationStatusTargets() {
   ].filter(Boolean);
 }
 
+function automationQuestionnaireKey(job, questionnaire) {
+  const chatId = job && job.chat_id ? job.chat_id : state.selectedChatId;
+  const toolCallId = questionnaire && questionnaire.tool_call_id
+    ? questionnaire.tool_call_id
+    : '';
+  return chatId + ':' + toolCallId;
+}
+
+function automationQuestionnaireSelection(job, questionnaire) {
+  const key = automationQuestionnaireKey(job, questionnaire);
+  if (!state.automationQuestionnaireSelections) {
+    state.automationQuestionnaireSelections = {};
+  }
+  if (!state.automationQuestionnaireSelections[key]) {
+    state.automationQuestionnaireSelections[key] = {
+      selectedIndices: [],
+      submitting: false,
+    };
+  }
+  return state.automationQuestionnaireSelections[key];
+}
+
+function forgetAutomationQuestionnaireSelection(job, questionnaire) {
+  if (!state.automationQuestionnaireSelections) return;
+  delete state.automationQuestionnaireSelections[
+    automationQuestionnaireKey(job, questionnaire)
+  ];
+}
+
 function renderSelectedAutomationJobStatus() {
   const job = selectedAutomationJob();
   const active = automationJobIsActive(job);
@@ -229,22 +258,50 @@ function renderAutomationJobStatusInto(statusEl, job, active) {
 
   if (job.questionnaire && active) {
     const q = job.questionnaire;
+    const selectionState = automationQuestionnaireSelection(job, q);
+    const selected = new Set(selectionState.selectedIndices || []);
     const question = document.createElement('div');
     question.className = 'automation-question';
     question.textContent = q.question || 'Automation needs input.';
     statusEl.appendChild(question);
 
-    const selected = new Set();
     const buttons = document.createElement('div');
     buttons.className = 'automation-question-options';
-    const submit = async indices => {
-      buttons.querySelectorAll('button').forEach(btn => { btn.disabled = true; });
-      await api('POST', '/api/questionnaire-response', {
-        chat_id: state.selectedChatId,
-        tool_call_id: q.tool_call_id,
-        selected_indices: indices,
+    const optionButtons = [];
+    let confirm = null;
+
+    const saveSelection = () => {
+      selectionState.selectedIndices = Array.from(selected).sort((a, b) => a - b);
+    };
+
+    const updateButtons = () => {
+      optionButtons.forEach((btn, idx) => {
+        btn.classList.toggle('selected', selected.has(idx));
+        btn.disabled = !!selectionState.submitting;
       });
-      await refreshAutomationStatusForChat(state.selectedChatId, { reloadMessages: false });
+      if (confirm) {
+        confirm.disabled = !!selectionState.submitting || selected.size === 0;
+      }
+    };
+
+    const submit = async indices => {
+      if (selectionState.submitting || !indices.length) return;
+      selectionState.submitting = true;
+      saveSelection();
+      updateButtons();
+      try {
+        await api('POST', '/api/questionnaire-response', {
+          chat_id: job.chat_id || state.selectedChatId,
+          tool_call_id: q.tool_call_id,
+          selected_indices: indices,
+        });
+        forgetAutomationQuestionnaireSelection(job, q);
+        await refreshAutomationStatusForChat(job.chat_id || state.selectedChatId, { reloadMessages: false });
+      } catch (err) {
+        selectionState.submitting = false;
+        updateButtons();
+        throw err;
+      }
     };
 
     (q.options || []).forEach((opt, idx) => {
@@ -256,24 +313,31 @@ function renderAutomationJobStatusInto(statusEl, job, active) {
         if (q.allow_multiple) {
           if (selected.has(idx)) selected.delete(idx);
           else selected.add(idx);
-          btn.classList.toggle('selected', selected.has(idx));
-          confirm.style.display = selected.size ? '' : 'none';
+          saveSelection();
+          updateButtons();
         } else {
+          selected.clear();
+          selected.add(idx);
+          saveSelection();
+          updateButtons();
           await submit([idx]);
         }
       });
+      optionButtons.push(btn);
       buttons.appendChild(btn);
     });
 
-    const confirm = document.createElement('button');
-    confirm.type = 'button';
-    confirm.className = 'automation-question-confirm';
-    confirm.textContent = 'Confirm';
-    confirm.style.display = 'none';
-    confirm.addEventListener('click', async () => {
-      await submit(Array.from(selected).sort((a, b) => a - b));
-    });
-    buttons.appendChild(confirm);
+    if (q.allow_multiple) {
+      confirm = document.createElement('button');
+      confirm.type = 'button';
+      confirm.className = 'automation-question-confirm';
+      confirm.textContent = selectionState.submitting ? 'Submitting...' : 'Confirm';
+      confirm.addEventListener('click', async () => {
+        await submit(Array.from(selected).sort((a, b) => a - b));
+      });
+      buttons.appendChild(confirm);
+    }
+    updateButtons();
     statusEl.appendChild(buttons);
   }
 
@@ -437,8 +501,6 @@ async function runAutomationSequence() {
 if (automationAddStepBtn) { automationAddStepBtn.addEventListener('click', addOrUpdateAutomationStep); }
 if (automationClearBtn)  { automationClearBtn.addEventListener('click', clearAutomationSequence); }
 if (automationSendBtn)   { automationSendBtn.addEventListener('click', runAutomationSequence); }
-
-
 
 
 

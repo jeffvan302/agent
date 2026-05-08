@@ -16,6 +16,7 @@
 
 
 
+
 'use strict';
 
 let forced = sessionStorage.getItem('force_password_reset') === 'true';
@@ -78,6 +79,7 @@ document.getElementById('cp-form').addEventListener('submit', async function(e) 
     btn.textContent = 'Update Password';
   }
 });
+
 
 
 

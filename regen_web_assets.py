@@ -10,7 +10,7 @@ root = pathlib.Path(r'C:\Users\TheunisvanNiekerk\Code\agent')
 www_root = root / 'www'
 src_path = root / 'src' / 'web_assets_default.cpp'
 
-LARGE_THRESHOLD = 30 * 1024  # switch to hex array above this
+LARGE_THRESHOLD = 12 * 1024  # switch to hex array before MSVC raw string limits
 
 def file_content(rel_path):
     with open(www_root / rel_path, 'r', encoding='utf-8') as f:

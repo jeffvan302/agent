@@ -3354,6 +3354,18 @@ void AppendPromptSection(std::string& prompt, const std::string& section) {
     prompt += section;
 }
 
+bool NeedsLegacyCompressionRepair(const ChatCompressionState& state) {
+    if (state.current_compressed_context.size() < 40000) {
+        return false;
+    }
+    for (const auto& pinned : state.layer1_pinned_messages) {
+        if (pinned.role == "tool") {
+            return true;
+        }
+    }
+    return false;
+}
+
 PreparedWebHistory PrepareWebRequestHistory(
     AppStorage* storage,
     ContextCompressionService* compression_service,
@@ -3412,11 +3424,28 @@ PreparedWebHistory PrepareWebRequestHistory(
         }
     }
 
-    const auto compression_state =
+    auto compression_state =
         compression_service->LoadChatState(project_id, chat_id);
     if (prepared.compressed_context.empty()) {
         prepared.compressed_context =
             compression_state.current_compressed_context;
+        if (NeedsLegacyCompressionRepair(compression_state)) {
+            const std::string repaired_context =
+                compression_service->RebuildCompressedContextFromExistingState(
+                    compression_messages,
+                    project_id,
+                    chat_id,
+                    project_settings.selected_compression_config_id);
+            if (!repaired_context.empty()) {
+                prepared.compressed_context = repaired_context;
+                compression_state =
+                    compression_service->LoadChatState(project_id, chat_id);
+                Logger::Info("Compression",
+                    "repaired legacy compressed context project=" + project_id +
+                    " chat=" + chat_id +
+                    " chars=" + std::to_string(repaired_context.size()));
+            }
+        }
     }
     if (!prepared.compressed_context.empty() &&
         compression_state.last_compression_message_index > 0) {
@@ -3646,7 +3675,8 @@ json NonModelMessagesToDebugJson(const std::vector<MessageRecord>& messages) {
         if (message.role == "system" ||
             message.role == "user" ||
             message.role == "assistant" ||
-            message.role == "tool") {
+            message.role == "tool" ||
+            message.role == "web_debug") {
             continue;
         }
         arr.push_back(MessageToDebugJson(message));
@@ -3951,7 +3981,7 @@ WebServer::CallModel(const std::string& project_id,
                 ChatRequestOptions check;
                 check.system_prompt = opts.system_prompt;
                 check.model = opts.model;
-                check.messages = working_messages;
+                check.messages = ModelVisibleMessages(working_messages);
                 const size_t est_tool = EstimateRequestInputTokens(check, {}, {}, false);
                 const size_t trigger_tool = opts.model.context_window * prepared_history.selected_config->context_window_trigger_percent / 100;
                 if (est_tool > trigger_tool) {
@@ -3959,7 +3989,7 @@ WebServer::CallModel(const std::string& project_id,
                 }
             }
             ChatRequestOptions loop_opts = opts;
-            loop_opts.messages = working_messages;
+            loop_opts.messages = ModelVisibleMessages(working_messages);
 
             const auto completion =
                 OpenAIClient::CreateToolAwareCompletion(loop_opts, tool_definitions);
@@ -4057,7 +4087,7 @@ WebServer::CallModel(const std::string& project_id,
 
         if (!success) {
             ChatRequestOptions final_opts = opts;
-            final_opts.messages = working_messages;
+            final_opts.messages = ModelVisibleMessages(working_messages);
             if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
             final_opts.system_prompt +=
                 "The tool loop stopped before a final assistant answer was produced. "
@@ -4497,7 +4527,6 @@ std::string WebServer::StreamModel(const std::string& project_id,
         {"tools", selected_model.supports_tools
             ? ToolDefinitionsToDebugJson(tool_definitions)
             : json::array()},
-        {"request_messages", MessagesToDebugJson(opts.messages)},
         {"compressible_messages", MessagesToDebugJson(opts.messages)},
         {"non_model_chat_records", NonModelMessagesToDebugJson(messages)},
         {"compression", {
@@ -4565,7 +4594,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 ChatRequestOptions check;
                 check.system_prompt = opts.system_prompt;
                 check.model = opts.model;
-                check.messages = working_messages;
+                check.messages = ModelVisibleMessages(working_messages);
                 const size_t est_tool = EstimateRequestInputTokens(check, {}, {}, false);
                 const size_t trigger_tool = opts.model.context_window * prepared_history.selected_config->context_window_trigger_percent / 100;
                 if (est_tool > trigger_tool) {
@@ -4573,7 +4602,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 }
             }
             ChatRequestOptions loop_opts = opts;
-            loop_opts.messages = working_messages;
+            loop_opts.messages = ModelVisibleMessages(working_messages);
 
             Logger::Info("WebModel",
                 "provider-call request_id=" + model_request_id +
@@ -4862,7 +4891,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
 
         if (!success) {
             ChatRequestOptions final_opts = opts;
-            final_opts.messages = working_messages;
+            final_opts.messages = ModelVisibleMessages(working_messages);
             if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
             final_opts.system_prompt +=
                 "The tool loop stopped before a final assistant answer was produced. "
