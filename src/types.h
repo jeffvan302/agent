@@ -655,6 +655,7 @@ struct ProjectSettings {
     std::string built_in_planner_storage_folder = "$ProjectFolder$\\.agent";
     bool built_in_completion_driver_enabled = false;  // Enable completion-loop driver tool for selected modes
     std::vector<std::string> completion_driver_allowed_mode_ids; // Agentic mode IDs allowed to use Completion Driver
+    int completion_driver_max_continuations = 0;      // 0 = unlimited, otherwise max host continuations per run/automation step
     bool built_in_questionnaire_enabled = false;      // Enable user questionnaire built-in tool
     int questionnaire_max_options = 8;                // Max options the questionnaire tool can offer
     bool questionnaire_restrict_by_mode = false;      // Only allow questionnaire in a specific agentic mode

@@ -192,3 +192,15 @@
 2026-05-07T14:21:02Z [10.240.0.230] chat_created user=admin project=project_1777616659667_10 chat=chat_1778163662538_10
 2026-05-07T17:32:13Z [10.240.0.230] chat_created user=admin project=project_1777616659667_10 chat=chat_1778175133096_10
 2026-05-07T21:06:05Z [10.240.0.230] chat_created user=admin project=project_1777616659667_10 chat=chat_1778187965188_10
+2026-05-07T21:39:45Z [10.240.0.230] chat_deleted user=admin chat=chat_1777886965941_14
+2026-05-07T21:39:50Z [10.240.0.230] chat_deleted user=admin chat=chat_1777972094500_10
+2026-05-07T21:40:02Z [10.240.0.230] chat_deleted user=admin chat=chat_1777978028890_10
+2026-05-07T21:40:05Z [10.240.0.230] chat_deleted user=admin chat=chat_1778009517356_20
+2026-05-07T21:40:39Z [10.240.0.230] chat_deleted user=admin chat=chat_1778063030494_18
+2026-05-07T21:40:43Z [10.240.0.230] chat_deleted user=admin chat=chat_1778066766308_11
+2026-05-07T21:41:09Z [10.240.0.230] chat_deleted user=admin chat=chat_1778077501767_10
+2026-05-07T21:41:30Z [10.240.0.230] chat_deleted user=admin chat=chat_1778163662538_10
+2026-05-07T21:41:37Z [10.240.0.230] chat_deleted user=admin chat=chat_1778175133096_10
+2026-05-08T03:32:24Z [10.240.0.230] chat_created user=admin project=project_1777616659667_10 chat=chat_1778211144841_10
+2026-05-08T04:16:24Z [10.240.0.230] chat_created user=admin project=project_1777616659667_10 chat=chat_1778213784858_19
+2026-05-08T05:50:01Z [10.240.0.230] chat_created user=admin project=project_1777616659667_10 chat=chat_1778219401391_8

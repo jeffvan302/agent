@@ -61,6 +61,9 @@ constexpr UINT kChatFinishedMessage = WM_APP + 2;
 constexpr UINT kToolTraceMessage = WM_APP + 3;
 constexpr UINT kMcpChangedMessage = WM_APP + 4;
 constexpr UINT kWebContentChangedMessage = WM_APP + 5;
+constexpr UINT kStartupInitializeMessage = WM_APP + 6;
+constexpr UINT kStartupServicesFinishedMessage = WM_APP + 7;
+constexpr std::uintmax_t kDesktopTranscriptLoadLimitBytes = 8ull * 1024ull * 1024ull;
 
 enum ControlId : int {
     kTree = 3001,
@@ -2790,6 +2793,7 @@ void ShowContextMessagesWindow(HWND owner, AppStorage* storage, const std::strin
 class MainWindow {
 public:
     MainWindow();
+    ~MainWindow();
     HWND Create(HINSTANCE instance);
     void OpenWebConfig();  // public so command-line options can trigger it
     HWND GetAgenticModesWindow() const { return agentic_modes_window_; }
@@ -2800,6 +2804,9 @@ private:
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
 
     void OnCreate();
+    void OnStartupInitialize();
+    void StartBackgroundServices();
+    void OnStartupServicesFinished();
     void LoadState();
     void EnsureDefaultProjectAndChat();
     void ChooseValidSelection();
@@ -2901,6 +2908,9 @@ private:
     std::unordered_map<std::string, std::wstring> streaming_previews_by_chat_;
     std::unordered_map<std::string, HTREEITEM> chat_tree_items_;
     std::unordered_map<std::string, std::vector<RagWorkingSetEntry>> rag_working_sets_by_chat_;
+    std::thread startup_worker_;
+    bool active_messages_skipped_for_size_ = false;
+    std::uintmax_t active_messages_file_size_ = 0;
     bool refreshing_tree_ = false;
 };
 
@@ -2911,6 +2921,12 @@ MainWindow::MainWindow()
     , compression_service_(&storage_)
     , user_store_(ResolveWebUsersPath())
 {}
+
+MainWindow::~MainWindow() {
+    if (startup_worker_.joinable()) {
+        startup_worker_.join();
+    }
+}
 
 int MainWindow::Scale(HWND hwnd, int value) {
     return MulDiv(value, GetDpiForWindow(hwnd), 96);
@@ -2993,6 +3009,12 @@ LRESULT CALLBACK MainWindow::WindowProc(HWND hwnd, UINT message, WPARAM w_param,
     case kWebContentChangedMessage:
         self->OnWebContentChanged();
         return 0;
+    case kStartupInitializeMessage:
+        self->OnStartupInitialize();
+        return 0;
+    case kStartupServicesFinishedMessage:
+        self->OnStartupServicesFinished();
+        return 0;
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
@@ -3005,13 +3027,8 @@ LRESULT CALLBACK MainWindow::WindowProc(HWND hwnd, UINT message, WPARAM w_param,
 }
 
 void MainWindow::OnCreate() {
+    Logger::Info("Main window WM_CREATE: creating controls");
     font_ = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    storage_.EnsureInitialized();
-    user_store_.EnsureInitialized();
-    mcp_manager_.Load();
-    mcp_manager_.SetStateChangedCallback([hwnd = hwnd_]() {
-        PostMessageW(hwnd, kMcpChangedMessage, 0, 0);
-    });
 
     new_project_button_ = CreateWindowExW(0, L"BUTTON", L"New Project", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kNewProject), nullptr, nullptr);
     new_chat_button_ = CreateWindowExW(0, L"BUTTON", L"New Chat", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kNewChat), nullptr, nullptr);
@@ -3043,13 +3060,31 @@ void MainWindow::OnCreate() {
     }
 
     SendMessageW(transcript_, EM_SETBKGNDCOLOR, 0, GetSysColor(COLOR_WINDOW));
-    rag_service_.EnsureInitialized();
-    LoadState();
-    mcp_manager_.ConnectAutoServers(active_project_id_);
-    UpdateStatus(L"Ready.");
 
-    // Auto-start web server if configured
-    {
+    UpdateStatus(L"Starting...");
+    Logger::Info("Main window WM_CREATE: controls created; deferring startup initialization");
+    PostMessageW(hwnd_, kStartupInitializeMessage, 0, 0);
+}
+
+void MainWindow::OnStartupInitialize() {
+    try {
+        Logger::Info("Startup initialization: storage begin");
+        storage_.EnsureInitialized();
+        user_store_.EnsureInitialized();
+
+        Logger::Info("Startup initialization: MCP config load begin");
+        mcp_manager_.Load();
+        mcp_manager_.SetStateChangedCallback([hwnd = hwnd_]() {
+            PostMessageW(hwnd, kMcpChangedMessage, 0, 0);
+        });
+
+        Logger::Info("Startup initialization: load UI state begin");
+        LoadState();
+        UpdateStatus(L"Ready. Starting background services...");
+
+        // Auto-start web server if configured. WebServer::Start launches its
+        // listener thread and returns, so this should not block first paint.
+        Logger::Info("Startup initialization: web server autostart check begin");
         const auto app_root = storage_.root_path();
         const auto settings_path = app_root / "web_settings.json";
         if (std::filesystem::exists(settings_path)) {
@@ -3062,19 +3097,76 @@ void MainWindow::OnCreate() {
                 }
             }
         }
+
+        StartBackgroundServices();
+        Logger::Info("Startup initialization: complete");
+    } catch (const std::exception& ex) {
+        Logger::Error(std::string("Startup initialization failed: ") + ex.what());
+        UpdateStatus((L"Startup failed: " + Utf8ToWide(ex.what())).c_str());
+        MessageBoxW(hwnd_, Utf8ToWide(ex.what()).c_str(), L"Agent Startup Error", MB_OK | MB_ICONERROR);
+    } catch (...) {
+        Logger::Error("Startup initialization failed with an unknown error");
+        UpdateStatus(L"Startup failed.");
+        MessageBoxW(hwnd_, L"An unknown startup error occurred.", L"Agent Startup Error", MB_OK | MB_ICONERROR);
     }
 }
 
+void MainWindow::StartBackgroundServices() {
+    if (startup_worker_.joinable()) {
+        return;
+    }
+
+    const std::string project_id = active_project_id_;
+    startup_worker_ = std::thread([this, project_id]() {
+        Logger::Info("Startup background services: RAG initialization begin");
+        try {
+            rag_service_.EnsureInitialized();
+        } catch (const std::exception& ex) {
+            Logger::Warn(std::string("Startup background services: RAG initialization failed: ") + ex.what());
+        } catch (...) {
+            Logger::Warn("Startup background services: RAG initialization failed with an unknown error");
+        }
+
+        Logger::Info("Startup background services: MCP auto-connect begin");
+        try {
+            mcp_manager_.ConnectAutoServers(project_id);
+        } catch (const std::exception& ex) {
+            Logger::Warn(std::string("Startup background services: MCP auto-connect failed: ") + ex.what());
+        } catch (...) {
+            Logger::Warn("Startup background services: MCP auto-connect failed with an unknown error");
+        }
+
+        Logger::Info("Startup background services: complete");
+        if (hwnd_) {
+            PostMessageW(hwnd_, kStartupServicesFinishedMessage, 0, 0);
+        }
+    });
+}
+
+void MainWindow::OnStartupServicesFinished() {
+    UpdateStatus(L"Ready.");
+    OnMcpStateChanged();
+}
+
 void MainWindow::LoadState() {
+    Logger::Info("LoadState: providers begin");
     providers_ = storage_.LoadProviders();
     OpenAIClient::SetProviderCache(providers_);
+    Logger::Info("LoadState: projects begin");
     projects_ = storage_.LoadProjects();
+    Logger::Info("LoadState: selection begin");
     EnsureDefaultProjectAndChat();
     ChooseValidSelection();
+    Logger::Info("LoadState: refresh tree begin");
     RefreshTree();
+    Logger::Info("LoadState: active messages begin");
     LoadActiveMessages();
+    RefreshInputState();
+    Logger::Info("LoadState: render transcript begin");
     RenderTranscript();
+    Logger::Info("LoadState: render tool trace begin");
     RenderToolTrace();
+    Logger::Info("LoadState: complete");
 }
 
 void MainWindow::EnsureDefaultProjectAndChat() {
@@ -3521,6 +3613,7 @@ void MainWindow::EditProjectSettings() {
     options.built_in_planner_storage_folder = project_settings.built_in_planner_storage_folder;
     options.built_in_completion_driver_enabled = project_settings.built_in_completion_driver_enabled;
     options.completion_driver_allowed_mode_ids = project_settings.completion_driver_allowed_mode_ids;
+    options.completion_driver_max_continuations = project_settings.completion_driver_max_continuations;
     options.built_in_questionnaire_enabled = project_settings.built_in_questionnaire_enabled;
     options.questionnaire_max_options = project_settings.questionnaire_max_options;
     options.questionnaire_restrict_by_mode = project_settings.questionnaire_restrict_by_mode;
@@ -3581,6 +3674,7 @@ void MainWindow::EditProjectSettings() {
     saved_settings.built_in_planner_storage_folder = result->built_in_planner_storage_folder;
     saved_settings.built_in_completion_driver_enabled = result->built_in_completion_driver_enabled;
     saved_settings.completion_driver_allowed_mode_ids = result->completion_driver_allowed_mode_ids;
+    saved_settings.completion_driver_max_continuations = result->completion_driver_max_continuations;
     saved_settings.built_in_questionnaire_enabled = result->built_in_questionnaire_enabled;
     saved_settings.questionnaire_max_options = result->questionnaire_max_options;
     saved_settings.questionnaire_restrict_by_mode = result->questionnaire_restrict_by_mode;
@@ -4078,9 +4172,27 @@ void MainWindow::RefreshTree() {
 }
 
 void MainWindow::LoadActiveMessages() {
+    active_messages_skipped_for_size_ = false;
+    active_messages_file_size_ = 0;
     if (active_project_id_.empty() || active_chat_id_.empty()) {
         active_messages_.clear();
         return;
+    }
+    const auto messages_path = storage_.data_root() / "projects" / active_project_id_ /
+        "chats" / active_chat_id_ / "messages.json";
+    std::error_code ec;
+    if (std::filesystem::exists(messages_path, ec)) {
+        const auto size = std::filesystem::file_size(messages_path, ec);
+        if (!ec) {
+            active_messages_file_size_ = size;
+            if (size > kDesktopTranscriptLoadLimitBytes) {
+                active_messages_.clear();
+                active_messages_skipped_for_size_ = true;
+                Logger::Warn("Desktop transcript skipped large chat history: " +
+                    messages_path.string() + " (" + std::to_string(size) + " bytes)");
+                return;
+            }
+        }
     }
     active_messages_ = storage_.LoadMessages(active_project_id_, active_chat_id_);
 }
@@ -4416,7 +4528,8 @@ void MainWindow::SendCurrentMessage() {
             system_prompt_sections.push_back({"Planner / Task Decomposition", planner_context});
         }
         if (built_in_tools::IsCompletionDriverEnabled(proj_settings, proj_settings.selected_agentic_mode_id)) {
-            const std::string driver_context = built_in_tools::CompletionDriverSystemPrompt();
+            const std::string driver_context = built_in_tools::CompletionDriverSystemPrompt(
+                built_in_tools::NormalizedCompletionDriverMaxContinuations(proj_settings));
             if (!request.system_prompt.empty()) {
                 request.system_prompt += "\n\n";
             }
@@ -4813,6 +4926,11 @@ void MainWindow::SendCurrentMessage() {
         std::string error;
         const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
             project_settings_for_tools, proj_settings.selected_agentic_mode_id);
+        const int completion_driver_max_continuations =
+            built_in_tools::NormalizedCompletionDriverMaxContinuations(project_settings_for_tools);
+        // Keep the limit scoped to this desktop send operation. A later send gets
+        // a new counter, matching the web automation per-step behavior.
+        int completion_driver_continuations = 0;
         bool completion_driver_done = !completion_driver_enabled;
         bool success = false;
 
@@ -5061,8 +5179,20 @@ void MainWindow::SendCurrentMessage() {
                 working_messages.push_back(std::move(assistant_message));
             }
             if (completion_driver_enabled && !completion_driver_done) {
+                if (completion_driver_max_continuations > 0 &&
+                    completion_driver_continuations >= completion_driver_max_continuations) {
+                    Logger::Warn("CompletionDriver",
+                        "continuation limit reached project=" + project_id +
+                        " chat=" + chat_id +
+                        " limit=" + std::to_string(completion_driver_max_continuations));
+                    success = true;
+                    break;
+                }
+                ++completion_driver_continuations;
                 working_messages.push_back(
-                    built_in_tools::MakeCompletionDriverContinuationMessage(round + 1));
+                    built_in_tools::MakeCompletionDriverContinuationMessage(
+                        completion_driver_continuations,
+                        completion_driver_max_continuations));
                 continue;
             }
             success = true;
@@ -5412,6 +5542,15 @@ void MainWindow::RenderTranscript() {
     std::wstring transcript;
     if (active_chat_id_.empty()) {
         transcript = L"Create or select a chat to begin.";
+    } else if (active_messages_skipped_for_size_) {
+        const double size_mb = static_cast<double>(active_messages_file_size_) / (1024.0 * 1024.0);
+        std::wostringstream message;
+        message.setf(std::ios::fixed);
+        message.precision(1);
+        message << L"This chat history is " << size_mb
+                << L" MB, so the desktop preview skipped loading it to keep startup responsive.\r\n\r\n"
+                << L"The web chat can still open the full record. Start a smaller chat or use the website for this large automation/debug transcript.";
+        transcript = message.str();
     } else {
         for (const auto& message : active_messages_) {
             if (message.role == "tool") {
@@ -5581,9 +5720,10 @@ int MainWindow::CountChatsInFlight() const {
 void MainWindow::RefreshInputState() {
     // Called after switching active chat so controls reflect the new chat's status.
     const bool busy = IsChatInFlight(active_chat_id_);
-    EnableWindow(send_button_, !busy);
-    EnableWindow(input_, !busy);
-    EnableWindow(compress_button_, !busy);
+    const bool large_preview = active_messages_skipped_for_size_;
+    EnableWindow(send_button_, !busy && !large_preview);
+    EnableWindow(input_, !busy && !large_preview);
+    EnableWindow(compress_button_, !busy && !large_preview);
     EnableWindow(setup_system_button_, TRUE);  // Always enabled; does not require an active chat.
     // Tree, navigation, and manager buttons are NEVER locked by per-chat state.
 }
@@ -5768,8 +5908,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmd_line, int show_comm
         return exit_code;
     }
 
+    Logger::Info("Startup: loading rich edit library");
     LoadLibraryW(L"Msftedit.dll");
 
+    Logger::Info("Startup: initializing common controls");
     INITCOMMONCONTROLSEX controls{};
     controls.dwSize = sizeof(controls);
     controls.dwICC = ICC_TREEVIEW_CLASSES | ICC_STANDARD_CLASSES;
@@ -5777,13 +5919,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmd_line, int show_comm
 
     int exit_code = 0;
     {
+        Logger::Info("Startup: constructing main window object");
         MainWindow window;
+        Logger::Info("Startup: creating main window");
         HWND hwnd = window.Create(instance);
         if (!hwnd) {
             Logger::Error("Failed to create main window");
             Logger::Shutdown();
             return 1;
         }
+        Logger::Info("Startup: main window created");
 
         if (args.web_config) {
             Logger::Info("Opening Web Config from command line");

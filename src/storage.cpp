@@ -1849,6 +1849,7 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
         cd_modes_arr.push_back(id);
     }
     j["completion_driver_allowed_mode_ids"] = std::move(cd_modes_arr);
+    j["completion_driver_max_continuations"] = settings.completion_driver_max_continuations;
     j["built_in_questionnaire_enabled"] = settings.built_in_questionnaire_enabled;
     j["questionnaire_max_options"] = settings.questionnaire_max_options;
     j["questionnaire_restrict_by_mode"] = settings.questionnaire_restrict_by_mode;
@@ -1943,6 +1944,10 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
                 settings.completion_driver_allowed_mode_ids.push_back(item.get<std::string>());
             }
         }
+    }
+    settings.completion_driver_max_continuations = j.value("completion_driver_max_continuations", 0);
+    if (settings.completion_driver_max_continuations < 0) {
+        settings.completion_driver_max_continuations = 0;
     }
     settings.built_in_questionnaire_enabled = j.value("built_in_questionnaire_enabled", false);
     settings.questionnaire_max_options = j.value("questionnaire_max_options", 8);

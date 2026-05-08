@@ -799,6 +799,15 @@ body.sidebar-resizing {
 .tool-usage-block.status-error .tool-usage-summary-text {
   color: var(--color-accent-danger);
 }
+.tool-usage-live-description {
+  padding: 0 12px 10px 38px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.tool-usage-live-description[hidden] {
+  display: none;
+}
 .tool-usage-content {
   padding: 0 12px 12px;
 }
@@ -835,6 +844,34 @@ body.sidebar-resizing {
 }
 .assistant-bubble-text:empty {
   display: none;
+}
+.message-row.history-notice {
+  align-self: center;
+  max-width: 760px;
+}
+.history-notice-bubble {
+  border: 1px dashed var(--color-border-main);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-tool-call);
+  color: var(--color-text-secondary);
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.questionnaire-inline {
+  border: 1px solid var(--color-border-main);
+  border-left: 3px solid var(--color-accent-primary);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-tool-call);
+  padding: 10px 12px;
+}
+.questionnaire-inline .automation-question {
+  margin-top: 0;
+}
+.questionnaire-inline-status {
+  margin-top: 8px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
 }
 
 /* Streaming indicator */
@@ -1825,8 +1862,6 @@ document.getElementById('login-form').addEventListener('submit', async function(
     btn.textContent = 'Sign In';
   }
 });
-
-
 
 
 

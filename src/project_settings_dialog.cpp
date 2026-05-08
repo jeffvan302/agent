@@ -143,6 +143,8 @@ enum ControlId : int {
     kCompletionDriverModesLabel = 6491,
     kCompletionDriverModesList = 6492,
     kCompletionDriverNoteLabel = 6493,
+    kCompletionDriverMaxContinuationsLabel = 6496,
+    kCompletionDriverMaxContinuationsEdit = 6497,
 
     // Filesystem built-in tool settings
     kFilesystemEnabledCheck = 6500,
@@ -708,6 +710,7 @@ private:
             &planner_storage_folder_edit_,
             &completion_driver_enabled_check_,
             &completion_driver_modes_list_,
+            &completion_driver_max_continuations_edit_,
             &questionnaire_enabled_check_,
             &questionnaire_max_options_edit_,
             &questionnaire_restrict_mode_check_,
@@ -1112,8 +1115,14 @@ private:
         SetWindowLongPtrW(completion_driver_modes_list_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
         completion_driver_modes_list_prev_proc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
             completion_driver_modes_list_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&ProjectSettingsDialog::CompletionDriverModesListProc)));
+        completion_driver_max_continuations_label_ = CreateWindowExW(0, L"STATIC", L"Max continuations:",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverMaxContinuationsLabel), nullptr, nullptr);
+        completion_driver_max_continuations_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"0",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverMaxContinuationsEdit), nullptr, nullptr);
         completion_driver_note_label_ = CreateWindowExW(0, L"STATIC",
-            L"Only checked modes can use completion_driver. The host continues those modes until the tool reports completed/done.",
+            L"Only checked modes can use completion_driver. The host continues those modes until completed/done or until the max continuation limit is reached. Use 0 for unlimited.",
             WS_CHILD | WS_VISIBLE,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverNoteLabel), nullptr, nullptr);
 
@@ -1252,7 +1261,9 @@ private:
             internal_powershell_workdir_edit_, internal_powershell_risk_label_,
             internal_artifact_memory_enabled_check_, internal_artifact_memory_note_label_,
             planner_enabled_check_, planner_storage_folder_label_, planner_storage_folder_edit_, planner_note_label_,
-            completion_driver_enabled_check_, completion_driver_modes_label_, completion_driver_modes_list_, completion_driver_note_label_,
+            completion_driver_enabled_check_, completion_driver_modes_label_, completion_driver_modes_list_,
+            completion_driver_max_continuations_label_, completion_driver_max_continuations_edit_,
+            completion_driver_note_label_,
             questionnaire_enabled_check_, questionnaire_max_options_label_, questionnaire_max_options_edit_,
             questionnaire_restrict_mode_check_, questionnaire_mode_label_, questionnaire_mode_combo_,
             filesystem_enabled_check_, filesystem_auto_archive_check_, filesystem_working_dir_label_,
@@ -1375,6 +1386,8 @@ private:
         if (completion_driver_enabled_) {
             CheckDlgButton(scroll_content_host_, kCompletionDriverEnabledCheck, BST_CHECKED);
         }
+        SetWindowTextW(completion_driver_max_continuations_edit_,
+            std::to_wstring(options_.completion_driver_max_continuations).c_str());
         RefreshCompletionDriverModesList();
         if (questionnaire_enabled_) {
             CheckDlgButton(scroll_content_host_, kQuestionnaireEnabledCheck, BST_CHECKED);
@@ -1475,7 +1488,7 @@ private:
         const int internal_list_w = std::max(Scale(hwnd_, 180), (internal_available_w - gutter) / 2);
         const int internal_settings_x =  internal_list_w + gutter;
         const int internal_settings_w = internal_available_w - internal_list_w - gutter;
-        const int internal_h = Scale(hwnd_, 200);
+        const int internal_h = Scale(hwnd_, 220);
         MoveWindow(internal_tools_list_, 0, y, internal_list_w, internal_h, TRUE);
         MoveWindow(internal_tool_settings_panel_, internal_settings_x, y, internal_settings_w, internal_h, TRUE);
         const int panel_pad = Scale(hwnd_, 10);
@@ -1496,7 +1509,9 @@ private:
         MoveWindow(completion_driver_enabled_check_, internal_settings_x + panel_pad, tool_y, internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
         MoveWindow(completion_driver_modes_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), internal_settings_w - panel_pad * 2, label_height, TRUE);
         MoveWindow(completion_driver_modes_list_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 45), internal_settings_w - panel_pad * 2, Scale(hwnd_, 72), TRUE);
-        MoveWindow(completion_driver_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 122), internal_settings_w - panel_pad * 2, Scale(hwnd_, 44), TRUE);
+        MoveWindow(completion_driver_max_continuations_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 122), Scale(hwnd_, 125), label_height, TRUE);
+        MoveWindow(completion_driver_max_continuations_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 128), tool_y + Scale(hwnd_, 119), Scale(hwnd_, 60), Scale(hwnd_, 22), TRUE);
+        MoveWindow(completion_driver_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 148), internal_settings_w - panel_pad * 2, Scale(hwnd_, 46), TRUE);
 
         MoveWindow(questionnaire_enabled_check_, internal_settings_x + panel_pad, tool_y, internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
         MoveWindow(questionnaire_max_options_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), Scale(hwnd_, 80), Scale(hwnd_, 20), TRUE);
@@ -2184,7 +2199,7 @@ private:
     }
 
     void ToggleInternalToolEnabled(int index) {
-        if (index < 0 || index > 4) return;
+        if (index < 0 || index > 5) return;
         SaveCurrentInternalToolSettings();
         selected_internal_tool_index_ = index;
         if (index == 0) {
@@ -2320,6 +2335,8 @@ private:
         ShowWindow(completion_driver_enabled_check_, SW_HIDE);
         ShowWindow(completion_driver_modes_label_, SW_HIDE);
         ShowWindow(completion_driver_modes_list_, SW_HIDE);
+        ShowWindow(completion_driver_max_continuations_label_, SW_HIDE);
+        ShowWindow(completion_driver_max_continuations_edit_, SW_HIDE);
         ShowWindow(completion_driver_note_label_, SW_HIDE);
         ShowWindow(filesystem_enabled_check_, SW_HIDE);
         ShowWindow(filesystem_auto_archive_check_, SW_HIDE);
@@ -2387,12 +2404,16 @@ private:
             ShowWindow(completion_driver_enabled_check_, SW_SHOW);
             ShowWindow(completion_driver_modes_label_, SW_SHOW);
             ShowWindow(completion_driver_modes_list_, SW_SHOW);
+            ShowWindow(completion_driver_max_continuations_label_, SW_SHOW);
+            ShowWindow(completion_driver_max_continuations_edit_, SW_SHOW);
             ShowWindow(completion_driver_note_label_, SW_SHOW);
             CheckDlgButton(scroll_content_host_, kCompletionDriverEnabledCheck,
                 completion_driver_enabled_ ? BST_CHECKED : BST_UNCHECKED);
             RefreshCompletionDriverModesList();
             EnableWindow(completion_driver_modes_label_, completion_driver_enabled_ ? TRUE : FALSE);
             EnableWindow(completion_driver_modes_list_, completion_driver_enabled_ ? TRUE : FALSE);
+            EnableWindow(completion_driver_max_continuations_label_, completion_driver_enabled_ ? TRUE : FALSE);
+            EnableWindow(completion_driver_max_continuations_edit_, completion_driver_enabled_ ? TRUE : FALSE);
         }
         if (index == 5) {
             panel_has_content = true;
@@ -2919,6 +2940,14 @@ private:
                 result.completion_driver_allowed_mode_ids.push_back(options_.agentic_modes[i].id);
             }
         }
+        const std::wstring completion_limit_text =
+            TrimWide(GetWindowTextString(completion_driver_max_continuations_edit_));
+        if (!completion_limit_text.empty()) {
+            result.completion_driver_max_continuations = std::stoi(completion_limit_text);
+            if (result.completion_driver_max_continuations < 0) {
+                result.completion_driver_max_continuations = 0;
+            }
+        }
         result.built_in_filesystem_enabled = InternalToolListChecked(5, filesystem_enabled_);
         result.built_in_filesystem_auto_archive = filesystem_auto_archive_;
         result.built_in_filesystem_working_directory = filesystem_working_directory_;
@@ -3196,6 +3225,7 @@ private:
         ProjectSettings preview_settings;
         preview_settings.built_in_completion_driver_enabled = settings.built_in_completion_driver_enabled;
         preview_settings.completion_driver_allowed_mode_ids = settings.completion_driver_allowed_mode_ids;
+        preview_settings.completion_driver_max_continuations = settings.completion_driver_max_continuations;
 
         if (settings.built_in_powershell_enabled) {
             if (!context.empty()) context += "\n\n";
@@ -3207,7 +3237,8 @@ private:
         }
         if (built_in_tools::IsCompletionDriverEnabled(preview_settings, settings.selected_agentic_mode_id)) {
             if (!context.empty()) context += "\n\n";
-            context += built_in_tools::CompletionDriverSystemPrompt();
+            context += built_in_tools::CompletionDriverSystemPrompt(
+                built_in_tools::NormalizedCompletionDriverMaxContinuations(preview_settings));
         }
         if (settings.built_in_questionnaire_enabled) {
             if (!context.empty()) context += "\n\n";
@@ -3512,6 +3543,8 @@ private:
     HWND completion_driver_enabled_check_ = nullptr;
     HWND completion_driver_modes_label_ = nullptr;
     HWND completion_driver_modes_list_ = nullptr;
+    HWND completion_driver_max_continuations_label_ = nullptr;
+    HWND completion_driver_max_continuations_edit_ = nullptr;
     HWND completion_driver_note_label_ = nullptr;
     WNDPROC completion_driver_modes_list_prev_proc_ = nullptr;
     HWND questionnaire_enabled_check_ = nullptr;

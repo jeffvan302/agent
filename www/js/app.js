@@ -76,6 +76,8 @@ let state = {
   plannerRefreshTimer: null,
   activeAbortController: null,
   activeAbortControllers: {},
+  followChatTail: true,
+  autoScrollingMessages: false,
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -129,6 +131,43 @@ const accountSaveBtn = $('account-save-btn');
 const accountError = $('account-error');
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'agent.sidebar.width';
+const CHAT_TAIL_EPSILON_PX = 48;
+const THINKING_COLLAPSE_DELAY_MS = 1600;
+
+// Keep following new output only while the user is already at the chat tail.
+function isMessagesNearBottom() {
+  if (!messagesEl) return true;
+  const remaining = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+  return remaining <= CHAT_TAIL_EPSILON_PX;
+}
+
+function scrollMessagesToBottom(force = false) {
+  if (!messagesEl) return;
+  if (force) state.followChatTail = true;
+  if (!force && !state.followChatTail) return;
+  state.autoScrollingMessages = true;
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  window.setTimeout(() => {
+    state.autoScrollingMessages = false;
+  }, 0);
+}
+
+function scrollMessagesToBottomIfPinned() {
+  scrollMessagesToBottom(false);
+}
+
+function restoreMessagesScroll(previousTop) {
+  if (!messagesEl) return;
+  const maxTop = Math.max(0, messagesEl.scrollHeight - messagesEl.clientHeight);
+  messagesEl.scrollTop = Math.min(previousTop, maxTop);
+}
+
+if (messagesEl) {
+  messagesEl.addEventListener('scroll', () => {
+    if (state.autoScrollingMessages) return;
+    state.followChatTail = isMessagesNearBottom();
+  }, { passive: true });
+}
 
 function sidebarWidthBounds() {
   const viewport = Math.max(0, window.innerWidth || 0);
@@ -377,7 +416,9 @@ window.addEventListener('keydown', e => {
 
 // ── Markdown rendering ────────────────────────────────────────────────────
 function renderMarkdown(text, options = {}) {
-  const extracted = extractThinkingBlocks(text || '', !!options.streaming);
+  const extracted = extractThinkingBlocks(text || '', {
+    open: !!(options.streaming || options.thinkingOpen),
+  });
   const raw = marked.parse(extracted.markdown);
   let result = DOMPurify.sanitize(raw, {
     ADD_TAGS: ['details', 'summary'],
@@ -392,12 +433,13 @@ function renderMarkdown(text, options = {}) {
   return result;
 }
 
-function extractThinkingBlocks(text, streaming) {
+function extractThinkingBlocks(text, options = {}) {
   const blocks = [];
+  const defaultOpen = !!options.open;
   let markdown = text.replace(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi,
     function(_match, content) {
       const placeholder = 'THINKING_BLOCK_' + blocks.length + '_PLACEHOLDER';
-      blocks.push({ placeholder, content: content.trim(), open: true });
+      blocks.push({ placeholder, content: content.trim(), open: defaultOpen });
       return '\n\n' + placeholder + '\n\n';
     });
 
@@ -422,6 +464,30 @@ function renderThinkingBlock(content, open, streaming) {
     '<summary>' + state + '</summary>' +
     '<div class="thinking-content">' + escapeHtml(body) + '</div>' +
     '</details>';
+}
+
+function wireThinkingBlocks(root, options = {}) {
+  if (!root) return;
+  const delay = Number(options.collapseThinkingAfterMs || 0);
+  root.querySelectorAll('details.thinking-block').forEach(details => {
+    details.addEventListener('toggle', () => {
+      if (details.dataset.autoToggle === 'true') return;
+      details.dataset.userToggled = 'true';
+    });
+    if (delay > 0 && details.open) {
+      window.setTimeout(() => {
+        if (!details.isConnected ||
+            !details.open ||
+            details.dataset.userToggled === 'true') {
+          return;
+        }
+        details.dataset.autoToggle = 'true';
+        details.open = false;
+        scrollMessagesToBottomIfPinned();
+        window.setTimeout(() => { delete details.dataset.autoToggle; }, 0);
+      }, delay);
+    }
+  });
 }
 
 function replacePlaceholder(html, placeholder, replacement) {
@@ -714,10 +780,15 @@ function showDiagramError(host, kind, err, source) {
 
 
 // ── Message rendering ─────────────────────────────────────────────────────
-function renderMessages(messages) {
+function renderMessages(messages, options = {}) {
+  const previousTop = messagesEl.scrollTop;
+  const shouldFollow = !!options.forceScrollBottom ||
+    state.followChatTail ||
+    isMessagesNearBottom();
   messagesEl.innerHTML = '';
   if (messages.length === 0) {
     messagesEl.appendChild(emptyState);
+    scrollMessagesToBottom(!!options.forceScrollBottom);
     return;
   }
   for (const msg of messages) {
@@ -746,7 +817,12 @@ function renderMessages(messages) {
   if (typeof renderAutomationLiveResponse === 'function') {
     renderAutomationLiveResponse();
   }
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  if (shouldFollow) {
+    scrollMessagesToBottom(true);
+  } else {
+    state.followChatTail = false;
+    restoreMessagesScroll(previousTop);
+  }
 }
 
 const INGESTIBLE_UPLOAD_EXTS = new Set([
@@ -964,7 +1040,7 @@ function appendLiveFileUploadRow(file) {
   const live = createFileUploadRow(file, 'pending');
   if (messagesEl.contains(emptyState)) emptyState.remove();
   messagesEl.appendChild(live.row);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollMessagesToBottom(true);
   return live;
 }
 
@@ -1153,6 +1229,35 @@ function buildCompressionRow(content) {
   return createCompressionRow(content).row;
 }
 
+function buildHistoryNoticeRow(content) {
+  let record = content;
+  if (typeof record === 'string') {
+    try {
+      const parsed = JSON.parse(record);
+      if (parsed && typeof parsed === 'object') record = parsed;
+    } catch (_) {}
+  }
+  record = record || {};
+
+  const row = document.createElement('div');
+  row.className = 'message-row history-notice';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'history-notice-bubble';
+
+  const hidden = Number(record.hidden_records || 0);
+  const parts = [];
+  parts.push(record.message || 'Earlier chat history is hidden.');
+  if (hidden > 0) {
+    parts.push(hidden + ' earlier record' + (hidden === 1 ? '' : 's') + ' available in debug view.');
+  }
+  if (record.debug_hint) parts.push(record.debug_hint);
+  bubble.textContent = parts.join(' ');
+
+  row.appendChild(bubble);
+  return row;
+}
+
 
 function normalizeQueueRecord(content) {
   let record = content;
@@ -1295,6 +1400,16 @@ function normalizeAssistantTrace(trace, fallbackContent = '') {
   if (Array.isArray(trace)) {
     trace.forEach(segment => {
       if (!segment || typeof segment !== 'object') return;
+      if (segment.type === 'questionnaire' || segment.questionnaire) {
+        const source = segment.record && typeof segment.record === 'object'
+          ? segment.record
+          : segment;
+        normalized.push({
+          type: 'questionnaire',
+          record: normalizeQuestionnaireRecord(source),
+        });
+        return;
+      }
       if (segment.type === 'tool_usage' ||
           segment.tool_name !== undefined ||
           segment.tool_call_id !== undefined) {
@@ -1325,6 +1440,38 @@ function normalizeAssistantTrace(trace, fallbackContent = '') {
     normalized.push({ type: 'text', content: fallbackContent, live: false });
   }
   return normalized;
+}
+
+function normalizeQuestionnaireRecord(content) {
+  let record = content;
+  if (typeof record === 'string') {
+    try {
+      const parsed = JSON.parse(record);
+      if (parsed && typeof parsed === 'object') record = parsed;
+    } catch (_) {
+      record = { question: record };
+    }
+  }
+  record = record || {};
+  return {
+    toolCallId: record.tool_call_id || record.toolCallId || '',
+    chatId: record.chat_id || record.chatId || state.selectedChatId || '',
+    question: record.question || '',
+    options: Array.isArray(record.options) ? record.options : [],
+    allowMultiple: !!(record.allow_multiple || record.allowMultiple),
+    selectedIndices: Array.isArray(record.selected_indices)
+      ? record.selected_indices
+      : (Array.isArray(record.selectedIndices) ? record.selectedIndices : []),
+    selectedLabels: Array.isArray(record.selected_labels)
+      ? record.selected_labels
+      : (Array.isArray(record.selectedLabels) ? record.selectedLabels : []),
+    submitted: !!record.submitted || record.status === 'done',
+    status: record.status === 'done' ? 'done'
+      : record.status === 'error' ? 'error'
+      : 'live',
+    startedAt: record.started_at || record.startedAt || record.created_at || record.createdAt || '',
+    updatedAt: record.updated_at || record.updatedAt || '',
+  };
 }
 
 function formatMessageTimestamp(value) {
@@ -1407,6 +1554,14 @@ function formatToolUsageSummary(record) {
   return 'Used ' + record.toolName + suffix;
 }
 
+function formatToolLiveDescription(record) {
+  if (record.status !== 'live') return '';
+  if (record.arguments) {
+    return 'Tool is running with the captured arguments. Waiting for the result...';
+  }
+  return 'Tool is running. Waiting for arguments or result...';
+}
+
 function createToolUsageBlock(content) {
   let record = normalizeToolUsageRecord(content);
 
@@ -1420,6 +1575,9 @@ function createToolUsageBlock(content) {
   text.className = 'tool-usage-summary-text';
   summary.appendChild(icon);
   summary.appendChild(text);
+
+  const liveDescription = document.createElement('div');
+  liveDescription.className = 'tool-usage-live-description';
 
   const body = document.createElement('div');
   body.className = 'tool-usage-content';
@@ -1447,6 +1605,7 @@ function createToolUsageBlock(content) {
   body.appendChild(argsWrap);
   body.appendChild(resultWrap);
   details.appendChild(summary);
+  details.appendChild(liveDescription);
   details.appendChild(body);
 
   function render(nextRecord) {
@@ -1456,6 +1615,9 @@ function createToolUsageBlock(content) {
     icon.textContent = record.status === 'done' ? '\u2713'
       : record.status === 'error' ? '!' : '';
     text.textContent = formatToolUsageSummary(record);
+    const liveText = formatToolLiveDescription(record);
+    liveDescription.textContent = liveText;
+    liveDescription.hidden = !liveText;
     argsPre.textContent = record.arguments || 'No arguments provided.';
     resultPre.textContent = record.result || (record.status === 'live'
       ? 'Waiting for tool result...'
@@ -1490,13 +1652,17 @@ function renderAssistantTraceBubble(bubble, trace, options = {}) {
     if (segment.type === 'tool_usage') {
       const block = createToolUsageBlock(segment.record);
       wrap.appendChild(block.element);
+    } else if (segment.type === 'questionnaire') {
+      wrap.appendChild(createQuestionnaireBlock(segment.record, options));
     } else {
       wrap.innerHTML = renderMarkdown(segment.content || '', {
         streaming: !!(options.streaming && segment.live),
+        thinkingOpen: !!options.thinkingOpen,
       });
       postProcessMessageBubble(wrap, {
         renderDiagrams: !(options.streaming && segment.live),
       });
+      wireThinkingBlocks(wrap, options);
       if (options.streaming && segment.live) {
         lastLiveText = wrap;
       }
@@ -1555,6 +1721,147 @@ function createToolUsageRow(content) {
       return block.snapshot();
     },
   };
+}
+
+function createQuestionnaireBlock(content, options = {}) {
+  const record = normalizeQuestionnaireRecord(content);
+  if (!record.chatId && options.questionnaireChatId) {
+    record.chatId = options.questionnaireChatId;
+  }
+  const box = document.createElement('div');
+  box.className = 'questionnaire-inline';
+
+  const question = document.createElement('div');
+  question.className = 'automation-question';
+  question.textContent = record.question || 'The agent needs input.';
+  box.appendChild(question);
+
+  const selected = new Set(record.selectedIndices || []);
+  let submitted = !!record.submitted || record.status !== 'live';
+
+  const buttons = document.createElement('div');
+  buttons.className = 'automation-question-options';
+  const optionButtons = [];
+
+  const errorEl = document.createElement('div');
+  errorEl.className = 'automation-status-error';
+  errorEl.hidden = true;
+
+  const status = document.createElement('div');
+  status.className = 'questionnaire-inline-status';
+  const selectedSummary = record.selectedLabels.length
+    ? record.selectedLabels.join(', ')
+    : (record.selectedIndices || [])
+        .map(idx => record.options[idx])
+        .filter(Boolean)
+        .join(', ');
+  status.textContent = submitted
+    ? ('Answer submitted' + (selectedSummary ? ': ' + selectedSummary : '') + '.')
+    : '';
+
+  let confirmBtn = null;
+
+  function setError(message) {
+    errorEl.textContent = message || '';
+    errorEl.hidden = !message;
+  }
+
+  function setDisabled(disabled) {
+    optionButtons.forEach(btn => { btn.disabled = disabled; });
+    if (confirmBtn) confirmBtn.disabled = disabled || selected.size === 0;
+  }
+
+  function updateButtons() {
+    optionButtons.forEach((btn, idx) => {
+      btn.classList.toggle('selected', selected.has(idx));
+    });
+    if (confirmBtn) {
+      confirmBtn.disabled = submitted || selected.size === 0;
+    }
+  }
+
+  async function submit(indices) {
+    if (submitted) return;
+    submitted = true;
+    setError('');
+    setDisabled(true);
+    try {
+      const submitter = options.onQuestionnaireSubmit || defaultQuestionnaireSubmit;
+      await submitter(Object.assign({}, record, {
+        selectedIndices: indices,
+      }), indices);
+      selected.clear();
+      indices.forEach(idx => selected.add(idx));
+      updateButtons();
+      const submittedLabels = indices
+        .map(idx => record.options[idx])
+        .filter(Boolean)
+        .join(', ');
+      status.textContent = 'Answer submitted' + (submittedLabels ? ': ' + submittedLabels : '') + '.';
+      if (confirmBtn) confirmBtn.textContent = 'Submitted';
+    } catch (err) {
+      submitted = false;
+      setDisabled(false);
+      setError(err && err.message ? err.message : 'Could not submit answer.');
+    }
+  }
+
+  (record.options || []).forEach((label, idx) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'automation-question-option';
+    btn.textContent = label;
+    btn.disabled = submitted;
+    btn.addEventListener('click', async () => {
+      if (record.allowMultiple) {
+        if (selected.has(idx)) selected.delete(idx);
+        else selected.add(idx);
+        updateButtons();
+      } else {
+        selected.clear();
+        selected.add(idx);
+        updateButtons();
+        await submit([idx]);
+      }
+    });
+    optionButtons.push(btn);
+    buttons.appendChild(btn);
+  });
+
+  if (record.allowMultiple) {
+    confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'automation-question-confirm';
+    confirmBtn.textContent = submitted ? 'Submitted' : 'Confirm';
+    confirmBtn.disabled = submitted || selected.size === 0;
+    confirmBtn.addEventListener('click', async () => {
+      await submit(Array.from(selected).sort((a, b) => a - b));
+    });
+  }
+
+  updateButtons();
+  box.appendChild(buttons);
+  if (confirmBtn) box.appendChild(confirmBtn);
+  box.appendChild(status);
+  box.appendChild(errorEl);
+  return box;
+}
+
+async function defaultQuestionnaireSubmit(record, indices) {
+  const chatId = record.chatId || state.selectedChatId;
+  const toolCallId = record.toolCallId || '';
+  if (!chatId || !toolCallId) {
+    throw new Error('Questionnaire target is missing.');
+  }
+  const resp = await api('POST', '/api/questionnaire-response', {
+    chat_id: chatId,
+    tool_call_id: toolCallId,
+    selected_indices: indices,
+  });
+  if (!resp || !resp.ok) {
+    const data = resp ? await resp.json().catch(() => ({})) : {};
+    throw new Error(data.error || 'Could not submit answer.');
+  }
 }
 
 
@@ -1694,6 +2001,7 @@ function buildMessageRow(role, content, modeName, createdAt = '') {
   if (role === 'file') return buildFileUploadRow(content);
   if (role === 'context') return buildContextUsageRow(content);
   if (role === 'compression') return buildCompressionRow(content);
+  if (role === 'history_notice') return buildHistoryNoticeRow(content);
   if (role === 'tool_usage') return createToolUsageRow(content).row;
   if (role === 'web_debug') return buildWebDebugRow(content);
 
@@ -1738,7 +2046,7 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
   row.appendChild(lbl);
   row.appendChild(bubble);
   messagesEl.appendChild(row);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollMessagesToBottom(true);
 
   let trace = normalizeAssistantTrace(initialTrace);
 
@@ -1748,10 +2056,13 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
     }
   }
 
-  function render(streaming) {
+  function render(streaming, renderOptions = {}) {
     ensureAttached();
-    renderAssistantTraceBubble(bubble, trace, { streaming });
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    renderAssistantTraceBubble(bubble, trace, Object.assign({
+      streaming,
+      questionnaireChatId: state.selectedChatId,
+    }, renderOptions));
+    scrollMessagesToBottomIfPinned();
   }
 
   function appendTextDelta(delta) {
@@ -1773,7 +2084,7 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
     let index = -1;
     if (next.toolCallId) {
       index = trace.findIndex(segment =>
-        segment.type === 'tool_usage' &&
+        (segment.type === 'tool_usage' || segment.type === 'questionnaire') &&
         segment.record.toolCallId === next.toolCallId);
     }
     if (index < 0) {
@@ -1783,11 +2094,65 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
       }
       trace.push({ type: 'tool_usage', record: next });
     } else {
+      if (trace[index].type === 'questionnaire') {
+        const previous = trace[index].record || {};
+        const questionnaire = Object.assign({}, previous, {
+          status: next.status === 'error' ? 'error' : (next.status === 'live' ? 'live' : 'done'),
+          submitted: next.status !== 'live',
+          startedAt: next.startedAt || previous.startedAt || now,
+          updatedAt: next.updatedAt || previous.updatedAt || now,
+        });
+        if (next.result) {
+          try {
+            const parsed = JSON.parse(next.result);
+            if (parsed && typeof parsed === 'object') {
+              if (Array.isArray(parsed.selected_indices)) questionnaire.selectedIndices = parsed.selected_indices;
+              if (Array.isArray(parsed.selectedLabels)) questionnaire.selectedLabels = parsed.selectedLabels;
+              if (Array.isArray(parsed.selected_labels)) questionnaire.selectedLabels = parsed.selected_labels;
+            }
+          } catch (_) {}
+        }
+        trace[index] = {
+          type: 'questionnaire',
+          record: questionnaire,
+        };
+        render(true);
+        return;
+      }
       const previous = trace[index].record || {};
-      trace[index].record = Object.assign({}, previous, next, {
-        startedAt: next.startedAt || previous.startedAt || now,
-        updatedAt: next.updatedAt || previous.updatedAt || now,
-      });
+      trace[index] = {
+        type: 'tool_usage',
+        record: Object.assign({}, previous, next, {
+          startedAt: next.startedAt || previous.startedAt || now,
+          updatedAt: next.updatedAt || previous.updatedAt || now,
+        }),
+      };
+    }
+    render(true);
+  }
+
+  function upsertQuestionnaire(record) {
+    const next = normalizeQuestionnaireRecord(record);
+    const now = new Date().toISOString();
+    next.startedAt = next.startedAt || now;
+    next.updatedAt = next.updatedAt || now;
+    let index = -1;
+    if (next.toolCallId) {
+      index = trace.findIndex(segment =>
+        (segment.type === 'questionnaire' || segment.type === 'tool_usage') &&
+        segment.record.toolCallId === next.toolCallId);
+    }
+    if (index < 0) {
+      const last = trace[trace.length - 1];
+      if (last && last.type === 'text') {
+        last.live = false;
+      }
+      trace.push({ type: 'questionnaire', record: next });
+    } else {
+      trace[index] = {
+        type: 'questionnaire',
+        record: Object.assign({}, trace[index].record || {}, next),
+      };
     }
     render(true);
   }
@@ -1804,9 +2169,12 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
       if (record.status === 'live') {
         record.status = 'done';
       }
-      return { type: 'tool_usage', record };
+      return { type: segment.type === 'questionnaire' ? 'questionnaire' : 'tool_usage', record };
     });
-    render(false);
+    render(false, {
+      thinkingOpen: true,
+      collapseThinkingAfterMs: THINKING_COLLAPSE_DELAY_MS,
+    });
     return {
       text: trace
         .filter(segment => segment.type === 'text')
@@ -1815,13 +2183,14 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
       ui_trace: trace.map(segment =>
         segment.type === 'text'
           ? { type: 'text', content: segment.content || '' }
-          : Object.assign({ type: 'tool_usage' }, segment.record)),
+          : Object.assign({ type: segment.type }, segment.record)),
     };
   }
 
   function hasContent() {
     return trace.some(segment =>
       segment.type === 'tool_usage' ||
+      segment.type === 'questionnaire' ||
       (segment.type === 'text' && (segment.content || '').trim()));
   }
 
@@ -1830,7 +2199,7 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
   }
 
   render(true);
-  return { row, bubble, appendTextDelta, upsertTool, finalize, hasContent, remove };
+  return { row, bubble, appendTextDelta, upsertTool, upsertQuestionnaire, finalize, hasContent, remove };
 }
 
 // ── SSE stream reader ─────────────────────────────────────────────────────
@@ -2399,7 +2768,7 @@ async function selectChat(projectId, chatId, chatName) {
   newChatBtn.disabled   = false;
   if (attachBtn) attachBtn.disabled = selectedStreamActive;
   await Promise.all([
-    loadMessages(projectId, chatId),
+    loadMessages(projectId, chatId, { forceScrollBottom: true }),
     loadProjectAgenticModes(projectId),
     loadPlanner(projectId, chatId),
   ]);
@@ -2556,10 +2925,22 @@ async function cancelActiveAgent() {
 }
 
 function setWebDebuggingActive(active) {
-  state.webDebuggingActive = !!(active && state.projectEnableWebDebugging);
-  renderMessages(state.messages);
+  const next = !!(active && state.projectEnableWebDebugging);
+  const changed = state.webDebuggingActive !== next;
+  state.webDebuggingActive = next;
   renderDebugButton();
   renderCancelAgentButton();
+  if (changed && state.selectedProjectId && state.selectedChatId) {
+    loadMessages(state.selectedProjectId, state.selectedChatId, {
+      forceScrollBottom: false,
+      debug: next,
+    }).catch(err => {
+      console.warn('Failed to reload messages for debug toggle', err);
+      renderMessages(state.messages);
+    });
+  } else {
+    renderMessages(state.messages);
+  }
 }
 
 
@@ -2591,7 +2972,7 @@ function insertWebDebugMessage(record) {
   } else {
     messagesEl.appendChild(row);
   }
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollMessagesToBottomIfPinned();
 }
 
 function renderAgenticModeLabel() {
@@ -2722,14 +3103,14 @@ if (compressBtn) {
 
     const status = createCompressionRow({ text: 'Compressing context...', status: 'live' });
     messagesEl.appendChild(status.row);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    scrollMessagesToBottomIfPinned();
 
     try {
       const resp = await api('POST', `/api/chats/${state.selectedChatId}/compress`);
       if (resp && resp.ok) {
         const data = await resp.json();
         status.finalize(data.message || 'Context compressed.');
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        scrollMessagesToBottomIfPinned();
         // Reload messages so the newly persisted compression record appears
         await loadMessages(state.selectedProjectId, state.selectedChatId);
       } else {
@@ -2769,12 +3150,13 @@ if (cancelAgentBtn) {
   cancelAgentBtn.addEventListener('click', cancelActiveAgent);
 }
 
-async function loadMessages(projectId, chatId) {
-  const resp = await api('GET', `/api/chats/${chatId}/messages`);
+async function loadMessages(projectId, chatId, options = {}) {
+  const debug = options.debug !== undefined ? !!options.debug : isWebDebuggingEnabled();
+  const resp = await api('GET', `/api/chats/${chatId}/messages${debug ? '?debug=1' : ''}`);
   if (!resp) return;
   if (resp.ok) {
     state.messages = await resp.json();
-    renderMessages(state.messages);
+    renderMessages(state.messages, options);
   }
 }
 
@@ -3022,7 +3404,7 @@ async function sendMessage() {
       resizeTextarea();
       setInputEnabled(true);
       messagesEl.appendChild(buildMessageRow('error', 'Upload failed: ' + e.message));
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      scrollMessagesToBottom(true);
     }
     return;
   }
@@ -3032,7 +3414,7 @@ async function sendMessage() {
       state.sending = false;
       setInputEnabled(true);
       messageInput.focus();
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      scrollMessagesToBottom(true);
     }
     return;
   }
@@ -3048,11 +3430,11 @@ async function sendMessage() {
 
   // Show user message immediately
   state.messages.push({ role: 'user', content: displayContent, created_at: userCreatedAt });
-  renderMessages(state.messages);
+  renderMessages(state.messages, { forceScrollBottom: true });
 
   const pendingContextRow = buildContextUsageRow('', true);
   messagesEl.appendChild(pendingContextRow);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollMessagesToBottom(true);
 
   const assistantTurn = createAssistantTurnRow([], assistantModeName, assistantCreatedAt);
 
@@ -3146,7 +3528,7 @@ async function sendMessage() {
           queueStatus.row.remove();
           queueStatus = null;
         }
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        scrollMessagesToBottomIfPinned();
       } else if (ev.activity_status !== undefined) {
         const record = {
           code: ev.activity_status,
@@ -3159,105 +3541,19 @@ async function sendMessage() {
         } else {
           activityStatus.update(record);
         }
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        scrollMessagesToBottomIfPinned();
       } else if (ev.questionnaire) {
-        const qRow = document.createElement('div');
-        qRow.className = 'message-row model';
-        const lbl = document.createElement('div');
-        lbl.className = 'message-role-label';
-        lbl.textContent = 'Question';
-        const bubble = document.createElement('div');
-        bubble.className = 'message-bubble questionnaire-bubble';
-        bubble.style.cssText = 'padding:12px 16px;border-radius:var(--radius-message);background:var(--color-bg-message-model);border:1px solid var(--color-border-main);';
-        const qText = document.createElement('div');
-        qText.style.cssText = 'margin-bottom:10px;font-weight:600;';
-        qText.textContent = ev.question || '';
-        bubble.appendChild(qText);
-        const btnWrap = document.createElement('div');
-        btnWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
-        const allowMultiple = !!ev.allow_multiple;
-        const selected = new Set();
-        const toolCallId = ev.tool_call_id || '';
-        const questionChatId = state.selectedChatId || '';
-        let confirmBtn = null;
-        let submitted = false;
-        const errorEl = document.createElement('div');
-        errorEl.style.cssText = 'display:none;margin-top:8px;color:var(--color-accent-danger);font-size:var(--font-size-small);';
-        function setQuestionError(message) {
-          errorEl.textContent = message || '';
-          errorEl.style.display = message ? '' : 'none';
-        }
-        function setQuestionButtonsDisabled(disabled) {
-          btnWrap.querySelectorAll('button.q-opt').forEach(btn => { btn.disabled = disabled; });
-          if (confirmBtn) confirmBtn.disabled = disabled;
-        }
-        async function submitQuestionnaireResponse(indices) {
-          if (submitted) return;
-          setQuestionError('');
-          setQuestionButtonsDisabled(true);
-          try {
-            const resp = await api('POST', '/api/questionnaire-response', {
-              chat_id: questionChatId,
-              tool_call_id: toolCallId,
-              selected_indices: indices,
-            });
-            if (!resp || !resp.ok) {
-              const data = resp ? await resp.json().catch(() => ({})) : {};
-              throw new Error(data.error || 'Could not submit the answer.');
-            }
-            submitted = true;
-            if (confirmBtn) confirmBtn.textContent = 'Sent';
-          } catch (e) {
-            setQuestionButtonsDisabled(false);
-            setQuestionError(e && e.message ? e.message : 'Could not submit the answer.');
-          }
-        }
-        function updateButtons() {
-          btnWrap.querySelectorAll('button.q-opt').forEach((btn, idx) => {
-            const isSelected = selected.has(idx);
-            btn.style.background = isSelected ? 'var(--color-accent-primary)' : 'var(--color-bg-input)';
-            btn.style.color = isSelected ? '#fff' : 'var(--color-text-primary)';
-          });
-          if (confirmBtn) {
-            confirmBtn.style.display = selected.size ? '' : 'none';
-          }
-        }
-        (ev.options || []).forEach((opt, idx) => {
-          const btn = document.createElement('button');
-          btn.className = 'q-opt';
-          btn.style.cssText = 'padding:6px 12px;border:1px solid var(--color-border-input);border-radius:var(--radius-button);cursor:pointer;font-size:var(--font-size-small);background:var(--color-bg-input);color:var(--color-text-primary);';
-          btn.textContent = opt;
-          btn.addEventListener('click', async () => {
-            if (allowMultiple) {
-              if (selected.has(idx)) selected.delete(idx);
-              else selected.add(idx);
-              updateButtons();
-            } else {
-              selected.clear();
-              selected.add(idx);
-              updateButtons();
-              await submitQuestionnaireResponse([idx]);
-            }
-          });
-          btnWrap.appendChild(btn);
+        assistantTurn.upsertQuestionnaire({
+          type: 'questionnaire',
+          tool_call_id: ev.tool_call_id || '',
+          chat_id: sendChatId,
+          question: ev.question || '',
+          options: ev.options || [],
+          allow_multiple: !!ev.allow_multiple,
+          status: 'live',
+          started_at: ev.started_at || new Date().toISOString(),
+          updated_at: ev.updated_at || new Date().toISOString(),
         });
-        bubble.appendChild(btnWrap);
-        if (allowMultiple) {
-          confirmBtn = document.createElement('button');
-          confirmBtn.style.cssText = 'margin-top:10px;padding:6px 14px;border:1px solid var(--color-border-input);border-radius:var(--radius-button);cursor:pointer;font-size:var(--font-size-small);background:var(--color-accent-primary);color:#fff;';
-          confirmBtn.textContent = 'Confirm';
-          confirmBtn.style.display = 'none';
-          confirmBtn.addEventListener('click', async () => {
-            const indices = Array.from(selected).sort((a, b) => a - b);
-            await submitQuestionnaireResponse(indices);
-          });
-          bubble.appendChild(confirmBtn);
-        }
-        bubble.appendChild(errorEl);
-        qRow.appendChild(lbl);
-        qRow.appendChild(bubble);
-        messagesEl.appendChild(qRow);
-        messagesEl.scrollTop = messagesEl.scrollHeight;
       } else if (ev.tool_event !== undefined || ev.tool_name !== undefined) {
         const record = {
           tool_call_id: ev.tool_call_id || '',
@@ -3272,7 +3568,7 @@ async function sendMessage() {
         if (record.tool_name === 'project_planner' && record.status !== 'live') {
           schedulePlannerRefresh(100);
         }
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        scrollMessagesToBottomIfPinned();
       } else if (ev.compression_status !== undefined) {
         const isDone = ev.compression_status === 'compression_done';
         const message = ev.compression_message || (isDone
@@ -3297,7 +3593,7 @@ async function sendMessage() {
           });
           compressionRecorded = true;
         }
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        scrollMessagesToBottomIfPinned();
       } else if (ev.ctx_used !== undefined) {
         contextUsageText = formatContextUsageText(ev.ctx_used, ev.ctx_total);
         pendingContextRow.classList.remove('is-pending');
@@ -3307,7 +3603,7 @@ async function sendMessage() {
           state.messages.push({ role: 'context', content: contextUsageText, created_at: '' });
           contextRecorded = true;
         }
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        scrollMessagesToBottomIfPinned();
       } else if (ev.cancelled) {
         cancelledByServer = true;
       } else if (ev.done) {
@@ -3432,7 +3728,7 @@ async function sendMessage() {
         await loadMessages(sendProjectId, sendChatId);
       }
       messageInput.focus();
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      scrollMessagesToBottomIfPinned();
     } else {
       refreshSelectedChatSendingState();
     }
@@ -3667,8 +3963,7 @@ function automationStatusText(job) {
   const progress = job.total_runs
     ? ' - ' + job.completed_runs + '/' + job.total_runs + ' run(s)'
     : '';
-  const base = job.message || job.activity_message || job.status || 'Automation running.';
-  return (current ? current + repeat + progress + ': ' : '') + base;
+  return current ? current + repeat + progress : (job.status || 'Automation running.');
 }
 
 function formatAutomationTimestamp(value) {
@@ -3715,6 +4010,23 @@ function renderAutomationJobStatusInto(statusEl, job, active) {
   text.textContent = automationStatusText(job);
   statusEl.appendChild(text);
 
+  if (active) {
+    const heartbeatTime = formatAutomationTimestamp(job.heartbeat_at || job.updated_at);
+    const heartbeat = document.createElement('div');
+    heartbeat.className = 'automation-status-detail automation-heartbeat';
+    heartbeat.textContent = 'Server active - automation worker active' +
+      (heartbeatTime ? ' - ' + heartbeatTime : '');
+    statusEl.appendChild(heartbeat);
+  }
+
+  const currentStatus = job.activity_message || job.message || '';
+  if (currentStatus) {
+    const detail = document.createElement('div');
+    detail.className = 'automation-status-detail';
+    detail.textContent = 'Status: ' + currentStatus;
+    statusEl.appendChild(detail);
+  }
+
   if (job.error) {
     const error = document.createElement('div');
     error.className = 'automation-status-error';
@@ -3728,16 +4040,6 @@ function renderAutomationJobStatusInto(statusEl, job, active) {
     queue.textContent = 'Provider queue position ' + (job.queue_position || '?') +
       ' of ' + (job.queue_depth || '?');
     statusEl.appendChild(queue);
-  }
-
-  if (active) {
-    const heartbeatTime = formatAutomationTimestamp(job.heartbeat_at || job.updated_at);
-    const heartbeat = document.createElement('div');
-    heartbeat.className = 'automation-status-detail automation-heartbeat';
-    heartbeat.textContent = 'Server active' +
-      (job.heartbeat_message ? ': ' + job.heartbeat_message : '') +
-      (heartbeatTime ? ' - ' + heartbeatTime : '');
-    statusEl.appendChild(heartbeat);
   }
 
   if (active && job.current_tool_name) {
@@ -3819,6 +4121,9 @@ function clearAutomationLiveResponse() {
 }
 
 function automationLiveTrace(job) {
+  if (Array.isArray(job && job.live_trace) && job.live_trace.length) {
+    return normalizeAssistantTrace(job.live_trace, job.live_response || '');
+  }
   const trace = [];
   const tools = Array.isArray(job && job.live_tool_trace)
     ? job.live_tool_trace
@@ -3840,12 +4145,16 @@ function automationLiveTrace(job) {
 }
 
 function renderAutomationLiveResponse(job = selectedAutomationJob()) {
+  const previousTop = messagesEl ? messagesEl.scrollTop : 0;
+  const shouldFollow = state.followChatTail && isMessagesNearBottom();
   clearAutomationLiveResponse();
   const trace = automationLiveTrace(job);
   if (!job ||
       !automationJobIsActive(job) ||
       job.chat_id !== state.selectedChatId ||
       !trace.length) {
+    if (shouldFollow) scrollMessagesToBottom(true);
+    else restoreMessagesScroll(previousTop);
     return;
   }
 
@@ -3865,13 +4174,15 @@ function renderAutomationLiveResponse(job = selectedAutomationJob()) {
   renderAssistantTraceBubble(bubble, trace, {
     streaming: true,
     fallbackContent: job.live_response || '',
+    questionnaireChatId: job.chat_id || state.selectedChatId,
   });
 
   row.appendChild(lbl);
   row.appendChild(bubble);
   row.classList.add('automation-live-response');
   messagesEl.appendChild(row);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  if (shouldFollow) scrollMessagesToBottom(true);
+  else restoreMessagesScroll(previousTop);
 }
 
 async function refreshAutomationStatusForChat(chatId, options = {}) {

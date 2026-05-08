@@ -7,6 +7,8 @@
 
 
 
+
+
 /* global api, escapeHtml, loadMessages, messageInput, messagesEl, postProcessMessageBubble, renderMarkdown, resizeTextarea, renderCancelAgentButton, schedulePlannerRefresh, state */
 
 if (automateBtn) {
@@ -435,6 +437,8 @@ async function runAutomationSequence() {
 if (automationAddStepBtn) { automationAddStepBtn.addEventListener('click', addOrUpdateAutomationStep); }
 if (automationClearBtn)  { automationClearBtn.addEventListener('click', clearAutomationSequence); }
 if (automationSendBtn)   { automationSendBtn.addEventListener('click', runAutomationSequence); }
+
+
 
 
 

@@ -44,6 +44,7 @@ struct ProjectSettingsOptions {
     std::string built_in_planner_storage_folder = "$ProjectFolder$\\.agent";
     bool built_in_completion_driver_enabled = false;
     std::vector<std::string> completion_driver_allowed_mode_ids;
+    int completion_driver_max_continuations = 0;      // 0 = unlimited, otherwise max host continuations per run/automation step
     bool built_in_questionnaire_enabled = false;
     int questionnaire_max_options = 8;
     bool questionnaire_restrict_by_mode = false;
@@ -79,6 +80,7 @@ struct ProjectSettingsResult {
     std::string built_in_planner_storage_folder = "$ProjectFolder$\\.agent";
     bool built_in_completion_driver_enabled = false;
     std::vector<std::string> completion_driver_allowed_mode_ids;
+    int completion_driver_max_continuations = 0;      // 0 = unlimited, otherwise max host continuations per run/automation step
     bool built_in_questionnaire_enabled = false;
     int questionnaire_max_options = 8;
     bool questionnaire_restrict_by_mode = false;

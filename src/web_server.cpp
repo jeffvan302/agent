@@ -2542,6 +2542,9 @@ void WebServer::HandleGetProjectAgenticModes(const void* req_ptr, void* res_ptr)
         {"allow_manual_context_compression", proj_settings.allow_manual_context_compression},
         {"enable_web_debugging", proj_settings.enable_web_debugging},
         {"enable_automation", proj_settings.enable_automation},
+        {"built_in_completion_driver_enabled", proj_settings.built_in_completion_driver_enabled},
+        {"completion_driver_allowed_mode_ids", proj_settings.completion_driver_allowed_mode_ids},
+        {"completion_driver_max_continuations", proj_settings.completion_driver_max_continuations},
     };
     SendJson(res_ptr, 200, resp.dump());
 }
@@ -2917,8 +2920,40 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
     const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
     if (!project_id) return;
 
-    const auto messages = storage_->LoadMessages(*project_id, chat_id);
+    const auto project_settings = storage_->LoadProjectSettings(*project_id);
+    bool debug_requested = false;
+    if (req->has_param("debug")) {
+        const std::string value = LowerAscii(Trim(req->get_param_value("debug")));
+        debug_requested = value == "1" || value == "true" || value == "yes" || value == "on";
+    }
+    const bool full_debug_payload = debug_requested && project_settings.enable_web_debugging;
+
+    const auto stored_messages = storage_->LoadMessages(*project_id, chat_id);
+    size_t first_message_index = 0;
+    if (!full_debug_payload) {
+        for (size_t i = stored_messages.size(); i > 0; --i) {
+            if (stored_messages[i - 1].role == "compression") {
+                first_message_index = i - 1;
+                break;
+            }
+        }
+    }
+
     json arr = json::array();
+    if (!full_debug_payload && first_message_index > 0) {
+        json notice = {
+            {"role", "history_notice"},
+            {"created_at", stored_messages[first_message_index].created_at},
+            {"content", json{
+                {"message", "Earlier chat history is hidden because debugging is off."},
+                {"hidden_records", first_message_index},
+                {"from", "last_context_compression"},
+                {"debug_hint", "Enable debugging to load the full chat log."},
+            }.dump()},
+        };
+        arr.push_back(std::move(notice));
+    }
+
     json pending_ui_trace = json::array();
     std::unordered_map<std::string, size_t> tool_trace_indices;
     std::string pending_created_at;
@@ -2965,15 +3000,52 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
                         }
                     }
                 }
-                pending_ui_trace.push_back({
-                    {"type", "tool_usage"},
-                    {"tool_call_id", tool_call_id},
-                    {"tool_name", tool_name},
-                    {"arguments", arguments_json},
-                    {"status", "done"},
-                    {"started_at", created_at},
-                    {"updated_at", created_at},
-                });
+                json segment;
+                // Preserve questionnaires as first-class UI trace records so
+                // answered prompts remain inline when the chat is reloaded.
+                if (tool_name == built_in_tools::kQuestionnaireToolName) {
+                    std::string question;
+                    std::vector<std::string> options;
+                    bool allow_multiple = false;
+                    if (!arguments_json.empty()) {
+                        try {
+                            const auto args = json::parse(arguments_json);
+                            if (args.is_object()) {
+                                question = args.value("question", "");
+                                if (args.contains("options") && args["options"].is_array()) {
+                                    for (const auto& option : args["options"]) {
+                                        if (option.is_string()) options.push_back(option.get<std::string>());
+                                    }
+                                }
+                                allow_multiple = args.value("allow_multiple", false);
+                            }
+                        } catch (...) {}
+                    }
+                    segment = {
+                        {"type", "questionnaire"},
+                        {"tool_call_id", tool_call_id},
+                        {"chat_id", chat_id},
+                        {"tool_name", tool_name},
+                        {"question", question},
+                        {"options", options},
+                        {"allow_multiple", allow_multiple},
+                        {"arguments", arguments_json},
+                        {"status", "live"},
+                        {"started_at", created_at},
+                        {"updated_at", created_at},
+                    };
+                } else {
+                    segment = {
+                        {"type", "tool_usage"},
+                        {"tool_call_id", tool_call_id},
+                        {"tool_name", tool_name},
+                        {"arguments", arguments_json},
+                        {"status", "done"},
+                        {"started_at", created_at},
+                        {"updated_at", created_at},
+                    };
+                }
+                pending_ui_trace.push_back(segment);
                 if (!tool_call_id.empty()) {
                     tool_trace_indices[tool_call_id] = pending_ui_trace.size() - 1;
                 }
@@ -2983,7 +3055,7 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
 
     auto append_pending_tool_result = [&](const MessageRecord& message) {
         json segment = {
-            {"type", "tool_usage"},
+            {"type", message.name == built_in_tools::kQuestionnaireToolName ? "questionnaire" : "tool_usage"},
             {"tool_call_id", message.tool_call_id},
             {"tool_name", message.name},
             {"result", message.content},
@@ -2997,6 +3069,27 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
             if (current.value("tool_name", "").empty() && !message.name.empty()) {
                 current["tool_name"] = message.name;
             }
+            if (current.value("type", "") == "questionnaire") {
+                current["result"] = message.content;
+                current["status"] = "done";
+                current["submitted"] = true;
+                if (current.value("started_at", "").empty()) {
+                    current["started_at"] = message.created_at;
+                }
+                current["updated_at"] = message.created_at;
+                try {
+                    const auto result = json::parse(message.content);
+                    if (result.is_object()) {
+                        if (result.contains("selected_indices") && result["selected_indices"].is_array()) {
+                            current["selected_indices"] = result["selected_indices"];
+                        }
+                        if (result.contains("selected_labels") && result["selected_labels"].is_array()) {
+                            current["selected_labels"] = result["selected_labels"];
+                        }
+                    }
+                } catch (...) {}
+                return;
+            }
             current["result"] = message.content;
             current["status"] = "done";
             if (current.value("started_at", "").empty()) {
@@ -3006,6 +3099,21 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
         } else {
             segment["started_at"] = message.created_at;
             segment["updated_at"] = message.created_at;
+            if (message.name == built_in_tools::kQuestionnaireToolName) {
+                segment["submitted"] = true;
+                try {
+                    const auto result = json::parse(message.content);
+                    if (result.is_object()) {
+                        segment["question"] = result.value("question", "");
+                        if (result.contains("selected_indices") && result["selected_indices"].is_array()) {
+                            segment["selected_indices"] = result["selected_indices"];
+                        }
+                        if (result.contains("selected_labels") && result["selected_labels"].is_array()) {
+                            segment["selected_labels"] = result["selected_labels"];
+                        }
+                    }
+                } catch (...) {}
+            }
             pending_ui_trace.push_back(segment);
             if (!message.tool_call_id.empty()) {
                 tool_trace_indices[message.tool_call_id] = pending_ui_trace.size() - 1;
@@ -3029,7 +3137,8 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
         pending_mode_name.clear();
     };
 
-    for (const auto& m : messages) {
+    for (size_t mi = first_message_index; mi < stored_messages.size(); ++mi) {
+        const auto& m = stored_messages[mi];
         if (m.role == "assistant" && !m.tool_calls_json.empty()) {
             ensure_pending_created_at(m.created_at);
             ensure_pending_mode_name(m.name);
@@ -3419,7 +3528,8 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
         built.sections.push_back({"Planner / Task Decomposition", planner_context});
     }
     if (built_in_tools::IsCompletionDriverEnabled(project_settings, mode_id)) {
-        const std::string driver_context = built_in_tools::CompletionDriverSystemPrompt();
+        const std::string driver_context = built_in_tools::CompletionDriverSystemPrompt(
+            built_in_tools::NormalizedCompletionDriverMaxContinuations(project_settings));
         AppendPromptSection(built.full_prompt, driver_context);
         built.sections.push_back({"Completion Driver", driver_context});
     }
@@ -3575,6 +3685,10 @@ json ProjectSettingsDebugJson(
         {"built_in_artifact_memory_enabled", settings.built_in_artifact_memory_enabled},
         {"built_in_planner_enabled", settings.built_in_planner_enabled},
         {"built_in_completion_driver_enabled", settings.built_in_completion_driver_enabled},
+        {"completion_driver_allowed_mode_ids", settings.completion_driver_allowed_mode_ids},
+        {"completion_driver_active_for_effective_mode",
+            built_in_tools::IsCompletionDriverEnabled(settings, effective_agentic_mode_id)},
+        {"completion_driver_max_continuations", settings.completion_driver_max_continuations},
         {"built_in_questionnaire_enabled", settings.built_in_questionnaire_enabled},
         {"built_in_filesystem_enabled", settings.built_in_filesystem_enabled},
         {"model_timeout_seconds", settings.model_timeout_seconds},
@@ -3820,11 +3934,13 @@ WebServer::CallModel(const std::string& project_id,
     if (!tool_definitions.empty()) {
         const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
             proj_settings, effective_agentic_mode_id);
+        const int completion_driver_max_continuations =
+            built_in_tools::NormalizedCompletionDriverMaxContinuations(proj_settings);
+        // This counter is intentionally scoped to one request. The automation
+        // runner starts a new streaming request per step, so each step gets a
+        // fresh continuation budget.
+        int completion_driver_continuations = 0;
         std::vector<MessageRecord> working_messages = opts.messages;
-        // Baseline snapshot before tool calls bloat context. Guard only triggers
-        // if the *pre-loop* assembled request is already close to threshold,
-        // not on natural in-loop assistant/tool-result growth.
-        const std::vector<MessageRecord> pre_tool_loop_messages = working_messages;
         bool completion_driver_done = !completion_driver_enabled;
         bool success = false;
 
@@ -3918,35 +4034,47 @@ WebServer::CallModel(const std::string& project_id,
                 working_messages.push_back(asst_msg);
                 result.assistant_text = completion.assistant_text;
             }
-      if (completion_driver_enabled && !completion_driver_done) {
-        working_messages.push_back(
-          built_in_tools::MakeCompletionDriverContinuationMessage(round + 1));
-        continue;
-      }
-      success = true;
-      break;
-    }
+            if (completion_driver_enabled && !completion_driver_done) {
+                if (completion_driver_max_continuations > 0 &&
+                    completion_driver_continuations >= completion_driver_max_continuations) {
+                    Logger::Warn("CompletionDriver",
+                        "continuation limit reached project=" + project_id +
+                        " chat=" + chat_id +
+                        " limit=" + std::to_string(completion_driver_max_continuations));
+                    success = true;
+                    break;
+                }
+                ++completion_driver_continuations;
+                working_messages.push_back(
+                    built_in_tools::MakeCompletionDriverContinuationMessage(
+                        completion_driver_continuations,
+                        completion_driver_max_continuations));
+                continue;
+            }
+            success = true;
+            break;
+        }
 
-    if (!success) {
-      ChatRequestOptions final_opts = opts;
-      final_opts.messages = working_messages;
-      if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
-      final_opts.system_prompt +=
-        "The tool loop stopped before a final assistant answer was produced. "
-        "Do not call or request any more tools. Use the tool results already "
-        "present in the conversation to write the final answer. If the requested "
-        "work succeeded, say so and summarize the important output. If it did "
-        "not fully succeed, explain the last observed state and what remains.";
+        if (!success) {
+            ChatRequestOptions final_opts = opts;
+            final_opts.messages = working_messages;
+            if (!final_opts.system_prompt.empty()) final_opts.system_prompt += "\n\n";
+            final_opts.system_prompt +=
+                "The tool loop stopped before a final assistant answer was produced. "
+                "Do not call or request any more tools. Use the tool results already "
+                "present in the conversation to write the final answer. If the requested "
+                "work succeeded, say so and summarize the important output. If it did "
+                "not fully succeed, explain the last observed state and what remains.";
 
-      const auto final_completion =
-        OpenAIClient::CreateSimpleCompletion(final_opts);
-      if (final_completion.success && !final_completion.assistant_text.empty()) {
-        MessageRecord asst_msg;
-        asst_msg.role       = "assistant";
-        asst_msg.content    = final_completion.assistant_text;
-        asst_msg.created_at = NowIso();
-        asst_msg.name       = resolved_mode_name;
-        messages.push_back(asst_msg);
+            const auto final_completion =
+                OpenAIClient::CreateSimpleCompletion(final_opts);
+            if (final_completion.success && !final_completion.assistant_text.empty()) {
+                MessageRecord asst_msg;
+                asst_msg.role       = "assistant";
+                asst_msg.content    = final_completion.assistant_text;
+                asst_msg.created_at = NowIso();
+                asst_msg.name       = resolved_mode_name;
+                messages.push_back(asst_msg);
                 storage_->SaveMessages(project_id, chat_id, messages);
                 NotifyContentChanged();
                 result.success = true;
@@ -4419,6 +4547,12 @@ std::string WebServer::StreamModel(const std::string& project_id,
     if (!tool_definitions.empty()) {
         const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
             proj_settings, effective_agentic_mode_id);
+        const int completion_driver_max_continuations =
+            built_in_tools::NormalizedCompletionDriverMaxContinuations(proj_settings);
+        // This counter is intentionally scoped to one request. The automation
+        // runner starts a new streaming request per step, so each step gets a
+        // fresh continuation budget.
+        int completion_driver_continuations = 0;
         std::vector<MessageRecord> working_messages = opts.messages;
         bool completion_driver_done = !completion_driver_enabled;
         std::string accumulated;
@@ -4671,11 +4805,43 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 NotifyContentChanged();
             }
             if (completion_driver_enabled && !completion_driver_done) {
+                if (completion_driver_max_continuations > 0 &&
+                    completion_driver_continuations >= completion_driver_max_continuations) {
+                    const std::string limit_message =
+                        "Completion Driver continuation limit reached; moving on without a completed command.";
+                    if (on_activity_status) {
+                        on_activity_status("completion_driver_limit", limit_message);
+                    }
+                    Logger::Warn("CompletionDriver",
+                        "continuation limit reached request_id=" + model_request_id +
+                        " project=" + project_id +
+                        " chat=" + chat_id +
+                        " limit=" + std::to_string(completion_driver_max_continuations));
+                    success = true;
+                    if (logging) {
+                        ChatRequestLogger::Log(project_id, logging,
+                            log_header + ChatRequestLogger::FormatSuccessResponse(
+                                completion.assistant_text.empty() ? limit_message : completion.assistant_text));
+                    }
+                    break;
+                }
+                ++completion_driver_continuations;
                 if (on_activity_status) {
-                    on_activity_status("completion_driver_continue", "Completion Driver is continuing the task...");
+                    std::string message = "Completion Driver is continuing the task";
+                    if (completion_driver_max_continuations > 0) {
+                        message += " (" +
+                            std::to_string(completion_driver_continuations) +
+                            " / " +
+                            std::to_string(completion_driver_max_continuations) +
+                            ")";
+                    }
+                    message += "...";
+                    on_activity_status("completion_driver_continue", message);
                 }
                 working_messages.push_back(
-                    built_in_tools::MakeCompletionDriverContinuationMessage(round + 1));
+                    built_in_tools::MakeCompletionDriverContinuationMessage(
+                        completion_driver_continuations,
+                        completion_driver_max_continuations));
                 accumulated.clear();
                 continue;
             }
@@ -5069,12 +5235,15 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
                     if (pipe->abort || cancel_token->cancelled.load()) return;
+                    const std::string timestamp = NowIso();
                     json ev = {
                         {"questionnaire", true},
                         {"tool_call_id", tool_call_id},
                         {"question", question},
                         {"options", options},
                         {"allow_multiple", allow_multiple},
+                        {"started_at", timestamp},
+                        {"updated_at", timestamp},
                     };
                     pipe->pending += encode_sse(ev.dump());
                 }
@@ -5236,6 +5405,57 @@ std::string WebServer::SerializeAutomationJob(
             {"updated_at", item.updated_at},
         });
     }
+    json live_trace = json::array();
+    for (const auto& segment : job->live_trace) {
+        if (segment.type == "text") {
+            live_trace.push_back({
+                {"type", "text"},
+                {"content", segment.content},
+                {"live", active},
+                {"started_at", segment.started_at},
+                {"updated_at", segment.updated_at},
+            });
+        } else if (segment.type == "questionnaire") {
+            json questionnaire = {
+                {"type", "questionnaire"},
+                {"tool_call_id", segment.tool.tool_call_id},
+                {"chat_id", job->chat_id},
+                {"question", segment.question},
+                {"options", segment.options},
+                {"allow_multiple", segment.allow_multiple},
+                {"status", segment.tool.status.empty() ? "live" : segment.tool.status},
+                {"started_at", segment.started_at.empty() ? segment.tool.started_at : segment.started_at},
+                {"updated_at", segment.updated_at.empty() ? segment.tool.updated_at : segment.updated_at},
+            };
+            if (!segment.tool.result_json.empty()) {
+                questionnaire["result"] = segment.tool.result_json;
+                questionnaire["submitted"] = segment.tool.status != "live";
+                try {
+                    const auto result = json::parse(segment.tool.result_json);
+                    if (result.is_object()) {
+                        if (result.contains("selected_indices") && result["selected_indices"].is_array()) {
+                            questionnaire["selected_indices"] = result["selected_indices"];
+                        }
+                        if (result.contains("selected_labels") && result["selected_labels"].is_array()) {
+                            questionnaire["selected_labels"] = result["selected_labels"];
+                        }
+                    }
+                } catch (...) {}
+            }
+            live_trace.push_back(std::move(questionnaire));
+        } else if (segment.type == "tool_usage") {
+            live_trace.push_back({
+                {"type", "tool_usage"},
+                {"tool_call_id", segment.tool.tool_call_id},
+                {"tool_name", segment.tool.tool_name},
+                {"arguments", segment.tool.arguments_json},
+                {"result", segment.tool.result_json},
+                {"status", segment.tool.status},
+                {"started_at", segment.tool.started_at},
+                {"updated_at", segment.tool.updated_at},
+            });
+        }
+    }
     json payload = {
         {"id", job->id},
         {"project_id", job->project_id},
@@ -5255,6 +5475,7 @@ std::string WebServer::SerializeAutomationJob(
         {"current_tool_status", job->current_tool_status},
         {"current_tool_at", job->current_tool_at},
         {"live_tool_trace", live_tool_trace},
+        {"live_trace", live_trace},
         {"heartbeat_at", job->heartbeat_at},
         {"heartbeat_message", job->heartbeat_message},
         {"queue_position", job->queue_position},
@@ -5503,6 +5724,7 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                     j.current_tool_status.clear();
                     j.current_tool_at.clear();
                     j.live_tool_trace.clear();
+                    j.live_trace.clear();
                     j.heartbeat_at = NowIso();
                     j.heartbeat_message = "Automation worker is active.";
                     ++j.heartbeat_revision;
@@ -5565,11 +5787,24 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                         job->chat_id,
                         step.prompt,
                         job->username,
-                        [&](const std::string& delta) -> bool {
+                    [&](const std::string& delta) -> bool {
                         if (cancelled()) return false;
                         const auto now = std::chrono::steady_clock::now();
                         update([&](AutomationJob& j) {
+                            const std::string timestamp = NowIso();
                             j.live_response += delta;
+                            if (!j.live_trace.empty() &&
+                                j.live_trace.back().type == "text") {
+                                j.live_trace.back().content += delta;
+                                j.live_trace.back().updated_at = timestamp;
+                            } else {
+                                AutomationLiveTraceSegment segment;
+                                segment.type = "text";
+                                segment.content = delta;
+                                segment.started_at = timestamp;
+                                segment.updated_at = timestamp;
+                                j.live_trace.push_back(std::move(segment));
+                            }
                             ++j.live_response_revision;
                             if (now - last_delta_update >= std::chrono::seconds(1)) {
                                 j.activity_status = "receiving_response";
@@ -5667,6 +5902,33 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                                 trace_it->started_at = timestamp;
                             }
                             trace_it->updated_at = timestamp;
+                            auto live_it = std::find_if(
+                                j.live_trace.begin(),
+                                j.live_trace.end(),
+                                [&](const AutomationLiveTraceSegment& segment) {
+                                    if (segment.type != "tool_usage" &&
+                                        segment.type != "questionnaire") {
+                                        return false;
+                                    }
+                                    if (!tool_call_id.empty()) {
+                                        return segment.tool.tool_call_id == tool_call_id;
+                                    }
+                                    return segment.tool.tool_name == tool_name &&
+                                           segment.tool.status == "live";
+                                });
+                            if (live_it == j.live_trace.end()) {
+                                AutomationLiveTraceSegment segment;
+                                segment.type = "tool_usage";
+                                segment.started_at = timestamp;
+                                j.live_trace.push_back(std::move(segment));
+                                live_it = j.live_trace.end();
+                                --live_it;
+                            }
+                            live_it->tool = *trace_it;
+                            if (live_it->started_at.empty()) {
+                                live_it->started_at = trace_it->started_at;
+                            }
+                            live_it->updated_at = timestamp;
                             ++j.live_response_revision;
                             if (tool_name == built_in_tools::kPlannerToolName) {
                                 ++j.planner_revision;
@@ -5688,11 +5950,39 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                         const std::vector<std::string>& options,
                         bool allow_multiple) {
                         update([&](AutomationJob& j) {
+                            const std::string timestamp = NowIso();
                             j.questionnaire_tool_call_id = tool_call_id;
                             j.questionnaire_question = question;
                             j.questionnaire_options = options;
                             j.questionnaire_allow_multiple = allow_multiple;
                             j.message = "Automation is waiting for questionnaire input.";
+                            auto live_it = std::find_if(
+                                j.live_trace.begin(),
+                                j.live_trace.end(),
+                                [&](const AutomationLiveTraceSegment& segment) {
+                                    return (segment.type == "tool_usage" ||
+                                            segment.type == "questionnaire") &&
+                                           segment.tool.tool_call_id == tool_call_id;
+                                });
+                            if (live_it == j.live_trace.end()) {
+                                AutomationLiveTraceSegment segment;
+                                segment.tool.tool_call_id = tool_call_id;
+                                segment.tool.tool_name = built_in_tools::kQuestionnaireToolName;
+                                segment.tool.status = "live";
+                                segment.tool.started_at = timestamp;
+                                j.live_trace.push_back(std::move(segment));
+                                live_it = j.live_trace.end();
+                                --live_it;
+                            }
+                            live_it->type = "questionnaire";
+                            live_it->question = question;
+                            live_it->options = options;
+                            live_it->allow_multiple = allow_multiple;
+                            if (live_it->started_at.empty()) {
+                                live_it->started_at = timestamp;
+                            }
+                            live_it->updated_at = timestamp;
+                            ++j.live_response_revision;
                         });
                     },
                         [&]() {

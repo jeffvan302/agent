@@ -731,3 +731,23 @@
 [2026-05-07T17:31:47Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
 [2026-05-07T21:04:26Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
 [2026-05-07T21:04:26Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
+[2026-05-07T21:39:26Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
+[2026-05-07T21:39:26Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
+[2026-05-08T03:00:36Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
+[2026-05-08T03:00:36Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
+[2026-05-08T03:02:42Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
+[2026-05-08T03:02:42Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
+[2026-05-08T03:06:38Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
+[2026-05-08T03:06:38Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
+[2026-05-08T03:17:37Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
+[2026-05-08T03:17:37Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
+[2026-05-08T03:31:16Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
+[2026-05-08T03:31:16Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
+[2026-05-08T04:14:07Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
+[2026-05-08T04:14:07Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
+[2026-05-08T04:55:10Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
+[2026-05-08T04:55:10Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
+[2026-05-08T05:27:02Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
+[2026-05-08T05:27:02Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
+[2026-05-08T05:41:08Z] Starting local Ollama vision endpoint http://localhost:11435 with OLLAMA_HOST=localhost:11435.
+[2026-05-08T05:41:08Z] Failed to start local Ollama for http://localhost:11435 (CreateProcess error 87).
