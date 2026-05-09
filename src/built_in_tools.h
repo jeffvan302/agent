@@ -87,7 +87,7 @@ inline std::string FilesystemSystemPrompt() {
         "- read: Returns file content. Optionally pass start_line / end_line (1-based, inclusive) or start_offset / length (bytes).\n"
         "- write: Overwrites a file. Pass create_backup=true to snapshot the existing file into .agent/backups/<timestamp>/<path> before overwriting.\n"
         "- edit: Applies JSON diff edits. Each edit object uses either:\n"
-        "  1) old_lines + new_lines — exact match-and-replace by contiguous lines, or\n"
+        "  1) old_lines + new_lines — match-and-replace by contiguous lines; each array entry may be one line or a multiline block, or\n"
         "  2) direct JSON-patch style: {\"op\": \"replace\", \"path\": \"...\"} (not yet supported; use old_lines/new_lines).\n"
         "- Edit matching tries exact lines first, then safe whitespace-tolerant matching. Python/YAML/Makefile-style files only allow indentation-preserving tolerance.\n"
         "- list_directory: Returns files and subdirectories for a path.\n"
@@ -317,7 +317,7 @@ inline std::vector<ChatToolDefinition> BuildDefinitions(
             "Actions:\n"
             "- read — Return the full content of a file, or a portion if start_line/end_line or start_offset/length are provided.\n"
             "- write — Overwrite a file with new content. Set create_backup=true to snapshot the original into .agent/backups/<timestamp>.\n"
-            "- edit — Apply diff edits using old_lines/new_lines replacements. Each edit must match contiguous existing lines exactly.\n"
+            "- edit — Apply diff edits using old_lines/new_lines replacements. Each entry may be a single line or multiline block; embedded newlines are normalized before matching.\n"
             "- list_directory — Return files and subdirectories for the given path.\n"
             "- create_directory — Create a new directory (including intermediate parents).\n\n"
             "Edit matching tries exact lines first, then safe whitespace-tolerant matching. Python/YAML/Makefile-style files only allow indentation-preserving tolerance.\n\n"
@@ -333,7 +333,7 @@ inline std::vector<ChatToolDefinition> BuildDefinitions(
     "start_offset": {"type": "integer", "description": "Optional byte start offset for read."},
     "length": {"type": "integer", "description": "Optional byte length for read."},
     "create_backup": {"type": "boolean", "description": "If true, backup the original file or directory before write or edit."},
-    "edits": {"type": "array", "description": "For edit action: list of {old_lines:[...], new_lines:[...]} objects. old_lines must match contiguous lines exactly."}
+    "edits": {"type": "array", "description": "For edit action: list of {old_lines:[...], new_lines:[...]} objects. Each array entry may be a single line or multiline block. old_lines must match contiguous lines after newline normalization."}
   },
   "required": ["action", "path"]
 })";
@@ -1071,6 +1071,51 @@ inline std::string TrimRightCopy(std::string value) {
     return value;
 }
 
+inline std::vector<std::string> SplitFilesystemEditLineItem(const std::string& value, bool* normalized_multiline) {
+    std::vector<std::string> lines;
+    std::string current;
+    bool saw_line_break = false;
+    for (size_t i = 0; i < value.size(); ++i) {
+        const char ch = value[i];
+        if (ch == '\r' || ch == '\n') {
+            saw_line_break = true;
+            lines.push_back(current);
+            current.clear();
+            if (ch == '\r' && i + 1 < value.size() && value[i + 1] == '\n') {
+                ++i;
+            }
+            continue;
+        }
+        current.push_back(ch);
+    }
+
+    if (!saw_line_break || !current.empty()) {
+        lines.push_back(current);
+    }
+    if (lines.empty()) {
+        lines.push_back("");
+    }
+    if (normalized_multiline && saw_line_break) {
+        *normalized_multiline = true;
+    }
+    return lines;
+}
+
+inline std::vector<std::string> ParseFilesystemEditLines(const nlohmann::json& json_lines, bool* normalized_multiline) {
+    std::vector<std::string> lines;
+    if (!json_lines.is_array()) {
+        return lines;
+    }
+    for (const auto& item : json_lines) {
+        if (!item.is_string()) {
+            continue;
+        }
+        const std::vector<std::string> split = SplitFilesystemEditLineItem(item.get<std::string>(), normalized_multiline);
+        lines.insert(lines.end(), split.begin(), split.end());
+    }
+    return lines;
+}
+
 inline std::string LeadingWhitespace(const std::string& value) {
     size_t count = 0;
     while (count < value.size() && (value[count] == ' ' || value[count] == '\t')) {
@@ -1382,37 +1427,55 @@ inline McpToolCallResult CallFilesystem(
         std::vector<std::string> lines;
         { std::istringstream stream(original); std::string line; while (std::getline(stream, line)) lines.push_back(line); }
         std::vector<std::string> match_modes;
+        bool changed = false;
         for (const auto& edit : edits) {
             if (!edit.is_object()) continue;
             const auto old_j = edit.value("old_lines", nlohmann::json::array());
             const auto new_j = edit.value("new_lines", nlohmann::json::array());
             if (!old_j.is_array() || old_j.empty()) continue;
-            std::vector<std::string> old_lines; for (const auto& item : old_j) { if (item.is_string()) old_lines.push_back(item.get<std::string>()); }
-            std::vector<std::string> new_lines; for (const auto& item : new_j) { if (item.is_string()) new_lines.push_back(item.get<std::string>()); }
+            bool normalized_multiline = false;
+            std::vector<std::string> old_lines = ParseFilesystemEditLines(old_j, &normalized_multiline);
+            std::vector<std::string> new_lines = ParseFilesystemEditLines(new_j, &normalized_multiline);
             if (old_lines.empty()) continue;
             const FilesystemEditMatch match = FindFilesystemEditMatch(lines, old_lines, new_lines, target);
             if (!match.found) {
+                if (!new_lines.empty()) {
+                    const FilesystemEditMatch already_applied = FindFilesystemEditMatch(lines, new_lines, new_lines, target);
+                    if (already_applied.found) {
+                        match_modes.push_back(normalized_multiline ? "normalized_multiline+already_applied" : "already_applied");
+                        continue;
+                    }
+                }
                 return ErrorResult(
-                    "Edit failed: old_lines not found in file. Tried exact and safe whitespace-tolerant matching. "
+                    "Edit failed: old_lines not found in file. Multiline old_lines entries were split before matching. Tried exact and safe whitespace-tolerant matching. "
                     "For indentation-sensitive files, leading indentation must still match by relative block structure.");
             }
             lines.erase(lines.begin() + match.index, lines.begin() + match.index + old_lines.size());
             lines.insert(lines.begin() + match.index, match.replacement_lines.begin(), match.replacement_lines.end());
-            match_modes.push_back(match.mode);
+            changed = true;
+            match_modes.push_back(normalized_multiline ? "normalized_multiline+" + match.mode : match.mode);
         }
         std::ostringstream out;
         for (size_t i = 0; i < lines.size(); ++i) { if (i > 0) out << "\n"; out << lines[i]; }
-        std::string write_error;
-        if (!WriteWholeFileUtf8(target, out.str(), &write_error)) return ErrorResult(write_error);
+        if (changed) {
+            std::string write_error;
+            if (!WriteWholeFileUtf8(target, out.str(), &write_error)) return ErrorResult(write_error);
+        }
         McpToolCallResult result;
         result.success = true;
-        nlohmann::json payload = { {"tool", kFilesystemToolName}, {"success", true}, {"action", "edit"}, {"path", path_template} };
+        nlohmann::json payload = { {"tool", kFilesystemToolName}, {"success", true}, {"action", "edit"}, {"path", path_template}, {"changed", changed} };
         payload["match_modes"] = match_modes;
         if (!backup_rel.empty()) payload["backup_path"] = backup_rel;
         result.raw_result_json = payload.dump(2);
-        result.content_text = "Edited file: " + path_template;
-        if (std::any_of(match_modes.begin(), match_modes.end(), [](const std::string& mode) { return mode != "exact"; })) {
+        result.content_text = changed ? "Edited file: " + path_template : "No filesystem changes needed: " + path_template;
+        if (std::any_of(match_modes.begin(), match_modes.end(), [](const std::string& mode) { return mode.find("normalized_multiline") != std::string::npos; })) {
+            result.content_text += " (normalized multiline edit blocks)";
+        }
+        if (std::any_of(match_modes.begin(), match_modes.end(), [](const std::string& mode) { return mode.find("whitespace") != std::string::npos || mode.find("relative_indentation") != std::string::npos; })) {
             result.content_text += " (used whitespace-tolerant matching)";
+        }
+        if (std::any_of(match_modes.begin(), match_modes.end(), [](const std::string& mode) { return mode.find("already_applied") != std::string::npos; })) {
+            result.content_text += " (some edits were already applied)";
         }
         if (!backup_rel.empty()) result.content_text += " (backup: " + backup_rel + ")";
         return result;
