@@ -1212,6 +1212,70 @@ struct FilesystemEditMatch {
     std::string mode;
 };
 
+struct FilesystemEditDiagnostics {
+    bool has_near_match = false;
+    size_t near_match_index = 0;
+    size_t near_match_score = 0;
+    std::string summary;
+};
+
+inline FilesystemEditDiagnostics ComputeEditDiagnostics(
+    const std::vector<std::string>& file_lines,
+    const std::vector<std::string>& old_lines) {
+    FilesystemEditDiagnostics diag;
+    if (old_lines.empty() || file_lines.empty() || old_lines.size() > file_lines.size()) {
+        diag.summary = "old_lines is empty, or longer than the file.";
+        return diag;
+    }
+    size_t best_score = 0;
+    size_t best_index = 0;
+    for (size_t i = 0; i + old_lines.size() <= file_lines.size(); ++i) {
+        size_t score = 0;
+        for (size_t j = 0; j < old_lines.size(); ++j) {
+            if (TrimRightCopy(file_lines[i + j]) == TrimRightCopy(old_lines[j])) {
+                ++score;
+            }
+        }
+        if (score > best_score) {
+            best_score = score;
+            best_index = i;
+        }
+    }
+    diag.near_match_score = best_score;
+    diag.near_match_index = best_index;
+    diag.has_near_match = best_score > 0;
+    if (diag.has_near_match) {
+        std::ostringstream oss;
+        oss << "Closest match at line " << (best_index + 1) << " (score " << best_score << "/" << old_lines.size() << ").\n";
+        for (size_t j = 0; j < old_lines.size() && j < 5; ++j) {
+            const size_t file_idx = best_index + j;
+            const bool line_match = TrimRightCopy(file_lines[file_idx]) == TrimRightCopy(old_lines[j]);
+            oss << "  [" << (file_idx + 1) << "] " << (line_match ? "OK   " : "DIFF ") << "expected: " << old_lines[j] << "\n";
+            oss << "       actual:   " << file_lines[file_idx] << "\n";
+        }
+        if (old_lines.size() > 5) {
+            oss << "  ... (" << (old_lines.size() - 5) << " more lines)\n";
+        }
+        diag.summary = oss.str();
+    } else {
+        std::ostringstream oss;
+        oss << "No near match found. First expected line: \"" << old_lines[0] << "\". ";
+        bool first_line_found = false;
+        for (size_t i = 0; i < file_lines.size(); ++i) {
+            if (TrimRightCopy(file_lines[i]) == TrimRightCopy(old_lines[0])) {
+                oss << "That line alone appears at line " << (i + 1) << ", but the surrounding block doesn't match.";
+                first_line_found = true;
+                break;
+            }
+        }
+        if (!first_line_found) {
+            oss << "That line does not appear anywhere in the file.";
+        }
+        diag.summary = oss.str();
+    }
+    return diag;
+}
+
 inline bool RelativeIndentBlockMatches(
     const std::vector<std::string>& file_lines,
     size_t start,
@@ -1438,11 +1502,46 @@ inline McpToolCallResult CallFilesystem(
             if (!edit.is_object()) continue;
             const auto old_j = edit.value("old_lines", nlohmann::json::array());
             const auto new_j = edit.value("new_lines", nlohmann::json::array());
-            if (!old_j.is_array() || old_j.empty()) continue;
+
+            // Validate old_lines format
+            if (!old_j.is_array()) {
+                return ErrorResult(
+                    "Edit failed: 'old_lines' must be a JSON array of strings, e.g. [\"line 1\", \"line 2\"]. "
+                    "Received a non-array value. If you sent a single string, wrap it in an array.");
+            }
+            if (old_j.empty()) {
+                return ErrorResult("Edit failed: 'old_lines' array is empty. Provide at least one line to match.");
+            }
+            for (const auto& item : old_j) {
+                if (!item.is_string()) {
+                    return ErrorResult(
+                        "Edit failed: 'old_lines' must contain only strings. "
+                        "Ensure each array element is a quoted string, not a number or object.");
+                }
+            }
+
             bool normalized_multiline = false;
             std::vector<std::string> old_lines = ParseFilesystemEditLines(old_j, &normalized_multiline);
+            if (old_lines.empty()) {
+                return ErrorResult("Edit failed: 'old_lines' parsed to empty lines. Each element must contain text.");
+            }
+
+            // Validate new_lines format
+            if (!new_j.is_null() && !new_j.empty()) {
+                if (!new_j.is_array()) {
+                    return ErrorResult(
+                        "Edit failed: 'new_lines' must be a JSON array of strings. "
+                        "Received a non-array value.");
+                }
+                for (const auto& item : new_j) {
+                    if (!item.is_string()) {
+                        return ErrorResult(
+                            "Edit failed: 'new_lines' must contain only strings.");
+                    }
+                }
+            }
             std::vector<std::string> new_lines = ParseFilesystemEditLines(new_j, &normalized_multiline);
-            if (old_lines.empty()) continue;
+
             const FilesystemEditMatch match = FindFilesystemEditMatch(lines, old_lines, new_lines, target);
             if (!match.found) {
                 if (!new_lines.empty()) {
@@ -1452,9 +1551,12 @@ inline McpToolCallResult CallFilesystem(
                         continue;
                     }
                 }
-                return ErrorResult(
-                    "Edit failed: old_lines not found in file. Multiline old_lines entries were split before matching. Tried exact and safe whitespace-tolerant matching. "
-                    "For indentation-sensitive files, leading indentation must still match by relative block structure.");
+                const auto diag = ComputeEditDiagnostics(lines, old_lines);
+                std::string msg = "Edit failed: old_lines not found in file. " + diag.summary +
+                    " Tried exact, trailing-whitespace-tolerant, and relative-indentation matching. "
+                    "For indentation-sensitive files, the relative block structure must still match. "
+                    "Tip: re-read the file to get the exact current text before retrying.";
+                return ErrorResult(msg);
             }
             lines.erase(lines.begin() + match.index, lines.begin() + match.index + old_lines.size());
             lines.insert(lines.begin() + match.index, match.replacement_lines.begin(), match.replacement_lines.end());
