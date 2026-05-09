@@ -4887,41 +4887,74 @@ void MainWindow::SendCurrentMessage() {
 
     if (!include_tools) {
         std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging]() {
-            const auto result = OpenAIClient::StreamChat(request, [hwnd, project_id, chat_id](const std::string& piece) {
-                auto* payload = new ChatDeltaPayload;
-                payload->project_id = project_id;
-                payload->chat_id = chat_id;
-                payload->text = piece;
-                PostMessageW(hwnd, kChatDeltaMessage, 0, reinterpret_cast<LPARAM>(payload));
-            });
+            try {
+                const auto result = OpenAIClient::StreamChat(request, [hwnd, project_id, chat_id](const std::string& piece) {
+                    auto* payload = new ChatDeltaPayload;
+                    payload->project_id = project_id;
+                    payload->chat_id = chat_id;
+                    payload->text = piece;
+                    PostMessageW(hwnd, kChatDeltaMessage, 0, reinterpret_cast<LPARAM>(payload));
+                });
 
-            auto* final_payload = new ChatFinishedPayload;
-            final_payload->success = result.success;
-            final_payload->project_id = project_id;
-            final_payload->chat_id = chat_id;
-            final_payload->error = result.error;
-            if (logging) {
-                if (!result.success) {
-                    ChatRequestLogger::Log(project_id, logging,
-                        log_header + ChatRequestLogger::FormatErrorResponse(result.error));
-                } else {
-                    ChatRequestLogger::Log(project_id, logging,
-                        log_header + ChatRequestLogger::FormatSuccessResponse(result.full_text));
+                auto* final_payload = new ChatFinishedPayload;
+                final_payload->success = result.success;
+                final_payload->project_id = project_id;
+                final_payload->chat_id = chat_id;
+                final_payload->error = result.error;
+                if (logging) {
+                    if (!result.success) {
+                        ChatRequestLogger::Log(project_id, logging,
+                            log_header + ChatRequestLogger::FormatErrorResponse(result.error));
+                    } else {
+                        ChatRequestLogger::Log(project_id, logging,
+                            log_header + ChatRequestLogger::FormatSuccessResponse(result.full_text));
+                    }
                 }
+                if (result.success && !result.full_text.empty()) {
+                    MessageRecord assistant_message;
+                    assistant_message.role = "assistant";
+                    assistant_message.content = result.full_text;
+                    assistant_message.created_at = CurrentTimestampUtc();
+                    final_payload->appended_messages.push_back(std::move(assistant_message));
+                }
+                PostMessageW(hwnd, kChatFinishedMessage, 0, reinterpret_cast<LPARAM>(final_payload));
+            } catch (const std::exception& ex) {
+                Logger::Error(std::string("Chat thread exception: ") + ex.what());
+                auto* final_payload = new ChatFinishedPayload;
+                final_payload->success = false;
+                final_payload->project_id = project_id;
+                final_payload->chat_id = chat_id;
+                final_payload->error = std::string("Unhandled error in chat thread: ") + ex.what();
+                {
+                    MessageRecord err_msg;
+                    err_msg.role = "assistant";
+                    err_msg.content = std::string("[System Error] Chat thread crashed: ") + ex.what();
+                    err_msg.created_at = CurrentTimestampUtc();
+                    final_payload->appended_messages.push_back(std::move(err_msg));
+                }
+                PostMessageW(hwnd, kChatFinishedMessage, 0, reinterpret_cast<LPARAM>(final_payload));
+            } catch (...) {
+                Logger::Error("Chat thread exception: unknown error");
+                auto* final_payload = new ChatFinishedPayload;
+                final_payload->success = false;
+                final_payload->project_id = project_id;
+                final_payload->chat_id = chat_id;
+                final_payload->error = "Unhandled unknown error in chat thread.";
+                {
+                    MessageRecord err_msg;
+                    err_msg.role = "assistant";
+                    err_msg.content = "[System Error] Chat thread crashed with an unknown error.";
+                    err_msg.created_at = CurrentTimestampUtc();
+                    final_payload->appended_messages.push_back(std::move(err_msg));
+                }
+                PostMessageW(hwnd, kChatFinishedMessage, 0, reinterpret_cast<LPARAM>(final_payload));
             }
-            if (result.success && !result.full_text.empty()) {
-                MessageRecord assistant_message;
-                assistant_message.role = "assistant";
-                assistant_message.content = result.full_text;
-                assistant_message.created_at = CurrentTimestampUtc();
-                final_payload->appended_messages.push_back(std::move(assistant_message));
-            }
-            PostMessageW(hwnd, kChatFinishedMessage, 0, reinterpret_cast<LPARAM>(final_payload));
         }).detach();
         return;
     }
 
     std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, proj_settings, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_, selected_compression_config, compression_service = &compression_service_]() {
+        try {
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
         std::vector<ChatToolDefinition> tool_definitions;
@@ -5064,16 +5097,26 @@ void MainWindow::SendCurrentMessage() {
                     for (size_t ti = 0; ti < model_tool_indices.size(); ++ti) {
                         const size_t pi = model_tool_indices[ti];
                         sub_threads[ti] = std::thread([&pending, pi, &project_id, mcp_manager, rag_service, &providers, &model_tools, &project_variables, &runtime_variables]() {
-                            pending[pi].result = CallModelToolAgent(
-                                pending[pi].tool_call.name,
-                                pending[pi].tool_call.arguments_json,
-                                project_id,
-                                mcp_manager,
-                                rag_service,
-                                providers,
-                                model_tools,
-                                project_variables,
-                                runtime_variables);
+                            try {
+                                pending[pi].result = CallModelToolAgent(
+                                    pending[pi].tool_call.name,
+                                    pending[pi].tool_call.arguments_json,
+                                    project_id,
+                                    mcp_manager,
+                                    rag_service,
+                                    providers,
+                                    model_tools,
+                                    project_variables,
+                                    runtime_variables);
+                            } catch (const std::exception& ex) {
+                                pending[pi].result.success = false;
+                                pending[pi].result.is_tool_error = true;
+                                pending[pi].result.content_text = std::string("Model tool agent crashed: ") + ex.what();
+                            } catch (...) {
+                                pending[pi].result.success = false;
+                                pending[pi].result.is_tool_error = true;
+                                pending[pi].result.content_text = "Model tool agent crashed with unknown error.";
+                            }
                         });
                     }
                     // While model tools run, execute regular (non-model-tool) calls serially
@@ -5286,6 +5329,37 @@ void MainWindow::SendCurrentMessage() {
         }
         final_payload->rag_working_set_additions = std::move(*working_set_additions);
         PostMessageW(hwnd, kChatFinishedMessage, 0, reinterpret_cast<LPARAM>(final_payload));
+    } catch (const std::exception& ex) {
+        Logger::Error(std::string("Tool-aware chat thread exception: ") + ex.what());
+        auto* final_payload = new ChatFinishedPayload;
+        final_payload->success = false;
+        final_payload->project_id = project_id;
+        final_payload->chat_id = chat_id;
+        final_payload->error = std::string("Unhandled error in tool-aware chat thread: ") + ex.what();
+        {
+            MessageRecord err_msg;
+            err_msg.role = "assistant";
+            err_msg.content = std::string("[System Error] Tool-aware chat thread crashed: ") + ex.what();
+            err_msg.created_at = CurrentTimestampUtc();
+            final_payload->appended_messages.push_back(std::move(err_msg));
+        }
+        PostMessageW(hwnd, kChatFinishedMessage, 0, reinterpret_cast<LPARAM>(final_payload));
+    } catch (...) {
+        Logger::Error("Tool-aware chat thread exception: unknown error");
+        auto* final_payload = new ChatFinishedPayload;
+        final_payload->success = false;
+        final_payload->project_id = project_id;
+        final_payload->chat_id = chat_id;
+        final_payload->error = "Unhandled unknown error in tool-aware chat thread.";
+        {
+            MessageRecord err_msg;
+            err_msg.role = "assistant";
+            err_msg.content = "[System Error] Tool-aware chat thread crashed with an unknown error.";
+            err_msg.created_at = CurrentTimestampUtc();
+            final_payload->appended_messages.push_back(std::move(err_msg));
+        }
+        PostMessageW(hwnd, kChatFinishedMessage, 0, reinterpret_cast<LPARAM>(final_payload));
+    }
     }).detach();
 }
 

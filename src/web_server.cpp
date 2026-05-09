@@ -4192,7 +4192,20 @@ void WebServer::HandleSendMessage(const void* req_ptr, void* res_ptr) {
     if (!project_id) return;
 
     // Call model (may block for several seconds)
-    const auto model_result = CallModel(*project_id, chat_id, content, session->username);
+    WebServer::ModelCallResult model_result;
+    try {
+        model_result = CallModel(*project_id, chat_id, content, session->username);
+    } catch (const std::exception& ex) {
+        Logger::Error("WebModel", std::string("CallModel exception: ") + ex.what());
+        json err = {{"error", std::string("Unhandled error in model call: ") + ex.what()}};
+        SendJson(res_ptr, 502, err.dump());
+        return;
+    } catch (...) {
+        Logger::Error("WebModel", "CallModel unknown exception");
+        json err = {{"error", "Unhandled unknown error in model call."}};
+        SendJson(res_ptr, 502, err.dump());
+        return;
+    }
 
     if (!model_result.success) {
         json err = {{"error", model_result.error}};
@@ -5143,7 +5156,9 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
     std::thread producer([this, pipe, proj_id, chat_id, content, sess_user,
                           encode_sse, attachments, web_debug_requested,
                           cancel_token, stream_key]() {
-        const std::string err = StreamModel(
+        std::string err;
+        try {
+            err = StreamModel(
             proj_id, chat_id, content, sess_user,
             [&](const std::string& delta) -> bool {
                 {
@@ -5281,6 +5296,14 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             [cancel_token]() {
                 return cancel_token->cancelled.load();
             });
+
+        } catch (const std::exception& ex) {
+            Logger::Error("WebModel", std::string("Producer thread exception: ") + ex.what());
+            err = std::string("Unhandled error in streaming model: ") + ex.what();
+        } catch (...) {
+            Logger::Error("WebModel", "Producer thread unknown exception");
+            err = "Unhandled unknown error in streaming model.";
+        }
 
         // Enqueue final event
         {

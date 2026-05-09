@@ -414,101 +414,107 @@ inline McpToolCallResult CallPowerShell(
         variables);
     working_dir = Trim(working_dir);
 
-    const std::wstring command_w = Utf8ToWide(
-        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n" + command);
-    const std::string encoded = Base64Encode(
-        reinterpret_cast<const unsigned char*>(command_w.data()),
-        command_w.size() * sizeof(wchar_t));
-    std::wstring command_line = L"powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + Utf8ToWide(encoded);
+    try {
+        const std::wstring command_w = Utf8ToWide(
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n" + command);
+        const std::string encoded = Base64Encode(
+            reinterpret_cast<const unsigned char*>(command_w.data()),
+            command_w.size() * sizeof(wchar_t));
+        std::wstring command_line = L"powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + Utf8ToWide(encoded);
 
-    SECURITY_ATTRIBUTES sa{};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
 
-    HANDLE read_pipe = nullptr;
-    HANDLE write_pipe = nullptr;
-    if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
-        return ErrorResult("Failed to create process output pipe.");
-    }
-    SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
-
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = nullptr;
-    startup.hStdOutput = write_pipe;
-    startup.hStdError = write_pipe;
-
-    PROCESS_INFORMATION process{};
-    std::vector<wchar_t> cmd_buffer(command_line.begin(), command_line.end());
-    cmd_buffer.push_back(L'\0');
-    std::wstring working_dir_w = Utf8ToWide(working_dir);
-    const wchar_t* cwd = working_dir_w.empty() ? nullptr : working_dir_w.c_str();
-
-    const BOOL created = CreateProcessW(
-        nullptr,
-        cmd_buffer.data(),
-        nullptr,
-        nullptr,
-        TRUE,
-        CREATE_NO_WINDOW,
-        nullptr,
-        cwd,
-        &startup,
-        &process);
-    CloseHandle(write_pipe);
-    if (!created) {
-        const DWORD err = GetLastError();
-        CloseHandle(read_pipe);
-        return ErrorResult("Failed to start PowerShell. CreateProcess error: " + std::to_string(err));
-    }
-
-    const DWORD timeout_ms = static_cast<DWORD>(timeout_seconds) * 1000;
-    const DWORD start = GetTickCount();
-    bool timed_out = false;
-    bool truncated = false;
-    std::string output;
-    constexpr size_t kMaxOutputBytes = 64 * 1024;
-    for (;;) {
-        output += ReadAvailablePipe(read_pipe, kMaxOutputBytes - std::min(output.size(), kMaxOutputBytes), &truncated);
-        const DWORD wait = WaitForSingleObject(process.hProcess, 50);
-        if (wait == WAIT_OBJECT_0) break;
-        if (GetTickCount() - start >= timeout_ms) {
-            timed_out = true;
-            TerminateProcess(process.hProcess, 1);
-            WaitForSingleObject(process.hProcess, 2000);
-            break;
+        HANDLE read_pipe = nullptr;
+        HANDLE write_pipe = nullptr;
+        if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
+            return ErrorResult("Failed to create process output pipe.");
         }
+        SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
+
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        startup.dwFlags = STARTF_USESTDHANDLES;
+        startup.hStdInput = nullptr;
+        startup.hStdOutput = write_pipe;
+        startup.hStdError = write_pipe;
+
+        PROCESS_INFORMATION process{};
+        std::vector<wchar_t> cmd_buffer(command_line.begin(), command_line.end());
+        cmd_buffer.push_back(L'\0');
+        std::wstring working_dir_w = Utf8ToWide(working_dir);
+        const wchar_t* cwd = working_dir_w.empty() ? nullptr : working_dir_w.c_str();
+
+        const BOOL created = CreateProcessW(
+            nullptr,
+            cmd_buffer.data(),
+            nullptr,
+            nullptr,
+            TRUE,
+            CREATE_NO_WINDOW,
+            nullptr,
+            cwd,
+            &startup,
+            &process);
+        CloseHandle(write_pipe);
+        if (!created) {
+            const DWORD err = GetLastError();
+            CloseHandle(read_pipe);
+            return ErrorResult("Failed to start PowerShell. CreateProcess error: " + std::to_string(err));
+        }
+
+        const DWORD timeout_ms = static_cast<DWORD>(timeout_seconds) * 1000;
+        const DWORD start = GetTickCount();
+        bool timed_out = false;
+        bool truncated = false;
+        std::string output;
+        constexpr size_t kMaxOutputBytes = 64 * 1024;
+        for (;;) {
+            output += ReadAvailablePipe(read_pipe, kMaxOutputBytes - std::min(output.size(), kMaxOutputBytes), &truncated);
+            const DWORD wait = WaitForSingleObject(process.hProcess, 50);
+            if (wait == WAIT_OBJECT_0) break;
+            if (GetTickCount() - start >= timeout_ms) {
+                timed_out = true;
+                TerminateProcess(process.hProcess, 1);
+                WaitForSingleObject(process.hProcess, 2000);
+                break;
+            }
+        }
+        output += ReadAvailablePipe(read_pipe, kMaxOutputBytes - std::min(output.size(), kMaxOutputBytes), &truncated);
+
+        DWORD exit_code = 1;
+        GetExitCodeProcess(process.hProcess, &exit_code);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        CloseHandle(read_pipe);
+
+        if (truncated) {
+            output += "\n[output truncated at 64 KiB]";
+        }
+
+        McpToolCallResult result;
+        result.success = !timed_out && exit_code == 0;
+        result.is_tool_error = !result.success;
+        nlohmann::json payload = {
+            {"tool", kPowerShellToolName},
+            {"success", result.success},
+            {"exit_code", exit_code},
+            {"timed_out", timed_out},
+            {"working_directory", working_dir},
+            {"output", output},
+        };
+        result.raw_result_json = payload.dump(2);
+        result.content_text = "PowerShell exit code: " + std::to_string(exit_code);
+        if (timed_out) result.content_text += " (timed out)";
+        result.content_text += "\nWorking directory: " + (working_dir.empty() ? std::string("(default)") : working_dir);
+        result.content_text += "\n\n" + (output.empty() ? std::string("(no output)") : output);
+        return result;
+    } catch (const std::exception& ex) {
+        return ErrorResult(std::string("PowerShell tool crashed: ") + ex.what());
+    } catch (...) {
+        return ErrorResult("PowerShell tool crashed with an unknown error.");
     }
-    output += ReadAvailablePipe(read_pipe, kMaxOutputBytes - std::min(output.size(), kMaxOutputBytes), &truncated);
-
-    DWORD exit_code = 1;
-    GetExitCodeProcess(process.hProcess, &exit_code);
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-    CloseHandle(read_pipe);
-
-    if (truncated) {
-        output += "\n[output truncated at 64 KiB]";
-    }
-
-    McpToolCallResult result;
-    result.success = !timed_out && exit_code == 0;
-    result.is_tool_error = !result.success;
-    nlohmann::json payload = {
-        {"tool", kPowerShellToolName},
-        {"success", result.success},
-        {"exit_code", exit_code},
-        {"timed_out", timed_out},
-        {"working_directory", working_dir},
-        {"output", output},
-    };
-    result.raw_result_json = payload.dump(2);
-    result.content_text = "PowerShell exit code: " + std::to_string(exit_code);
-    if (timed_out) result.content_text += " (timed out)";
-    result.content_text += "\nWorking directory: " + (working_dir.empty() ? std::string("(default)") : working_dir);
-    result.content_text += "\n\n" + (output.empty() ? std::string("(no output)") : output);
-    return result;
 }
 
 inline McpToolCallResult CallQuestionnaire(

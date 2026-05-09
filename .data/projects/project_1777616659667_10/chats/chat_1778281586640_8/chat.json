@@ -4,7 +4,7 @@
   "model_id": "",
   "name": "Test Face [admin]",
   "provider_id": "",
-  "selected_agentic_mode_id": "",
+  "selected_agentic_mode_id": "mode_1426853375",
   "system_prompt": "",
   "temperature": 0.2
 }

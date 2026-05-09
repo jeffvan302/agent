@@ -872,11 +872,29 @@ json LoadJsonFile(const std::filesystem::path& path, const json& fallback) {
 
 void SaveJsonFile(const std::filesystem::path& path, const json& data) {
     std::filesystem::create_directories(path.parent_path());
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output.is_open()) {
-        throw std::runtime_error("Unable to open file for writing: " + path.string());
+    const std::filesystem::path tmp_path = path.string() + ".tmp";
+    // Write to a temporary file so readers never see a half-written file.
+    {
+        std::ofstream output(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!output.is_open()) {
+            throw std::runtime_error("Unable to open file for writing: " + tmp_path.string());
+        }
+        output << data.dump(2);
+        output.flush();
     }
-    output << data.dump(2);
+    // Atomic rename with retries in case another thread/process holds the target.
+    for (int attempt = 1; attempt <= 5; ++attempt) {
+        try {
+            std::filesystem::rename(tmp_path, path);
+            return;
+        } catch (const std::filesystem::filesystem_error&) {
+            if (attempt == 5) {
+                std::filesystem::remove(tmp_path);
+                throw std::runtime_error("Unable to replace file: " + path.string());
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
 }
 }  // namespace
 
