@@ -1,0 +1,3458 @@
+﻿#include "provider_manager.h"
+
+#include "ollama_api_client.h"
+#include "openai_client.h"
+#include "provider_auth_bridge.h"
+#include "provider_catalog.h"
+#include "provider_profiles.h"
+#include "prompt_dialog.h"
+#include "util.h"
+
+#include <commdlg.h>
+#include <nlohmann/json.hpp>
+#include <shellapi.h>
+#include <winhttp.h>
+
+#include <algorithm>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <thread>
+#include <windowsx.h>
+
+#pragma comment(lib, "winhttp.lib")
+
+using json = nlohmann::json;
+
+namespace {
+constexpr wchar_t kProviderManagerClassName[] = L"AgentProviderManagerWindow";
+constexpr wchar_t kProviderEditorClassName[] = L"AgentProviderEditorWindow";
+constexpr wchar_t kModelEditorClassName[] = L"AgentModelEditorWindow";
+constexpr UINT kProviderTestResultMessage = WM_APP + 100;
+
+enum ControlId : int {
+    kProvidersList = 2001,
+    kModelsList = 2002,
+    kAddProvider = 2003,
+    kEditProvider = 2004,
+    kRemoveProvider = 2005,
+    kAddModel = 2006,
+    kEditModel = 2007,
+    kRemoveModel = 2008,
+    kTestConnection = 2009,
+
+    kTestQueue = 2010,
+
+    kStatusLabel = 2011,
+
+    kCloseButton = 2012,
+};
+
+struct ProviderTestPayload {
+    bool success = false;
+    std::wstring message;
+    std::string details_log;
+};
+
+enum ProviderEditorControlId : int {
+    kProviderEditorTypeLabel = 2201,
+    kProviderEditorTypeCombo = 2202,
+    kProviderEditorNameLabel = 2203,
+    kProviderEditorNameEdit = 2204,
+    kProviderEditorUrlLabel = 2205,
+    kProviderEditorUrlEdit = 2206,
+    kProviderEditorPortLabel = 2207,
+    kProviderEditorPortEdit = 2208,
+    kProviderEditorSecretLabel = 2209,
+    kProviderEditorSecretEdit = 2210,
+    kProviderEditorCertLabel = 2211,
+    kProviderEditorCertEdit = 2212,
+    kProviderEditorMaxActiveLabel = 2213,
+    kProviderEditorMaxActiveEdit = 2214,
+    kProviderEditorMaxQueueLabel = 2215,
+    kProviderEditorMaxQueueEdit = 2216,
+    kProviderEditorLoadJson = 2217,
+    kProviderEditorHelp = 2218,
+    kProviderEditorAuthModeLabel = 2219,
+    kProviderEditorAuthModeCombo = 2220,
+    kProviderEditorAccountLabel = 2221,
+    kProviderEditorAccountEdit = 2222,
+    kProviderEditorAuthStatusLabel = 2223,
+    kProviderEditorAuthStatusValue = 2224,
+    kProviderEditorSignIn = 2225,
+    kProviderEditorSignOut = 2226,
+    kProviderEditorRefreshModels = 2227,
+    kProviderEditorStoreHistory = 2228,
+    kProviderEditorSave = IDOK,
+    kProviderEditorCancel = IDCANCEL,
+};
+
+enum ModelEditorControlId : int {
+    kModelEditorIdLabel = 2301,
+    kModelEditorIdEdit = 2302,
+    kModelEditorDisplayLabel = 2303,
+    kModelEditorDisplayEdit = 2304,
+    kModelEditorContextLabel = 2305,
+    kModelEditorContextEdit = 2306,
+    kModelEditorStreamingCheck = 2307,
+    kModelEditorToolsCheck = 2308,
+    kModelEditorVisionCheck = 2309,
+    kModelEditorEmbeddingCheck = 2310,
+    kModelEditorThinkingCheck = 2311,
+    kModelEditorMaxCompletionCheck = 2312,
+    kModelEditorProviderLabel = 2313,
+    kModelEditorProviderCombo = 2314,
+    kModelEditorReasoningLabel = 2315,
+    kModelEditorReasoningCombo = 2316,
+    kModelEditorVerbosityLabel = 2317,
+    kModelEditorVerbosityCombo = 2318,
+    kModelEditorRoutingLabel = 2319,
+    kModelEditorRoutingCombo = 2320,
+    kModelEditorTargetsLabel = 2321,
+    kModelEditorTargetsList = 2322,
+    kModelEditorAddTarget = 2323,
+    kModelEditorEditTarget = 2324,
+    kModelEditorRemoveTarget = 2325,
+    kModelEditorMoveTargetUp = 2326,
+    kModelEditorMoveTargetDown = 2327,
+    kModelEditorOllamaLoadInfo = 2328,
+    kModelEditorOllamaSearch = 2329,
+    kModelEditorOllamaTimeoutLabel = 2330,
+    kModelEditorOllamaTimeoutEdit = 2331,
+    kModelEditorOllamaNumThreadsLabel = 2332,
+    kModelEditorOllamaNumThreadsEdit = 2333,
+    kModelEditorOllamaNoGpuCheck = 2334,
+    kModelEditorOllamaGpuLayersLabel = 2335,
+    kModelEditorOllamaGpuLayersEdit = 2336,
+    kModelEditorOllamaCtxLenLabel = 2337,
+    kModelEditorOllamaCtxLenEdit = 2338,
+    kModelEditorOllamaVerboseCheck = 2339,
+    kModelEditorOllamaPull = 2340,
+    kModelEditorSave = IDOK,
+    kModelEditorCancel = IDCANCEL,
+};
+
+bool IsAgentHttpsProvider(const ProviderConfig& provider) {
+    return NormalizeProviderType(provider.provider_type) == "agent_https";
+}
+
+bool IsOAuthProvider(const ProviderConfig& provider) {
+    return NormalizeProviderType(provider.provider_type) == "openai_codex_oauth";
+}
+
+bool IsLmStudioProvider(const ProviderConfig& provider) {
+    return NormalizeProviderType(provider.provider_type) == "lmstudio_local";
+}
+
+bool IsOllamaProvider(const ProviderConfig& provider) {
+    return NormalizeProviderType(provider.provider_type) == "ollama_local";
+}
+
+bool IsBindingProvider(const ProviderConfig& provider) {
+    return NormalizeProviderType(provider.provider_type) == "binding_provider";
+}
+
+bool IsCatalogDrivenProvider(const ProviderConfig& provider) {
+    const std::string normalized = NormalizeProviderType(provider.provider_type);
+    return normalized == "openai_codex_oauth" || normalized == "lmstudio_local";
+}
+
+std::string ProviderTypeDisplayLabel(const ProviderConfig& provider) {
+    const std::string normalized = NormalizeProviderType(provider.provider_type);
+    if (normalized == "agent_https") {
+        return "Agent HTTPS";
+    }
+    if (normalized == "openai_codex_oauth") {
+        return "OpenAI OAuth";
+    }
+    if (normalized == "lmstudio_local") {
+        return "LM Studio";
+    }
+    if (normalized == "ollama_local") {
+        return "Ollama";
+    }
+    if (normalized == "ollama_cloud") {
+        return "Ollama Cloud";
+    }
+    if (normalized == "binding_provider") {
+        return "Binding Provider";
+    }
+    return "OpenAI";
+}
+
+enum class ProviderEditorKind {
+    OpenAICompatible,
+    AgentHttps,
+    OpenAIOAuth,
+    LmStudioLocal,
+    OllamaLocal,
+    OllamaCloud,
+    BindingProvider,
+};
+
+ProviderEditorKind ProviderKindFromConfig(const ProviderConfig& provider) {
+    const std::string normalized = NormalizeProviderType(provider.provider_type);
+    if (normalized == "agent_https") {
+        return ProviderEditorKind::AgentHttps;
+    }
+    if (normalized == "openai_codex_oauth") {
+        return ProviderEditorKind::OpenAIOAuth;
+    }
+    if (normalized == "lmstudio_local") {
+        return ProviderEditorKind::LmStudioLocal;
+    }
+    if (normalized == "ollama_local") {
+        return ProviderEditorKind::OllamaLocal;
+    }
+    if (normalized == "ollama_cloud") {
+        return ProviderEditorKind::OllamaCloud;
+    }
+    if (normalized == "binding_provider") {
+        return ProviderEditorKind::BindingProvider;
+    }
+    return ProviderEditorKind::OpenAICompatible;
+}
+
+int ComboIndexFromProviderKind(ProviderEditorKind kind) {
+    switch (kind) {
+    case ProviderEditorKind::AgentHttps: return 1;
+    case ProviderEditorKind::OpenAIOAuth: return 2;
+    case ProviderEditorKind::LmStudioLocal: return 3;
+    case ProviderEditorKind::OllamaLocal: return 4;
+    case ProviderEditorKind::OllamaCloud: return 5;
+    case ProviderEditorKind::BindingProvider: return 6;
+    case ProviderEditorKind::OpenAICompatible:
+    default:
+        return 0;
+    }
+}
+
+ProviderEditorKind ProviderKindFromComboIndex(int index) {
+    switch (index) {
+    case 1: return ProviderEditorKind::AgentHttps;
+    case 2: return ProviderEditorKind::OpenAIOAuth;
+    case 3: return ProviderEditorKind::LmStudioLocal;
+    case 4: return ProviderEditorKind::OllamaLocal;
+    case 5: return ProviderEditorKind::OllamaCloud;
+    case 6: return ProviderEditorKind::BindingProvider;
+    case 0:
+    default:
+        return ProviderEditorKind::OpenAICompatible;
+    }
+}
+
+std::string ProviderTypeFromKind(ProviderEditorKind kind) {
+    switch (kind) {
+    case ProviderEditorKind::AgentHttps: return "agent_https";
+    case ProviderEditorKind::OpenAIOAuth: return "openai_codex_oauth";
+    case ProviderEditorKind::LmStudioLocal: return "lmstudio_local";
+    case ProviderEditorKind::OllamaLocal: return "ollama_local";
+    case ProviderEditorKind::OllamaCloud: return "ollama_cloud";
+    case ProviderEditorKind::BindingProvider: return "binding_provider";
+    case ProviderEditorKind::OpenAICompatible:
+    default:
+        return "openai_compatible";
+    }
+}
+
+std::string DefaultBaseUrlForProviderKind(ProviderEditorKind kind) {
+    switch (kind) {
+    case ProviderEditorKind::AgentHttps:
+        return "https://127.0.0.1";
+    case ProviderEditorKind::LmStudioLocal:
+        return "http://127.0.0.1:1234/v1";
+    case ProviderEditorKind::OllamaLocal:
+        return {};
+    case ProviderEditorKind::OllamaCloud:
+        return "https://ollama.com/api";
+    case ProviderEditorKind::OpenAIOAuth:
+        return "https://api.openai.com/v1";
+    case ProviderEditorKind::OpenAICompatible:
+    default:
+        return {};
+    }
+}
+
+std::string DefaultCatalogModeForProviderKind(ProviderEditorKind kind) {
+    switch (kind) {
+    case ProviderEditorKind::OpenAIOAuth:
+        return "bundled";
+    case ProviderEditorKind::LmStudioLocal:
+        return "remote_endpoint";
+    case ProviderEditorKind::AgentHttps:
+        return "agent_health";
+    case ProviderEditorKind::BindingProvider:
+        return "manual";
+    case ProviderEditorKind::OllamaLocal:
+        return "manual";
+    case ProviderEditorKind::OllamaCloud:
+        return "manual";
+    case ProviderEditorKind::OpenAICompatible:
+    default:
+        return "manual";
+    }
+}
+
+bool ProviderKindUsesOAuth(ProviderEditorKind kind) {
+    return kind == ProviderEditorKind::OpenAIOAuth;
+}
+
+bool ProviderKindUsesAgentHealth(ProviderEditorKind kind) {
+    return kind == ProviderEditorKind::AgentHttps;
+}
+
+bool ProviderKindUsesRemoteCatalog(ProviderEditorKind kind) {
+    return kind == ProviderEditorKind::LmStudioLocal;
+}
+
+std::string JoinUrlAndPort(std::string url, const std::wstring& port_text) {
+    url = Trim(url);
+    if (url.empty()) {
+        url = "https://127.0.0.1";
+    }
+    if (url.find("://") == std::string::npos) {
+        url = "https://" + url;
+    }
+    while (!url.empty() && url.back() == '/') {
+        url.pop_back();
+    }
+    const auto port = ParseInt(port_text);
+    if (!port || *port <= 0) {
+        return url;
+    }
+
+    URL_COMPONENTSW components{};
+    components.dwStructSize = sizeof(components);
+    std::wstring wide = Utf8ToWide(url);
+    wchar_t host[2048] = {};
+    components.lpszHostName = host;
+    components.dwHostNameLength = static_cast<DWORD>(std::size(host));
+    if (WinHttpCrackUrl(wide.c_str(), static_cast<DWORD>(wide.size()), 0, &components) && components.nPort == INTERNET_DEFAULT_HTTPS_PORT) {
+        return url + ":" + std::to_string(*port);
+    }
+    return url;
+}
+
+std::optional<std::filesystem::path> PickRemoteWorkerJson(HWND owner) {
+    wchar_t path[MAX_PATH] = {};
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = static_cast<DWORD>(std::size(path));
+    ofn.lpstrFilter = L"Remote Ollama Worker JSON\0*.json\0All Files\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+    ofn.lpstrTitle = L"Load Remote Ollama Worker JSON";
+    if (!GetOpenFileNameW(&ofn)) {
+        return std::nullopt;
+    }
+    return std::filesystem::path(path);
+}
+
+struct RemoteWorkerInfo {
+    std::string worker_name;
+    std::string model_name;
+    std::string purpose;
+    int https_port = 8765;
+    std::string shared_secret;
+    std::string certificate_fingerprint;
+};
+
+std::optional<RemoteWorkerInfo> FetchAgentWorkerHealth(const ProviderConfig& provider, std::string* error);
+
+std::wstring JoinLines(const std::vector<std::wstring>& lines) {
+    std::wstring joined;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i > 0) {
+            joined += L"\r\n";
+        }
+        joined += lines[i];
+    }
+    return joined;
+}
+
+constexpr int kProviderEditorInitialWidth = 760;
+constexpr int kProviderEditorInitialHeight = 620;
+constexpr int kProviderEditorExpandedHeight = 690;
+constexpr int kModelEditorWidth = 620;
+constexpr int kModelEditorBaseHeight = 580;
+constexpr int kModelEditorCapabilitiesHeight = 670;
+constexpr int kModelEditorBindingHeight = 800;
+
+std::wstring BuildCapabilityDefaultLabel(const char* capability_name) {
+    return L"(Provider default - " + Utf8ToWide(std::string(capability_name)) + L")";
+}
+
+std::string NormalizeCapabilityValue(std::string value) {
+    value = Trim(value);
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+void PopulateOptionalValueCombo(HWND combo,
+                                const std::vector<std::string>& options,
+                                const std::string& selected_value,
+                                const wchar_t* default_label) {
+    ComboBox_ResetContent(combo);
+    ComboBox_AddString(combo, default_label);
+    int selected_index = 0;
+    const std::string normalized_selected = NormalizeCapabilityValue(selected_value);
+    for (size_t i = 0; i < options.size(); ++i) {
+        ComboBox_AddString(combo, Utf8ToWide(options[i]).c_str());
+        if (NormalizeCapabilityValue(options[i]) == normalized_selected) {
+            selected_index = static_cast<int>(i) + 1;
+        }
+    }
+    ComboBox_SetCurSel(combo, selected_index);
+}
+
+std::string SelectedOptionalComboValue(HWND combo) {
+    const int selection = ComboBox_GetCurSel(combo);
+    if (selection <= 0) {
+        return {};
+    }
+    const int length = ComboBox_GetLBTextLen(combo, selection);
+    if (length <= 0) {
+        return {};
+    }
+    std::wstring text(static_cast<size_t>(length), L'\0');
+    ComboBox_GetLBText(combo, selection, text.data());
+    return WideToUtf8(text);
+}
+
+std::wstring DescribeModelCatalogEntry(const ModelConfig& model) {
+    std::vector<std::wstring> lines;
+    lines.push_back(L"Model ID: " + Utf8ToWide(model.id));
+    lines.push_back(L"Display Name: " + Utf8ToWide(model.display_name));
+    if (model.context_window > 0) {
+        lines.push_back(L"Context Window: " + std::to_wstring(model.context_window));
+    }
+    if (model.max_output_tokens > 0) {
+        lines.push_back(L"Max Output Tokens: " + std::to_wstring(model.max_output_tokens));
+    }
+    lines.push_back(L"Streaming: " + std::wstring(model.supports_streaming ? L"Yes" : L"No"));
+    lines.push_back(L"Tools: " + std::wstring(model.supports_tools ? L"Yes" : L"No"));
+    lines.push_back(L"Vision: " + std::wstring(model.supports_vision ? L"Yes" : L"No"));
+    lines.push_back(L"Embedding: " + std::wstring(model.supports_embedding ? L"Yes" : L"No"));
+    lines.push_back(L"Thinking: " + std::wstring(model.supports_thinking ? L"Yes" : L"No"));
+    lines.push_back(L"Source: " + Utf8ToWide(model.catalog_source));
+    if (!model.reasoning_efforts.empty()) {
+        std::wstring joined;
+        for (size_t i = 0; i < model.reasoning_efforts.size(); ++i) {
+            if (i > 0) joined += L", ";
+            joined += Utf8ToWide(model.reasoning_efforts[i]);
+        }
+        lines.push_back(L"Reasoning: " + joined);
+    }
+    if (!Trim(model.default_reasoning_effort).empty()) {
+        lines.push_back(L"Default Reasoning: " + Utf8ToWide(model.default_reasoning_effort));
+    }
+    if (!model.text_verbosity_modes.empty()) {
+        std::wstring joined;
+        for (size_t i = 0; i < model.text_verbosity_modes.size(); ++i) {
+            if (i > 0) joined += L", ";
+            joined += Utf8ToWide(model.text_verbosity_modes[i]);
+        }
+        lines.push_back(L"Verbosity: " + joined);
+    }
+    if (!Trim(model.default_text_verbosity).empty()) {
+        lines.push_back(L"Default Verbosity: " + Utf8ToWide(model.default_text_verbosity));
+    }
+    return JoinLines(lines);
+}
+
+std::optional<RemoteWorkerInfo> ReadRemoteWorkerInfo(const std::filesystem::path& path, std::string* error) {
+    try {
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open()) {
+            if (error) *error = "Could not open the selected JSON file.";
+            return std::nullopt;
+        }
+        const std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        const auto data = json::parse(text);
+        RemoteWorkerInfo info;
+        info.worker_name = data.value("worker_name", "Remote Ollama Worker");
+        if (data.contains("agent_server") && data["agent_server"].is_object()) {
+            const auto& server = data["agent_server"];
+            info.https_port = server.value("https_port", 8765);
+            info.shared_secret = server.value("shared_secret", "");
+            info.certificate_fingerprint = server.value("certificate_fingerprint", "");
+        }
+        if (data.contains("model") && data["model"].is_object()) {
+            info.model_name = data["model"].value("name", "");
+            info.purpose = data["model"].value("purpose", "");
+        }
+        return info;
+    } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+    }
+    return std::nullopt;
+}
+
+class ProviderEditorDialog {
+public:
+    static std::optional<ProviderConfig> Show(HWND owner, AppStorage* storage, ProviderConfig initial, bool editing) {
+        ProviderEditorDialog dialog(owner, storage, std::move(initial), editing);
+        return dialog.Run();
+    }
+
+private:
+    ProviderEditorDialog(HWND owner, AppStorage* storage, ProviderConfig initial, bool editing)
+        : owner_(owner), storage_(storage), provider_(std::move(initial)), editing_(editing) {}
+
+    static void RegisterWindowClass(HINSTANCE instance) {
+        static bool registered = false;
+        if (registered) return;
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.hInstance = instance;
+        wc.lpfnWndProc = &ProviderEditorDialog::WindowProc;
+        wc.lpszClassName = kProviderEditorClassName;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        RegisterClassExW(&wc);
+        registered = true;
+    }
+
+    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        auto* self = reinterpret_cast<ProviderEditorDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+            self = reinterpret_cast<ProviderEditorDialog*>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            self->hwnd_ = hwnd;
+        }
+        if (!self) return DefWindowProcW(hwnd, message, w_param, l_param);
+
+        switch (message) {
+        case WM_CREATE:
+            self->OnCreate();
+            return 0;
+        case WM_SIZE:
+            self->LayoutControls(LOWORD(l_param), HIWORD(l_param));
+            return 0;
+        case WM_COMMAND:
+            self->OnCommand(LOWORD(w_param), HIWORD(w_param));
+            return 0;
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        default:
+            return DefWindowProcW(hwnd, message, w_param, l_param);
+        }
+    }
+
+    std::optional<ProviderConfig> Run() {
+        RegisterWindowClass(reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr)));
+        hwnd_ = CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            kProviderEditorClassName,
+            editing_ ? L"Edit Provider" : L"Add Provider",
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            kProviderEditorInitialWidth,
+            kProviderEditorInitialHeight,
+            owner_,
+            nullptr,
+            reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr)),
+            this);
+        if (!hwnd_) {
+            return std::nullopt;
+        }
+        CenterWindowToOwner(hwnd_, owner_);
+        EnableWindow(owner_, FALSE);
+
+        MSG msg{};
+        while (IsWindow(hwnd_) && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (!IsDialogMessageW(hwnd_, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+        EnableWindow(owner_, TRUE);
+        SetForegroundWindow(owner_);
+        return result_;
+    }
+
+    int Scale(int value) const {
+        return MulDiv(value, GetDpiForWindow(hwnd_), 96);
+    }
+
+    HWND CreateLabel(const wchar_t* text, int id) {
+        return CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+    }
+
+    HWND CreateEdit(const wchar_t* text, int id, DWORD style = ES_AUTOHSCROLL) {
+        return CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | style,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+    }
+
+    HWND CreateButton(const wchar_t* text, int id, DWORD style = 0) {
+        return CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | style,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+    }
+
+    void OnCreate() {
+        font_ = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        type_label_ = CreateLabel(L"Provider type:", kProviderEditorTypeLabel);
+        type_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProviderEditorTypeCombo), nullptr, nullptr);
+        ComboBox_AddString(type_combo_, L"OpenAI-compatible HTTPS/API");
+        ComboBox_AddString(type_combo_, L"Agent HTTPS Remote Worker");
+        ComboBox_AddString(type_combo_, L"OpenAI OAuth (ChatGPT/Codex)");
+        ComboBox_AddString(type_combo_, L"LM Studio Local");
+        ComboBox_AddString(type_combo_, L"Ollama Local");
+        ComboBox_AddString(type_combo_, L"Ollama Cloud");
+        ComboBox_AddString(type_combo_, L"Binding Provider");
+        ComboBox_SetCurSel(type_combo_, ComboIndexFromProviderKind(ProviderKindFromConfig(provider_)));
+
+        name_label_ = CreateLabel(L"Provider name:", kProviderEditorNameLabel);
+        name_edit_ = CreateEdit(Utf8ToWide(provider_.name).c_str(), kProviderEditorNameEdit);
+        url_label_ = CreateLabel(L"Base URL / Agent HTTPS URL:", kProviderEditorUrlLabel);
+        url_edit_ = CreateEdit(Utf8ToWide(provider_.base_url).c_str(), kProviderEditorUrlEdit);
+        port_label_ = CreateLabel(L"Agent port:", kProviderEditorPortLabel);
+        port_edit_ = CreateEdit(L"", kProviderEditorPortEdit, ES_NUMBER);
+        if (ProviderKindFromConfig(provider_) == ProviderEditorKind::OllamaLocal && provider_.ollama_local_port > 0) {
+            SetWindowTextW(port_edit_, std::to_wstring(provider_.ollama_local_port).c_str());
+        }
+        secret_label_ = CreateLabel(L"API key / shared secret:", kProviderEditorSecretLabel);
+        secret_edit_ = CreateEdit(Utf8ToWide(provider_.api_key).c_str(), kProviderEditorSecretEdit);
+        cert_label_ = CreateLabel(L"Certificate fingerprint:", kProviderEditorCertLabel);
+        cert_edit_ = CreateEdit(Utf8ToWide(provider_.tls_certificate_fingerprint).c_str(), kProviderEditorCertEdit, ES_AUTOHSCROLL | ES_READONLY);
+        max_active_label_ = CreateLabel(L"Max active requests (0 = no limit):", kProviderEditorMaxActiveLabel);
+        max_active_edit_ = CreateEdit(std::to_wstring(std::max(0, provider_.max_active_requests)).c_str(), kProviderEditorMaxActiveEdit, ES_NUMBER);
+        max_queue_label_ = CreateLabel(L"Max queue size (0 = no limit):", kProviderEditorMaxQueueLabel);
+        max_queue_edit_ = CreateEdit(std::to_wstring(std::max(0, provider_.max_queue_size)).c_str(), kProviderEditorMaxQueueEdit, ES_NUMBER);
+        load_json_button_ = CreateButton(L"Load Remote JSON", kProviderEditorLoadJson);
+        auth_mode_label_ = CreateLabel(L"Auth mode:", kProviderEditorAuthModeLabel);
+        auth_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProviderEditorAuthModeCombo), nullptr, nullptr);
+        ComboBox_AddString(auth_mode_combo_, L"Browser OAuth");
+        ComboBox_AddString(auth_mode_combo_, L"Device Code");
+        ComboBox_SetCurSel(auth_mode_combo_, provider_.auth_mode == "device_code" ? 1 : 0);
+        auth_status_label_ = CreateLabel(L"Auth status:", kProviderEditorAuthStatusLabel);
+        auth_status_value_ = CreateLabel(L"Not authenticated", kProviderEditorAuthStatusValue);
+        account_label_ = CreateLabel(L"Account label:", kProviderEditorAccountLabel);
+        account_edit_ = CreateEdit(Utf8ToWide(provider_.oauth_account_label).c_str(), kProviderEditorAccountEdit, ES_AUTOHSCROLL | ES_READONLY);
+        sign_in_button_ = CreateButton(L"Sign In...", kProviderEditorSignIn);
+        sign_out_button_ = CreateButton(L"Sign Out", kProviderEditorSignOut);
+        refresh_models_button_ = CreateButton(L"Refresh Models", kProviderEditorRefreshModels);
+        store_history_check_ = CreateButton(L"Store remote conversation history", kProviderEditorStoreHistory, BS_AUTOCHECKBOX);
+        Button_SetCheck(store_history_check_, provider_.oauth_store_remote_history ? BST_CHECKED : BST_UNCHECKED);
+        help_label_ = CreateLabel(L"Provider queueing runs inside the app before requests are dispatched. Agent HTTPS providers use the remote worker shared secret as the bearer token. Add Model can query /health from the worker.", kProviderEditorHelp);
+        save_button_ = CreateButton(L"Save", kProviderEditorSave);
+        cancel_button_ = CreateButton(L"Cancel", kProviderEditorCancel);
+
+        for (HWND control : {type_label_, type_combo_, name_label_, name_edit_, url_label_, url_edit_, port_label_, port_edit_, secret_label_, secret_edit_, cert_label_, cert_edit_, max_active_label_, max_active_edit_, max_queue_label_, max_queue_edit_, load_json_button_, auth_mode_label_, auth_mode_combo_, auth_status_label_, auth_status_value_, account_label_, account_edit_, sign_in_button_, sign_out_button_, refresh_models_button_, store_history_check_, help_label_, save_button_, cancel_button_}) {
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+        }
+        ApplyAuthVisualState();
+        UpdateForType();
+        RelayoutToClientRect();
+    }
+
+    void LayoutControls(int width, int height) const {
+        const int margin = Scale(14);
+        const int gutter = Scale(8);
+        const int label_height = Scale(18);
+        const int edit_height = Scale(24);
+        const int button_height = Scale(30);
+        const int footer_y = height - margin - button_height;
+        const int label_width = Scale(145);
+        const int port_width = Scale(100);
+        int y = margin;
+
+        MoveWindow(type_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(type_combo_, margin + label_width, y, width - margin * 2 - label_width, Scale(120), TRUE);
+        y += edit_height + gutter;
+
+        MoveWindow(name_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(name_edit_, margin + label_width, y, width - margin * 2 - label_width, edit_height, TRUE);
+        y += edit_height + gutter;
+
+        MoveWindow(url_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(url_edit_, margin + label_width, y, width - margin * 2 - label_width - port_width - gutter, edit_height, TRUE);
+        MoveWindow(port_label_, width - margin - port_width, y - label_height, port_width, label_height, TRUE);
+        MoveWindow(port_edit_, width - margin - port_width, y, port_width, edit_height, TRUE);
+        y += edit_height + gutter;
+
+        MoveWindow(auth_mode_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(auth_mode_combo_, margin + label_width, y, Scale(180), Scale(120), TRUE);
+        y += edit_height + gutter;
+
+        MoveWindow(secret_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(secret_edit_, margin + label_width, y, width - margin * 2 - label_width, edit_height, TRUE);
+        y += edit_height + gutter;
+
+        MoveWindow(auth_status_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(auth_status_value_, margin + label_width, y + Scale(4), width - margin * 2 - label_width, label_height, TRUE);
+        y += edit_height + gutter;
+
+        MoveWindow(account_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(account_edit_, margin + label_width, y, width - margin * 2 - label_width, edit_height, TRUE);
+        y += edit_height + gutter;
+
+        MoveWindow(sign_in_button_, margin + label_width, y, Scale(110), button_height, TRUE);
+        MoveWindow(sign_out_button_, margin + label_width + Scale(118), y, Scale(100), button_height, TRUE);
+        MoveWindow(refresh_models_button_, margin + label_width + Scale(226), y, Scale(120), button_height, TRUE);
+        MoveWindow(load_json_button_, margin + label_width, y, Scale(150), button_height, TRUE);
+        y += button_height + gutter;
+
+        MoveWindow(store_history_check_, margin + label_width, y, Scale(260), edit_height, TRUE);
+        y += edit_height + gutter;
+
+        MoveWindow(cert_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(cert_edit_, margin + label_width, y, width - margin * 2 - label_width, edit_height, TRUE);
+        y += edit_height + gutter;
+
+        MoveWindow(max_active_label_, margin, y + Scale(4), Scale(220), label_height, TRUE);
+        MoveWindow(max_active_edit_, margin + Scale(226), y, Scale(90), edit_height, TRUE);
+        MoveWindow(max_queue_label_, margin + Scale(336), y + Scale(4), Scale(205), label_height, TRUE);
+        MoveWindow(max_queue_edit_, margin + Scale(544), y, Scale(90), edit_height, TRUE);
+        y += edit_height + gutter;
+
+        MoveWindow(help_label_, margin, y, width - margin * 2, footer_y - y - gutter, TRUE);
+
+        MoveWindow(cancel_button_, width - margin - Scale(90), footer_y, Scale(90), button_height, TRUE);
+        MoveWindow(save_button_, width - margin - Scale(190), footer_y, Scale(90), button_height, TRUE);
+    }
+
+    void OnCommand(int id, int notification) {
+        switch (id) {
+        case kProviderEditorTypeCombo:
+            if (notification == CBN_SELCHANGE) UpdateForType();
+            break;
+        case kProviderEditorAuthModeCombo:
+            if (notification == CBN_SELCHANGE) UpdateAuthModeFromCombo();
+            break;
+        case kProviderEditorLoadJson:
+            LoadRemoteJson();
+            break;
+        case kProviderEditorSignIn:
+            BeginOAuthSignIn();
+            break;
+        case kProviderEditorSignOut:
+            BeginOAuthSignOut();
+            break;
+        case kProviderEditorRefreshModels:
+            RefreshCatalogPreview();
+            break;
+        case kProviderEditorSave:
+            ValidateAndSave();
+            break;
+        case kProviderEditorCancel:
+            DestroyWindow(hwnd_);
+            break;
+        default:
+            break;
+        }
+    }
+
+    void UpdateForType() {
+        const ProviderEditorKind kind = SelectedProviderKind();
+        const bool agent = ProviderKindUsesAgentHealth(kind);
+        const bool oauth = ProviderKindUsesOAuth(kind);
+        const bool remote_catalog = ProviderKindUsesRemoteCatalog(kind);
+        const bool ollama = kind == ProviderEditorKind::OllamaLocal;
+        const bool binding = kind == ProviderEditorKind::BindingProvider;
+        const bool managed_catalog = oauth || remote_catalog;
+
+        ShowWindow(url_label_, (ollama || binding) ? SW_HIDE : SW_SHOW);
+        ShowWindow(url_edit_, (ollama || binding) ? SW_HIDE : SW_SHOW);
+        ShowWindow(port_label_, (agent || ollama) ? SW_SHOW : SW_HIDE);
+        ShowWindow(port_edit_, (agent || ollama) ? SW_SHOW : SW_HIDE);
+        ShowWindow(cert_label_, agent ? SW_SHOW : SW_HIDE);
+        ShowWindow(cert_edit_, agent ? SW_SHOW : SW_HIDE);
+        ShowWindow(load_json_button_, agent ? SW_SHOW : SW_HIDE);
+        ShowWindow(secret_label_, oauth || remote_catalog || ollama || binding ? SW_HIDE : SW_SHOW);
+        ShowWindow(secret_edit_, oauth || remote_catalog || ollama || binding ? SW_HIDE : SW_SHOW);
+        ShowWindow(auth_mode_label_, oauth ? SW_SHOW : SW_HIDE);
+        ShowWindow(auth_mode_combo_, oauth ? SW_SHOW : SW_HIDE);
+        ShowWindow(auth_status_label_, oauth ? SW_SHOW : SW_HIDE);
+        ShowWindow(auth_status_value_, oauth ? SW_SHOW : SW_HIDE);
+        ShowWindow(account_label_, oauth ? SW_SHOW : SW_HIDE);
+        ShowWindow(account_edit_, oauth ? SW_SHOW : SW_HIDE);
+        ShowWindow(sign_in_button_, oauth ? SW_SHOW : SW_HIDE);
+        ShowWindow(sign_out_button_, oauth ? SW_SHOW : SW_HIDE);
+        ShowWindow(store_history_check_, oauth ? SW_SHOW : SW_HIDE);
+        ShowWindow(refresh_models_button_, (managed_catalog || agent) ? SW_SHOW : SW_HIDE);
+        EnableWindow(store_history_check_, FALSE);
+        if (oauth) {
+            Button_SetCheck(store_history_check_, BST_UNCHECKED);
+        }
+
+        if (agent) {
+            SetWindowTextW(url_label_, L"Agent HTTPS URL:");
+            SetWindowTextW(secret_label_, L"Shared secret:");
+        } else if (oauth) {
+            SetWindowTextW(url_label_, L"Codex endpoint:");
+            SetWindowTextW(secret_label_, L"OAuth token:");
+        } else if (remote_catalog) {
+            SetWindowTextW(url_label_, L"LM Studio URL:");
+            SetWindowTextW(secret_label_, L"API key:");
+        } else if (ollama) {
+            SetWindowTextW(url_label_, L"Local Ollama URL:");
+            SetWindowTextW(port_label_, L"Ollama port:");
+            SetWindowTextW(secret_label_, L"API key:");
+        } else if (binding) {
+            SetWindowTextW(url_label_, L"Binding description:");
+            SetWindowTextW(secret_label_, L"API key:");
+        } else {
+            SetWindowTextW(url_label_, L"Base URL:");
+            SetWindowTextW(secret_label_, L"API key:");
+        }
+
+        const std::string default_url = DefaultBaseUrlForProviderKind(kind);
+        if (!ollama && TrimWide(GetWindowTextString(url_edit_)).empty() && !default_url.empty()) {
+            SetWindowTextW(url_edit_, Utf8ToWide(default_url).c_str());
+        } else if (binding) {
+            SetWindowTextW(url_edit_, L"binding://local");
+        }
+        SendMessageW(url_edit_, EM_SETREADONLY, (oauth || binding) ? TRUE : FALSE, 0);
+
+        if (agent && TrimWide(GetWindowTextString(port_edit_)).empty()) {
+            SetWindowTextW(port_edit_, L"8765");
+        }
+        if (ollama && TrimWide(GetWindowTextString(port_edit_)).empty()) {
+            SetWindowTextW(port_edit_, L"12434");
+        }
+
+        if (oauth) {
+            SetWindowTextW(help_label_, L"OpenAI OAuth providers use the official Codex login flow inside an app-owned CODEX_HOME. Sign In launches `codex login` or `codex login --device-auth`, imports the auth cache into the secure provider auth store, and model requests are sent through the official Codex Responses bridge. ChatGPT/Codex sessions currently use non-stored requests, so remote history is disabled here. Add Model uses the bundled OpenAI OAuth manifest.");
+        } else if (remote_catalog) {
+            SetWindowTextW(help_label_, L"LM Studio providers use remote model discovery from /models. Refresh Models will query the local endpoint and update the provider's available model list.");
+        } else if (ollama) {
+            SetWindowTextW(help_label_, L"Ollama providers run `ollama serve` on a custom port (default 12434) and communicate via HTTP /api/chat. Port, threads, GPU layers, and context length are configurable per model.");
+        } else if (agent) {
+            SetWindowTextW(help_label_, L"Agent HTTPS providers use the remote worker shared secret as the bearer token. Load Remote JSON pulls the worker connection settings and Add Model can query /health from the worker.");
+        } else if (binding) {
+            SetWindowTextW(help_label_, L"Binding providers are virtual routers. Their models do not send requests directly; they route to concrete provider/model targets using top-down failover or round-robin selection. Queueing stays on the concrete providers.");
+        } else {
+            SetWindowTextW(help_label_, L"OpenAI-compatible providers keep manual model management. Queue limits apply inside the app before requests are dispatched.");
+        }
+        ApplyAuthVisualState();
+        EnsureWindowHeight(oauth ? kProviderEditorExpandedHeight : kProviderEditorInitialHeight);
+        RelayoutToClientRect();
+    }
+
+    void RelayoutToClientRect() const {
+        RECT client{};
+        GetClientRect(hwnd_, &client);
+        LayoutControls(client.right - client.left, client.bottom - client.top);
+    }
+
+    void EnsureWindowHeight(int target_height) const {
+        RECT window{};
+        if (!GetWindowRect(hwnd_, &window)) {
+            return;
+        }
+        const int current_height = window.bottom - window.top;
+        if (current_height >= target_height) {
+            return;
+        }
+        SetWindowPos(hwnd_, nullptr, 0, 0, window.right - window.left, target_height,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    ProviderEditorKind SelectedProviderKind() const {
+        return ProviderKindFromComboIndex(ComboBox_GetCurSel(type_combo_));
+    }
+
+    void UpdateAuthModeFromCombo() {
+        provider_.auth_mode = ComboBox_GetCurSel(auth_mode_combo_) == 1 ? "device_code" : "browser_oauth";
+    }
+
+    void ApplyAuthVisualState() {
+        UpdateAuthModeFromCombo();
+        const bool authenticated = pending_clear_auth_ ? false : (pending_auth_record_.has_value() || provider_.oauth_authenticated);
+        const bool has_api_key = pending_clear_auth_
+            ? false
+            : (pending_auth_record_ ? !pending_auth_record_->api_key.empty() : !provider_.api_key.empty());
+        const std::string account_label = pending_clear_auth_
+            ? ""
+            : (pending_auth_record_
+                ? (!pending_auth_record_->account_display_name.empty()
+                    ? pending_auth_record_->account_display_name
+                    : (!pending_auth_record_->account_email.empty()
+                        ? pending_auth_record_->account_email
+                        : pending_auth_record_->account_id))
+                : provider_.oauth_account_label);
+        if (!authenticated) {
+            SetWindowTextW(auth_status_value_, L"Not authenticated");
+        } else if (has_api_key) {
+            SetWindowTextW(auth_status_value_, L"Authenticated (API key available)");
+        } else {
+            SetWindowTextW(auth_status_value_, L"Authenticated (access token only)");
+        }
+        SetWindowTextW(account_edit_, Utf8ToWide(account_label).c_str());
+        EnableWindow(sign_out_button_, authenticated);
+    }
+
+    void BeginOAuthSignIn() {
+        if (!storage_) {
+            MessageBoxW(hwnd_, L"Storage is not available.", L"OpenAI OAuth", MB_OK | MB_ICONERROR);
+            return;
+        }
+        ProviderConfig login_provider = provider_;
+        login_provider.provider_type = ProviderTypeFromKind(SelectedProviderKind());
+        login_provider.auth_mode = ComboBox_GetCurSel(auth_mode_combo_) == 1 ? "device_code" : "browser_oauth";
+
+        std::string error;
+        if (!RunProviderCodexLoginFlow(*storage_, login_provider, &error)) {
+            std::wstring message = Utf8ToWide(error);
+            const std::filesystem::path log_path = ProviderCodexBridgeLoginLogPath(*storage_, provider_.id);
+            if (!log_path.empty()) {
+                message += L"\r\n\r\nLogin log: ";
+                message += log_path.wstring();
+            }
+            MessageBoxW(hwnd_, message.c_str(), L"OpenAI OAuth Sign In", MB_OK | MB_ICONERROR);
+            return;
+        }
+
+        const auto imported = ImportProviderAuthFromCodexHome(
+            ProviderCodexBridgeHome(*storage_, provider_.id),
+            provider_.id,
+            provider_.oauth_credential_id.empty() ? MakeId("provider_auth") : provider_.oauth_credential_id,
+            &error);
+        if (!imported) {
+            MessageBoxW(hwnd_, Utf8ToWide(error).c_str(), L"OpenAI OAuth Sign In", MB_OK | MB_ICONERROR);
+            return;
+        }
+
+        pending_auth_record_ = *imported;
+        pending_clear_auth_ = false;
+        provider_.oauth_credential_id = pending_auth_record_->credential_id;
+        provider_.oauth_account_label = !pending_auth_record_->account_display_name.empty()
+            ? pending_auth_record_->account_display_name
+            : (!pending_auth_record_->account_email.empty() ? pending_auth_record_->account_email : pending_auth_record_->account_id);
+        provider_.oauth_authenticated = true;
+        provider_.api_key = pending_auth_record_->api_key;
+        ApplyAuthVisualState();
+
+        std::wstring success = L"Imported Codex login for ";
+        success += Utf8ToWide(provider_.oauth_account_label.empty() ? provider_.name : provider_.oauth_account_label);
+        success += L".\r\n\r\nThis provider will send model requests through the official Codex OAuth transport. ChatGPT/Codex sessions currently use non-stored Responses requests.";
+        SetWindowTextW(help_label_, success.c_str());
+    }
+
+    void BeginOAuthSignOut() {
+        pending_auth_record_.reset();
+        pending_clear_auth_ = true;
+        provider_.oauth_authenticated = false;
+        provider_.oauth_account_label.clear();
+        provider_.api_key.clear();
+        ApplyAuthVisualState();
+    }
+
+    void RefreshCatalogPreview() {
+        if (!storage_) {
+            MessageBoxW(hwnd_, L"Storage is not available.", L"Refresh Models", MB_OK | MB_ICONERROR);
+            return;
+        }
+        ProviderConfig preview = provider_;
+        const auto kind = SelectedProviderKind();
+        const bool agent = ProviderKindUsesAgentHealth(kind);
+        preview.provider_type = ProviderTypeFromKind(kind);
+        preview.base_url = WideToUtf8(TrimWide(GetWindowTextString(url_edit_)));
+        if (agent) {
+            preview.base_url = JoinUrlAndPort(preview.base_url, GetWindowTextString(port_edit_));
+        }
+        preview.api_key = pending_auth_record_
+            ? pending_auth_record_->api_key
+            : preview.api_key;
+        preview.model_catalog_mode = DefaultCatalogModeForProviderKind(kind);
+
+        std::string error;
+        const auto catalog = LoadProviderCatalog(storage_, preview, &error);
+        if (!error.empty() && catalog.empty()) {
+            MessageBoxW(hwnd_, Utf8ToWide(error).c_str(), L"Refresh Models", MB_OK | MB_ICONERROR);
+            return;
+        }
+        SyncProviderModelsFromCatalog(&provider_, catalog);
+        std::wstring message = L"Loaded " + std::to_wstring(provider_.models.size()) + L" model(s) into this provider draft.";
+        SetWindowTextW(help_label_, message.c_str());
+    }
+
+    void LoadRemoteJson() {
+        const auto path = PickRemoteWorkerJson(hwnd_);
+        if (!path) return;
+
+        std::string error;
+        const auto info = ReadRemoteWorkerInfo(*path, &error);
+        if (!info) {
+            MessageBoxW(hwnd_, Utf8ToWide(error).c_str(), L"Load Remote JSON", MB_OK | MB_ICONERROR);
+            return;
+        }
+        ComboBox_SetCurSel(type_combo_, 1);
+        UpdateForType();
+        if (!info->worker_name.empty()) SetWindowTextW(name_edit_, Utf8ToWide(info->worker_name).c_str());
+        SetWindowTextW(port_edit_, std::to_wstring(info->https_port).c_str());
+        SetWindowTextW(secret_edit_, Utf8ToWide(info->shared_secret).c_str());
+        SetWindowTextW(cert_edit_, Utf8ToWide(info->certificate_fingerprint).c_str());
+
+        // Auto-fetch models from the remote worker
+        RefreshCatalogPreview();
+    }
+
+    void ValidateAndSave() {
+        ProviderConfig provider = provider_;
+        const ProviderEditorKind kind = SelectedProviderKind();
+        const bool agent = ProviderKindUsesAgentHealth(kind);
+        const bool oauth = ProviderKindUsesOAuth(kind);
+        const bool ollama = kind == ProviderEditorKind::OllamaLocal;
+        const bool binding = kind == ProviderEditorKind::BindingProvider;
+        provider.provider_type = ProviderTypeFromKind(kind);
+        provider.model_catalog_mode = DefaultCatalogModeForProviderKind(kind);
+        provider.name = WideToUtf8(TrimWide(GetWindowTextString(name_edit_)));
+        if (provider.name.empty()) {
+            MessageBoxW(hwnd_, L"Provider name is required.", L"Missing Provider Name", MB_OK | MB_ICONERROR);
+            SetFocus(name_edit_);
+            return;
+        }
+        provider.base_url = WideToUtf8(TrimWide(GetWindowTextString(url_edit_)));
+        if (agent) {
+            provider.base_url = JoinUrlAndPort(provider.base_url, GetWindowTextString(port_edit_));
+        }
+        if (ollama) {
+            provider.base_url.clear();
+            provider.ollama_local_port = std::max(0, ParseInt(GetWindowTextString(port_edit_)).value_or(12434));
+        }
+        if (binding) {
+            provider.base_url = "binding://local";
+        }
+        if (!binding && !ollama && provider.base_url.empty()) {
+            MessageBoxW(hwnd_, L"Provider URL is required.", L"Missing Provider URL", MB_OK | MB_ICONERROR);
+            SetFocus(url_edit_);
+            return;
+        }
+        provider.auth_mode = oauth ? (ComboBox_GetCurSel(auth_mode_combo_) == 1 ? "device_code" : "browser_oauth") : "";
+        provider.api_key = (oauth || ollama || binding) ? provider.api_key : WideToUtf8(TrimWide(GetWindowTextString(secret_edit_)));
+        provider.tls_certificate_fingerprint = WideToUtf8(TrimWide(GetWindowTextString(cert_edit_)));
+        provider.max_active_requests = std::max(0, ParseInt(GetWindowTextString(max_active_edit_)).value_or(0));
+        provider.max_queue_size = std::max(0, ParseInt(GetWindowTextString(max_queue_edit_)).value_or(0));
+        if (binding) {
+            provider.max_active_requests = 0;
+            provider.max_queue_size = 0;
+        }
+        if (agent && provider.api_key.empty()) {
+            MessageBoxW(hwnd_, L"Agent HTTPS providers require the shared secret from the remote worker JSON.", L"Missing Shared Secret", MB_OK | MB_ICONERROR);
+            SetFocus(secret_edit_);
+            return;
+        }
+        if (oauth) {
+            provider.oauth_store_remote_history = false;
+            provider.oauth_authenticated = pending_clear_auth_ ? false : (pending_auth_record_.has_value() || provider_.oauth_authenticated);
+            provider.oauth_account_label = pending_clear_auth_
+                ? ""
+                : (pending_auth_record_
+                    ? (!pending_auth_record_->account_display_name.empty()
+                        ? pending_auth_record_->account_display_name
+                        : pending_auth_record_->account_email)
+                    : provider_.oauth_account_label);
+            if (provider.oauth_credential_id.empty() && pending_auth_record_) {
+                provider.oauth_credential_id = pending_auth_record_->credential_id;
+            }
+        } else {
+            provider.auth_mode.clear();
+            provider.oauth_credential_id.clear();
+            provider.oauth_account_label.clear();
+            provider.oauth_authenticated = false;
+            provider.oauth_store_remote_history = false;
+        }
+
+        try {
+            if (oauth) {
+                if (pending_clear_auth_ && !provider_.oauth_credential_id.empty()) {
+                    storage_->DeleteProviderAuthRecord(provider_.oauth_credential_id);
+                    std::string clear_error;
+                    (void)ClearProviderCodexBridge(*storage_, provider.id, &clear_error);
+                }
+                if (pending_auth_record_) {
+                    ProviderAuthRecord record = *pending_auth_record_;
+                    record.provider_id = provider.id;
+                    storage_->SaveProviderAuthRecord(record);
+                    provider.oauth_credential_id = record.credential_id;
+                    provider.api_key = record.api_key;
+                }
+            } else if (!provider_.oauth_credential_id.empty()) {
+                storage_->DeleteProviderAuthRecord(provider_.oauth_credential_id);
+                std::string clear_error;
+                (void)ClearProviderCodexBridge(*storage_, provider.id, &clear_error);
+            }
+        } catch (const std::exception& ex) {
+            MessageBoxW(hwnd_, Utf8ToWide(ex.what()).c_str(), L"Provider Auth Storage", MB_OK | MB_ICONERROR);
+            return;
+        }
+
+        result_ = std::move(provider);
+        DestroyWindow(hwnd_);
+    }
+
+    HWND owner_ = nullptr;
+    HWND hwnd_ = nullptr;
+    AppStorage* storage_ = nullptr;
+    HFONT font_ = nullptr;
+    ProviderConfig provider_;
+    bool editing_ = false;
+    std::optional<ProviderConfig> result_;
+    std::optional<ProviderAuthRecord> pending_auth_record_;
+    bool pending_clear_auth_ = false;
+
+    HWND type_label_ = nullptr;
+    HWND type_combo_ = nullptr;
+    HWND name_label_ = nullptr;
+    HWND name_edit_ = nullptr;
+    HWND url_label_ = nullptr;
+    HWND url_edit_ = nullptr;
+    HWND port_label_ = nullptr;
+    HWND port_edit_ = nullptr;
+    HWND secret_label_ = nullptr;
+    HWND secret_edit_ = nullptr;
+    HWND cert_label_ = nullptr;
+    HWND cert_edit_ = nullptr;
+    HWND max_active_label_ = nullptr;
+    HWND max_active_edit_ = nullptr;
+    HWND max_queue_label_ = nullptr;
+    HWND max_queue_edit_ = nullptr;
+    HWND load_json_button_ = nullptr;
+    HWND auth_mode_label_ = nullptr;
+    HWND auth_mode_combo_ = nullptr;
+    HWND auth_status_label_ = nullptr;
+    HWND auth_status_value_ = nullptr;
+    HWND account_label_ = nullptr;
+    HWND account_edit_ = nullptr;
+    HWND sign_in_button_ = nullptr;
+    HWND sign_out_button_ = nullptr;
+    HWND refresh_models_button_ = nullptr;
+    HWND store_history_check_ = nullptr;
+    HWND help_label_ = nullptr;
+    HWND save_button_ = nullptr;
+    HWND cancel_button_ = nullptr;
+};
+
+std::wstring DescribeBindingTarget(const BindingTargetConfig& target,
+                                   const std::vector<ProviderConfig>& providers) {
+    std::string provider_name = target.provider_id;
+    std::string model_name = target.model_id;
+    for (const auto& provider : providers) {
+        if (provider.id != target.provider_id) {
+            continue;
+        }
+        provider_name = provider.name;
+        for (const auto& model : provider.models) {
+            if (model.id == target.model_id) {
+                model_name = model.display_name.empty() ? model.id : model.display_name;
+                break;
+            }
+        }
+        break;
+    }
+    std::wstring label = Utf8ToWide(provider_name + " / " + model_name);
+    if (!target.enabled) {
+        label += L"  [disabled]";
+    }
+    label += L"  p=" + std::to_wstring(target.priority);
+    return label;
+}
+
+class BindingTargetEditorDialog {
+public:
+    static std::optional<BindingTargetConfig> Show(HWND owner,
+                                                   const std::vector<ProviderConfig>& providers,
+                                                   std::string binding_provider_id,
+                                                   BindingTargetConfig initial,
+                                                   bool editing) {
+        BindingTargetEditorDialog dialog(owner, providers, std::move(binding_provider_id), std::move(initial), editing);
+        return dialog.Run();
+    }
+
+private:
+    BindingTargetEditorDialog(HWND owner,
+                              const std::vector<ProviderConfig>& providers,
+                              std::string binding_provider_id,
+                              BindingTargetConfig initial,
+                              bool editing)
+        : owner_(owner),
+          providers_(providers),
+          binding_provider_id_(std::move(binding_provider_id)),
+          target_(std::move(initial)),
+          editing_(editing) {}
+
+    enum ControlId : int {
+        kProviderLabel = 2401,
+        kProviderCombo = 2402,
+        kModelLabel = 2403,
+        kModelCombo = 2404,
+        kEnabledCheck = 2405,
+        kPriorityLabel = 2406,
+        kPriorityEdit = 2407,
+        kBusyIntervalLabel = 2408,
+        kBusyIntervalEdit = 2409,
+        kBusyBudgetLabel = 2410,
+        kBusyBudgetEdit = 2411,
+        kBusyCooldownLabel = 2412,
+        kBusyCooldownEdit = 2413,
+        kLimitCooldownLabel = 2414,
+        kLimitCooldownEdit = 2415,
+        kErrorCooldownLabel = 2416,
+        kErrorCooldownEdit = 2417,
+        kSave = IDOK,
+        kCancel = IDCANCEL,
+    };
+
+    static constexpr const wchar_t* kClassName = L"AgentBindingTargetEditorWindow";
+
+    struct ConcreteProviderRef {
+        size_t index = 0;
+        const ProviderConfig* provider = nullptr;
+    };
+
+    static void RegisterWindowClass(HINSTANCE instance) {
+        static bool registered = false;
+        if (registered) return;
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.hInstance = instance;
+        wc.lpfnWndProc = &BindingTargetEditorDialog::WindowProc;
+        wc.lpszClassName = kClassName;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        RegisterClassExW(&wc);
+        registered = true;
+    }
+
+    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        auto* self = reinterpret_cast<BindingTargetEditorDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+            self = reinterpret_cast<BindingTargetEditorDialog*>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            self->hwnd_ = hwnd;
+        }
+        if (!self) return DefWindowProcW(hwnd, message, w_param, l_param);
+        switch (message) {
+        case WM_CREATE:
+            self->OnCreate();
+            return 0;
+        case WM_SIZE:
+            self->LayoutControls(LOWORD(l_param), HIWORD(l_param));
+            return 0;
+        case WM_COMMAND:
+            self->OnCommand(LOWORD(w_param), HIWORD(w_param));
+            return 0;
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        default:
+            return DefWindowProcW(hwnd, message, w_param, l_param);
+        }
+    }
+
+    std::optional<BindingTargetConfig> Run() {
+        RegisterWindowClass(reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr)));
+        hwnd_ = CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            kClassName,
+            editing_ ? L"Edit Binding Target" : L"Add Binding Target",
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            620,
+            520,
+            owner_,
+            nullptr,
+            reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr)),
+            this);
+        if (!hwnd_) {
+            return std::nullopt;
+        }
+        CenterWindowToOwner(hwnd_, owner_);
+        EnableWindow(owner_, FALSE);
+        MSG msg{};
+        while (IsWindow(hwnd_) && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (!IsDialogMessageW(hwnd_, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+        EnableWindow(owner_, TRUE);
+        SetForegroundWindow(owner_);
+        return result_;
+    }
+
+    int Scale(int value) const {
+        return MulDiv(value, GetDpiForWindow(hwnd_), 96);
+    }
+
+    HWND CreateLabel(const wchar_t* text, int id) {
+        return CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+    }
+
+    HWND CreateEdit(const wchar_t* text, int id) {
+        return CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+    }
+
+    HWND CreateButton(const wchar_t* text, int id, DWORD style = 0) {
+        return CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | style,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+    }
+
+    void OnCreate() {
+        font_ = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        provider_label_ = CreateLabel(L"Provider:", kProviderLabel);
+        provider_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProviderCombo), nullptr, nullptr);
+        model_label_ = CreateLabel(L"Model:", kModelLabel);
+        model_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelCombo), nullptr, nullptr);
+        enabled_check_ = CreateButton(L"Enabled", kEnabledCheck, BS_AUTOCHECKBOX);
+        priority_label_ = CreateLabel(L"Priority:", kPriorityLabel);
+        priority_edit_ = CreateEdit(std::to_wstring(target_.priority).c_str(), kPriorityEdit);
+        busy_interval_label_ = CreateLabel(L"Busy retry interval (s):", kBusyIntervalLabel);
+        busy_interval_edit_ = CreateEdit(std::to_wstring(target_.busy_retry_interval_seconds).c_str(), kBusyIntervalEdit);
+        busy_budget_label_ = CreateLabel(L"Busy retry budget (s):", kBusyBudgetLabel);
+        busy_budget_edit_ = CreateEdit(std::to_wstring(target_.busy_retry_budget_seconds).c_str(), kBusyBudgetEdit);
+        busy_cooldown_label_ = CreateLabel(L"Busy cooldown (s):", kBusyCooldownLabel);
+        busy_cooldown_edit_ = CreateEdit(std::to_wstring(target_.busy_cooldown_seconds).c_str(), kBusyCooldownEdit);
+        limit_cooldown_label_ = CreateLabel(L"Limit cooldown (s):", kLimitCooldownLabel);
+        limit_cooldown_edit_ = CreateEdit(std::to_wstring(target_.limit_cooldown_seconds).c_str(), kLimitCooldownEdit);
+        error_cooldown_label_ = CreateLabel(L"Error cooldown (s):", kErrorCooldownLabel);
+        error_cooldown_edit_ = CreateEdit(std::to_wstring(target_.error_cooldown_seconds).c_str(), kErrorCooldownEdit);
+        save_button_ = CreateButton(L"Save", kSave);
+        cancel_button_ = CreateButton(L"Cancel", kCancel);
+
+        for (HWND control : {provider_label_, provider_combo_, model_label_, model_combo_, enabled_check_, priority_label_, priority_edit_, busy_interval_label_, busy_interval_edit_, busy_budget_label_, busy_budget_edit_, busy_cooldown_label_, busy_cooldown_edit_, limit_cooldown_label_, limit_cooldown_edit_, error_cooldown_label_, error_cooldown_edit_, save_button_, cancel_button_}) {
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+        }
+        Button_SetCheck(enabled_check_, target_.enabled ? BST_CHECKED : BST_UNCHECKED);
+
+        RebuildProviderChoices();
+        RelayoutToClientRect();
+    }
+
+    void LayoutControls(int width, int height) const {
+        const int margin = Scale(14);
+        const int gutter = Scale(8);
+        const int label_width = Scale(150);
+        const int label_height = Scale(18);
+        const int edit_height = Scale(24);
+        const int button_height = Scale(30);
+        const int footer_y = height - margin - button_height;
+        int y = margin;
+
+        MoveWindow(provider_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(provider_combo_, margin + label_width, y, width - margin * 2 - label_width, Scale(160), TRUE);
+        y += edit_height + gutter;
+        MoveWindow(model_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(model_combo_, margin + label_width, y, width - margin * 2 - label_width, Scale(160), TRUE);
+        y += edit_height + gutter;
+        MoveWindow(enabled_check_, margin + label_width, y, Scale(120), edit_height, TRUE);
+        y += edit_height + gutter;
+
+        auto place_pair = [&](HWND label, HWND edit) {
+            MoveWindow(label, margin, y + Scale(4), label_width, label_height, TRUE);
+            MoveWindow(edit, margin + label_width, y, Scale(120), edit_height, TRUE);
+            y += edit_height + gutter;
+        };
+
+        place_pair(priority_label_, priority_edit_);
+        place_pair(busy_interval_label_, busy_interval_edit_);
+        place_pair(busy_budget_label_, busy_budget_edit_);
+        place_pair(busy_cooldown_label_, busy_cooldown_edit_);
+        place_pair(limit_cooldown_label_, limit_cooldown_edit_);
+        place_pair(error_cooldown_label_, error_cooldown_edit_);
+
+        MoveWindow(cancel_button_, width - margin - Scale(90), footer_y, Scale(90), button_height, TRUE);
+        MoveWindow(save_button_, width - margin - Scale(190), footer_y, Scale(90), button_height, TRUE);
+    }
+
+    void OnCommand(int id, int notification) {
+        if (id == kProviderCombo && notification == CBN_SELCHANGE) {
+            RebuildModelChoices();
+        } else if (id == kSave) {
+            ValidateAndSave();
+        } else if (id == kCancel) {
+            DestroyWindow(hwnd_);
+        }
+    }
+
+    void RelayoutToClientRect() const {
+        RECT client{};
+        GetClientRect(hwnd_, &client);
+        LayoutControls(client.right - client.left, client.bottom - client.top);
+    }
+
+    void RebuildProviderChoices() {
+        concrete_providers_.clear();
+        ComboBox_ResetContent(provider_combo_);
+        int selection = -1;
+        for (size_t i = 0; i < providers_.size(); ++i) {
+            const auto& provider = providers_[i];
+            if (provider.id == binding_provider_id_ || IsBindingProvider(provider)) {
+                continue;
+            }
+            if (provider.models.empty()) {
+                continue;
+            }
+            concrete_providers_.push_back(ConcreteProviderRef{i, &provider});
+            const std::wstring label = Utf8ToWide(provider.name + "  [" + ProviderTypeDisplayLabel(provider) + "]");
+            ComboBox_AddString(provider_combo_, label.c_str());
+            if (provider.id == target_.provider_id) {
+                selection = static_cast<int>(concrete_providers_.size()) - 1;
+            }
+        }
+        if (selection < 0 && !concrete_providers_.empty()) {
+            selection = 0;
+        }
+        if (selection >= 0) {
+            ComboBox_SetCurSel(provider_combo_, selection);
+        }
+        RebuildModelChoices();
+    }
+
+    const ProviderConfig* SelectedConcreteProvider() const {
+        const int selection = ComboBox_GetCurSel(provider_combo_);
+        if (selection < 0 || selection >= static_cast<int>(concrete_providers_.size())) {
+            return nullptr;
+        }
+        return concrete_providers_[static_cast<size_t>(selection)].provider;
+    }
+
+    void RebuildModelChoices() {
+        ComboBox_ResetContent(model_combo_);
+        const ProviderConfig* provider = SelectedConcreteProvider();
+        if (!provider) {
+            return;
+        }
+        int selection = -1;
+        for (size_t i = 0; i < provider->models.size(); ++i) {
+            const auto& model = provider->models[i];
+            const std::wstring label = Utf8ToWide(model.display_name.empty() ? model.id : model.display_name);
+            ComboBox_AddString(model_combo_, label.c_str());
+            if (model.id == target_.model_id) {
+                selection = static_cast<int>(i);
+            }
+        }
+        if (selection < 0 && !provider->models.empty()) {
+            selection = 0;
+        }
+        if (selection >= 0) {
+            ComboBox_SetCurSel(model_combo_, selection);
+        }
+    }
+
+    void ValidateAndSave() {
+        const ProviderConfig* provider = SelectedConcreteProvider();
+        if (!provider) {
+            MessageBoxW(hwnd_, L"Choose a concrete provider for this target.", L"Missing Provider", MB_OK | MB_ICONERROR);
+            return;
+        }
+        const int model_selection = ComboBox_GetCurSel(model_combo_);
+        if (model_selection < 0 || model_selection >= static_cast<int>(provider->models.size())) {
+            MessageBoxW(hwnd_, L"Choose a model for this target.", L"Missing Model", MB_OK | MB_ICONERROR);
+            return;
+        }
+
+        BindingTargetConfig target = target_;
+        target.provider_id = provider->id;
+        target.model_id = provider->models[static_cast<size_t>(model_selection)].id;
+        target.enabled = Button_GetCheck(enabled_check_) == BST_CHECKED;
+
+        auto parse_non_negative = [&](HWND edit, const wchar_t* label) -> std::optional<int> {
+            const auto value = ParseInt(GetWindowTextString(edit));
+            if (!value || *value < 0) {
+                MessageBoxW(hwnd_, (std::wstring(label) + L" must be 0 or a positive whole number.").c_str(), L"Invalid Value", MB_OK | MB_ICONERROR);
+                SetFocus(edit);
+                return std::nullopt;
+            }
+            return *value;
+        };
+        auto parse_positive = [&](HWND edit, const wchar_t* label) -> std::optional<int> {
+            const auto value = ParseInt(GetWindowTextString(edit));
+            if (!value || *value <= 0) {
+                MessageBoxW(hwnd_, (std::wstring(label) + L" must be a positive whole number.").c_str(), L"Invalid Value", MB_OK | MB_ICONERROR);
+                SetFocus(edit);
+                return std::nullopt;
+            }
+            return *value;
+        };
+
+        const auto priority = parse_non_negative(priority_edit_, L"Priority");
+        const auto busy_interval = parse_positive(busy_interval_edit_, L"Busy retry interval");
+        const auto busy_budget = parse_positive(busy_budget_edit_, L"Busy retry budget");
+        const auto busy_cooldown = parse_non_negative(busy_cooldown_edit_, L"Busy cooldown");
+        const auto limit_cooldown = parse_non_negative(limit_cooldown_edit_, L"Limit cooldown");
+        const auto error_cooldown = parse_non_negative(error_cooldown_edit_, L"Error cooldown");
+        if (!priority || !busy_interval || !busy_budget || !busy_cooldown || !limit_cooldown || !error_cooldown) {
+            return;
+        }
+
+        target.priority = *priority;
+        target.busy_retry_interval_seconds = *busy_interval;
+        target.busy_retry_budget_seconds = *busy_budget;
+        target.busy_cooldown_seconds = *busy_cooldown;
+        target.limit_cooldown_seconds = *limit_cooldown;
+        target.error_cooldown_seconds = *error_cooldown;
+
+        result_ = std::move(target);
+        DestroyWindow(hwnd_);
+    }
+
+    HWND owner_ = nullptr;
+    HWND hwnd_ = nullptr;
+    HFONT font_ = nullptr;
+    const std::vector<ProviderConfig>& providers_;
+    std::string binding_provider_id_;
+    BindingTargetConfig target_;
+    bool editing_ = false;
+    std::optional<BindingTargetConfig> result_;
+    std::vector<ConcreteProviderRef> concrete_providers_;
+    HWND provider_label_ = nullptr;
+    HWND provider_combo_ = nullptr;
+    HWND model_label_ = nullptr;
+    HWND model_combo_ = nullptr;
+    HWND enabled_check_ = nullptr;
+    HWND priority_label_ = nullptr;
+    HWND priority_edit_ = nullptr;
+    HWND busy_interval_label_ = nullptr;
+    HWND busy_interval_edit_ = nullptr;
+    HWND busy_budget_label_ = nullptr;
+    HWND busy_budget_edit_ = nullptr;
+    HWND busy_cooldown_label_ = nullptr;
+    HWND busy_cooldown_edit_ = nullptr;
+    HWND limit_cooldown_label_ = nullptr;
+    HWND limit_cooldown_edit_ = nullptr;
+    HWND error_cooldown_label_ = nullptr;
+    HWND error_cooldown_edit_ = nullptr;
+    HWND save_button_ = nullptr;
+    HWND cancel_button_ = nullptr;
+};
+
+struct ModelEditorResult {
+    ModelConfig model;
+    int provider_index = -1;
+};
+
+class ModelEditorDialog {
+public:
+    static std::optional<ModelEditorResult> Show(
+        HWND owner,
+        ModelConfig initial,
+        bool editing,
+        const std::vector<ProviderConfig>* providers = nullptr,
+        int initial_provider_index = -1,
+        const ProviderConfig* fixed_provider = nullptr) {
+        ModelEditorDialog dialog(owner, std::move(initial), editing, providers, initial_provider_index, fixed_provider);
+        return dialog.Run();
+    }
+
+private:
+    ModelEditorDialog(
+        HWND owner,
+        ModelConfig initial,
+        bool editing,
+        const std::vector<ProviderConfig>* providers,
+        int initial_provider_index,
+        const ProviderConfig* fixed_provider)
+        : owner_(owner),
+          model_(std::move(initial)),
+          editing_(editing),
+          providers_(providers),
+          selected_provider_index_(initial_provider_index),
+          fixed_provider_(fixed_provider) {}
+
+    static void RegisterWindowClass(HINSTANCE instance) {
+        static bool registered = false;
+        if (registered) return;
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.hInstance = instance;
+        wc.lpfnWndProc = &ModelEditorDialog::WindowProc;
+        wc.lpszClassName = kModelEditorClassName;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        RegisterClassExW(&wc);
+        registered = true;
+    }
+
+    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        auto* self = reinterpret_cast<ModelEditorDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+            self = reinterpret_cast<ModelEditorDialog*>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            self->hwnd_ = hwnd;
+        }
+        if (!self) return DefWindowProcW(hwnd, message, w_param, l_param);
+        switch (message) {
+        case WM_CREATE:
+            self->OnCreate();
+            return 0;
+        case WM_SIZE:
+            self->LayoutControls(LOWORD(l_param), HIWORD(l_param));
+            return 0;
+        case WM_COMMAND:
+            self->OnCommand(LOWORD(w_param), HIWORD(w_param));
+            return 0;
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        default:
+            return DefWindowProcW(hwnd, message, w_param, l_param);
+        }
+    }
+
+    std::optional<ModelEditorResult> Run() {
+        RegisterWindowClass(reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr)));
+        hwnd_ = CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            kModelEditorClassName,
+            editing_ ? L"Edit Model" : L"Add Model",
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            kModelEditorWidth,
+            IsBindingProviderContext()
+                ? kModelEditorBindingHeight
+                : (HasAdvancedCapabilitySelectors() ? kModelEditorCapabilitiesHeight : kModelEditorBaseHeight),
+            owner_,
+            nullptr,
+            reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr)),
+            this);
+        if (!hwnd_) return std::nullopt;
+        CenterWindowToOwner(hwnd_, owner_);
+        EnableWindow(owner_, FALSE);
+        MSG msg{};
+        while (IsWindow(hwnd_) && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (!IsDialogMessageW(hwnd_, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+        EnableWindow(owner_, TRUE);
+        SetForegroundWindow(owner_);
+        return result_;
+    }
+
+    int Scale(int value) const {
+        return MulDiv(value, GetDpiForWindow(hwnd_), 96);
+    }
+
+    HWND CreateLabel(const wchar_t* text, int id) {
+        return CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+    }
+
+    HWND CreateEdit(const wchar_t* text, int id, DWORD style = ES_AUTOHSCROLL) {
+        return CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | style,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+    }
+
+    HWND CreateButton(const wchar_t* text, int id, DWORD style = 0) {
+        return CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | style,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+    }
+
+    void OnCreate() {
+        font_ = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        if (ShowProviderSelector()) {
+            provider_label_ = CreateLabel(L"Provider:", kModelEditorProviderLabel);
+            provider_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelEditorProviderCombo), nullptr, nullptr);
+            for (const auto& provider : *providers_) {
+                const std::string type_label = ProviderTypeDisplayLabel(provider);
+                const std::wstring label = Utf8ToWide(provider.name + "  [" + type_label + "]");
+                ComboBox_AddString(provider_combo_, label.c_str());
+            }
+            if (selected_provider_index_ < 0 ||
+                selected_provider_index_ >= static_cast<int>(providers_->size())) {
+                selected_provider_index_ = providers_->empty() ? -1 : 0;
+            }
+            if (selected_provider_index_ >= 0) {
+                ComboBox_SetCurSel(provider_combo_, selected_provider_index_);
+            }
+        }
+        SeedNewOllamaKeepAliveDefault();
+        id_label_ = CreateLabel(L"Model ID:", kModelEditorIdLabel);
+        id_edit_ = CreateEdit(Utf8ToWide(model_.id).c_str(), kModelEditorIdEdit);
+        ollama_load_info_button_ = CreateButton(L"Load Info", kModelEditorOllamaLoadInfo);
+        ollama_search_button_ = CreateButton(L"Search", kModelEditorOllamaSearch);
+        display_label_ = CreateLabel(L"Display name:", kModelEditorDisplayLabel);
+        display_edit_ = CreateEdit(Utf8ToWide(model_.display_name).c_str(), kModelEditorDisplayEdit);
+        context_label_ = CreateLabel(L"Context window:", kModelEditorContextLabel);
+        context_edit_ = CreateEdit(model_.context_window > 0 ? std::to_wstring(model_.context_window).c_str() : L"", kModelEditorContextEdit, ES_NUMBER);
+        ollama_timeout_label_ = CreateLabel(L"Idle unload (sec):", kModelEditorOllamaTimeoutLabel);
+        ollama_timeout_edit_ = CreateEdit(model_.ollama_keep_alive_seconds > 0 ? std::to_wstring(model_.ollama_keep_alive_seconds).c_str() : L"", kModelEditorOllamaTimeoutEdit, ES_NUMBER);
+        ollama_num_threads_label_ = CreateLabel(L"CPU threads (0=auto):", kModelEditorOllamaNumThreadsLabel);
+        ollama_num_threads_edit_ = CreateEdit(model_.ollama_num_threads > 0 ? std::to_wstring(model_.ollama_num_threads).c_str() : L"", kModelEditorOllamaNumThreadsEdit, ES_NUMBER);
+        ollama_no_gpu_check_ = CreateButton(L"Force CPU only", kModelEditorOllamaNoGpuCheck, BS_AUTOCHECKBOX);
+        Button_SetCheck(ollama_no_gpu_check_, model_.ollama_no_gpu ? BST_CHECKED : BST_UNCHECKED);
+        ollama_gpu_layers_label_ = CreateLabel(L"GPU layers (0=auto):", kModelEditorOllamaGpuLayersLabel);
+        ollama_gpu_layers_edit_ = CreateEdit(model_.ollama_gpu_layers > 0 ? std::to_wstring(model_.ollama_gpu_layers).c_str() : L"", kModelEditorOllamaGpuLayersEdit, ES_NUMBER);
+        ollama_ctx_len_label_ = CreateLabel(L"Ollama ctx len (0=auto):", kModelEditorOllamaCtxLenLabel);
+        ollama_ctx_len_edit_ = CreateEdit(model_.ollama_context_length > 0 ? std::to_wstring(model_.ollama_context_length).c_str() : L"", kModelEditorOllamaCtxLenEdit, ES_NUMBER);
+        ollama_verbose_check_ = CreateButton(L"Verbose CLI stats", kModelEditorOllamaVerboseCheck, BS_AUTOCHECKBOX);
+        Button_SetCheck(ollama_verbose_check_, model_.ollama_verbose ? BST_CHECKED : BST_UNCHECKED);
+        ollama_pull_button_ = CreateButton(L"Pull Model", kModelEditorOllamaPull);
+        streaming_check_ = CreateButton(L"Streaming capable", kModelEditorStreamingCheck, BS_AUTOCHECKBOX);
+        tools_check_ = CreateButton(L"Tool capable", kModelEditorToolsCheck, BS_AUTOCHECKBOX);
+        vision_check_ = CreateButton(L"Vision capable", kModelEditorVisionCheck, BS_AUTOCHECKBOX);
+        embedding_check_ = CreateButton(L"Embedding capable", kModelEditorEmbeddingCheck, BS_AUTOCHECKBOX);
+        thinking_check_ = CreateButton(L"Thinking capable", kModelEditorThinkingCheck, BS_AUTOCHECKBOX);
+        max_completion_check_ = CreateButton(L"Prefer max_completion_tokens", kModelEditorMaxCompletionCheck, BS_AUTOCHECKBOX);
+        reasoning_label_ = CreateLabel(L"Reasoning effort:", kModelEditorReasoningLabel);
+        reasoning_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelEditorReasoningCombo), nullptr, nullptr);
+        verbosity_label_ = CreateLabel(L"Verbosity:", kModelEditorVerbosityLabel);
+        verbosity_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelEditorVerbosityCombo), nullptr, nullptr);
+        routing_label_ = CreateLabel(L"Routing mode:", kModelEditorRoutingLabel);
+        routing_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelEditorRoutingCombo), nullptr, nullptr);
+        ComboBox_AddString(routing_combo_, L"Top-down failover");
+        ComboBox_AddString(routing_combo_, L"Round robin");
+        ComboBox_SetCurSel(routing_combo_, model_.binding_routing_mode == BindingRoutingMode::RoundRobin ? 1 : 0);
+        targets_label_ = CreateLabel(L"Binding targets:", kModelEditorTargetsLabel);
+        targets_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelEditorTargetsList), nullptr, nullptr);
+        add_target_button_ = CreateButton(L"Add Target", kModelEditorAddTarget);
+        edit_target_button_ = CreateButton(L"Edit Target", kModelEditorEditTarget);
+        remove_target_button_ = CreateButton(L"Remove Target", kModelEditorRemoveTarget);
+        move_target_up_button_ = CreateButton(L"Move Up", kModelEditorMoveTargetUp);
+        move_target_down_button_ = CreateButton(L"Move Down", kModelEditorMoveTargetDown);
+        save_button_ = CreateButton(L"Save", kModelEditorSave);
+        cancel_button_ = CreateButton(L"Cancel", kModelEditorCancel);
+
+        Button_SetCheck(streaming_check_, model_.supports_streaming ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(tools_check_, model_.supports_tools ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(vision_check_, model_.supports_vision ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(embedding_check_, model_.supports_embedding ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(thinking_check_, model_.supports_thinking ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(max_completion_check_, model_.prefer_max_completion_tokens ? BST_CHECKED : BST_UNCHECKED);
+        PopulateCapabilitySelectors();
+        model_.is_binding_model = IsBindingProviderContext();
+        ollama_metadata_loaded_ = editing_ && IsOllamaProviderContext();
+        ApplyCatalogManagedEditState();
+
+        for (HWND control : {provider_label_, provider_combo_, id_label_, id_edit_, ollama_load_info_button_, ollama_search_button_, display_label_, display_edit_, context_label_, context_edit_, ollama_timeout_label_, ollama_timeout_edit_, ollama_num_threads_label_, ollama_num_threads_edit_, ollama_no_gpu_check_, ollama_gpu_layers_label_, ollama_gpu_layers_edit_, ollama_ctx_len_label_, ollama_ctx_len_edit_, ollama_verbose_check_, streaming_check_, tools_check_, vision_check_, embedding_check_, thinking_check_, max_completion_check_, reasoning_label_, reasoning_combo_, verbosity_label_, verbosity_combo_, routing_label_, routing_combo_, targets_label_, targets_list_, add_target_button_, edit_target_button_, remove_target_button_, move_target_up_button_, move_target_down_button_, save_button_, cancel_button_}) {
+            if (!control) {
+                continue;
+            }
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+        }
+        RefreshBindingTargetsList();
+        UpdateBindingControlVisibility();
+        UpdateOllamaControlVisibility();
+        RelayoutToClientRect();
+    }
+
+    void LayoutControls(int width, int height) const {
+        const int margin = Scale(14);
+        const int gutter = Scale(8);
+        const int label_width = Scale(120);
+        const int label_height = Scale(18);
+        const int edit_height = Scale(24);
+        const int button_height = Scale(30);
+        const int footer_y = height - margin - button_height;
+        const bool ollama = IsOllamaProviderContext();
+        int y = margin;
+        if (ShowProviderSelector()) {
+            MoveWindow(provider_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+            MoveWindow(provider_combo_, margin + label_width, y, width - margin * 2 - label_width, Scale(140), TRUE);
+            y += edit_height + gutter;
+        } else if (provider_label_) {
+            ShowWindow(provider_label_, SW_HIDE);
+            ShowWindow(provider_combo_, SW_HIDE);
+        }
+        MoveWindow(id_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        if (ollama) {
+            const int button_width = Scale(92);
+            const int buttons_width = button_width * 3 + gutter * 2;
+            MoveWindow(id_edit_, margin + label_width, y, width - margin * 2 - label_width - buttons_width - gutter, edit_height, TRUE);
+            MoveWindow(ollama_load_info_button_, width - margin - buttons_width, y - Scale(3), button_width, button_height, TRUE);
+            MoveWindow(ollama_search_button_, width - margin - buttons_width + button_width + gutter, y - Scale(3), button_width, button_height, TRUE);
+            MoveWindow(ollama_pull_button_, width - margin - button_width, y - Scale(3), button_width, button_height, TRUE);
+            ShowWindow(ollama_load_info_button_, SW_SHOW);
+            ShowWindow(ollama_search_button_, SW_SHOW);
+            ShowWindow(ollama_pull_button_, SW_SHOW);
+        } else {
+            MoveWindow(id_edit_, margin + label_width, y, width - margin * 2 - label_width, edit_height, TRUE);
+            ShowWindow(ollama_load_info_button_, SW_HIDE);
+            ShowWindow(ollama_search_button_, SW_HIDE);
+            ShowWindow(ollama_pull_button_, SW_HIDE);
+        }
+        y += edit_height + gutter;
+        MoveWindow(display_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(display_edit_, margin + label_width, y, width - margin * 2 - label_width, edit_height, TRUE);
+        y += edit_height + gutter;
+        MoveWindow(context_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+        MoveWindow(context_edit_, margin + label_width, y, Scale(120), edit_height, TRUE);
+        if (ollama) {
+            MoveWindow(ollama_timeout_label_, margin + label_width + Scale(150), y + Scale(4), Scale(115), label_height, TRUE);
+            MoveWindow(ollama_timeout_edit_, margin + label_width + Scale(272), y, Scale(90), edit_height, TRUE);
+            ShowWindow(ollama_timeout_label_, SW_SHOW);
+            ShowWindow(ollama_timeout_edit_, SW_SHOW);
+        } else {
+            ShowWindow(ollama_timeout_label_, SW_HIDE);
+            ShowWindow(ollama_timeout_edit_, SW_HIDE);
+        }
+        y += edit_height + gutter * 2;
+        MoveWindow(streaming_check_, margin + label_width, y, Scale(180), edit_height, TRUE);
+        y += edit_height + gutter;
+        MoveWindow(tools_check_, margin + label_width, y, Scale(180), edit_height, TRUE);
+        y += edit_height + gutter;
+        MoveWindow(vision_check_, margin + label_width, y, Scale(180), edit_height, TRUE);
+        y += edit_height + gutter;
+        MoveWindow(embedding_check_, margin + label_width, y, Scale(180), edit_height, TRUE);
+        y += edit_height + gutter;
+        MoveWindow(thinking_check_, margin + label_width, y, Scale(180), edit_height, TRUE);
+        y += edit_height + gutter;
+        MoveWindow(max_completion_check_, margin + label_width, y, Scale(220), edit_height, TRUE);
+        y += edit_height + gutter;
+        if (ollama) {
+            MoveWindow(ollama_num_threads_label_, margin, y + Scale(4), Scale(135), label_height, TRUE);
+            MoveWindow(ollama_num_threads_edit_, margin + Scale(138), y, Scale(70), edit_height, TRUE);
+            MoveWindow(ollama_no_gpu_check_, margin + Scale(218), y + Scale(2), Scale(120), edit_height, TRUE);
+            y += edit_height + gutter;
+            MoveWindow(ollama_gpu_layers_label_, margin, y + Scale(4), Scale(135), label_height, TRUE);
+            MoveWindow(ollama_gpu_layers_edit_, margin + Scale(138), y, Scale(70), edit_height, TRUE);
+            MoveWindow(ollama_ctx_len_label_, margin + Scale(218), y + Scale(4), Scale(145), label_height, TRUE);
+            MoveWindow(ollama_ctx_len_edit_, margin + Scale(368), y, Scale(70), edit_height, TRUE);
+            y += edit_height + gutter;
+            MoveWindow(ollama_verbose_check_, margin + label_width, y, Scale(160), edit_height, TRUE);
+            y += edit_height + gutter;
+            ShowWindow(ollama_num_threads_label_, SW_SHOW);
+            ShowWindow(ollama_num_threads_edit_, SW_SHOW);
+            ShowWindow(ollama_no_gpu_check_, SW_SHOW);
+            ShowWindow(ollama_gpu_layers_label_, SW_SHOW);
+            ShowWindow(ollama_gpu_layers_edit_, SW_SHOW);
+            ShowWindow(ollama_ctx_len_label_, SW_SHOW);
+            ShowWindow(ollama_ctx_len_edit_, SW_SHOW);
+            ShowWindow(ollama_verbose_check_, SW_SHOW);
+        } else {
+            ShowWindow(ollama_num_threads_label_, SW_HIDE);
+            ShowWindow(ollama_num_threads_edit_, SW_HIDE);
+            ShowWindow(ollama_no_gpu_check_, SW_HIDE);
+            ShowWindow(ollama_gpu_layers_label_, SW_HIDE);
+            ShowWindow(ollama_gpu_layers_edit_, SW_HIDE);
+            ShowWindow(ollama_ctx_len_label_, SW_HIDE);
+            ShowWindow(ollama_ctx_len_edit_, SW_HIDE);
+            ShowWindow(ollama_verbose_check_, SW_HIDE);
+        }
+        if (HasReasoningSelector()) {
+            MoveWindow(reasoning_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+            MoveWindow(reasoning_combo_, margin + label_width, y, width - margin * 2 - label_width, Scale(140), TRUE);
+            ShowWindow(reasoning_label_, SW_SHOW);
+            ShowWindow(reasoning_combo_, SW_SHOW);
+            y += edit_height + gutter;
+        } else {
+            ShowWindow(reasoning_label_, SW_HIDE);
+            ShowWindow(reasoning_combo_, SW_HIDE);
+        }
+        if (HasVerbositySelector()) {
+            MoveWindow(verbosity_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+            MoveWindow(verbosity_combo_, margin + label_width, y, width - margin * 2 - label_width, Scale(140), TRUE);
+            ShowWindow(verbosity_label_, SW_SHOW);
+            ShowWindow(verbosity_combo_, SW_SHOW);
+            y += edit_height + gutter;
+        } else {
+            ShowWindow(verbosity_label_, SW_HIDE);
+            ShowWindow(verbosity_combo_, SW_HIDE);
+        }
+        if (IsBindingProviderContext()) {
+            MoveWindow(routing_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+            MoveWindow(routing_combo_, margin + label_width, y, width - margin * 2 - label_width, Scale(140), TRUE);
+            ShowWindow(routing_label_, SW_SHOW);
+            ShowWindow(routing_combo_, SW_SHOW);
+            y += edit_height + gutter;
+
+            MoveWindow(targets_label_, margin, y + Scale(4), label_width, label_height, TRUE);
+            MoveWindow(targets_list_, margin + label_width, y, width - margin * 2 - label_width - Scale(120) - gutter, Scale(200), TRUE);
+            const int buttons_x = width - margin - Scale(120);
+            MoveWindow(add_target_button_, buttons_x, y, Scale(120), button_height, TRUE);
+            MoveWindow(edit_target_button_, buttons_x, y + button_height + gutter, Scale(120), button_height, TRUE);
+            MoveWindow(remove_target_button_, buttons_x, y + (button_height + gutter) * 2, Scale(120), button_height, TRUE);
+            MoveWindow(move_target_up_button_, buttons_x, y + (button_height + gutter) * 3, Scale(120), button_height, TRUE);
+            MoveWindow(move_target_down_button_, buttons_x, y + (button_height + gutter) * 4, Scale(120), button_height, TRUE);
+            ShowWindow(targets_label_, SW_SHOW);
+            ShowWindow(targets_list_, SW_SHOW);
+            ShowWindow(add_target_button_, SW_SHOW);
+            ShowWindow(edit_target_button_, SW_SHOW);
+            ShowWindow(remove_target_button_, SW_SHOW);
+            ShowWindow(move_target_up_button_, SW_SHOW);
+            ShowWindow(move_target_down_button_, SW_SHOW);
+        } else {
+            ShowWindow(routing_label_, SW_HIDE);
+            ShowWindow(routing_combo_, SW_HIDE);
+            ShowWindow(targets_label_, SW_HIDE);
+            ShowWindow(targets_list_, SW_HIDE);
+            ShowWindow(add_target_button_, SW_HIDE);
+            ShowWindow(edit_target_button_, SW_HIDE);
+            ShowWindow(remove_target_button_, SW_HIDE);
+            ShowWindow(move_target_up_button_, SW_HIDE);
+            ShowWindow(move_target_down_button_, SW_HIDE);
+        }
+        MoveWindow(cancel_button_, width - margin - Scale(90), footer_y, Scale(90), button_height, TRUE);
+        MoveWindow(save_button_, width - margin - Scale(190), footer_y, Scale(90), button_height, TRUE);
+    }
+
+    void OnCommand(int id, int notification) {
+        if (id == kModelEditorProviderCombo && notification == CBN_SELCHANGE) {
+            OnProviderSelectionChanged();
+        } else if (id == kModelEditorOllamaLoadInfo) {
+            LoadOllamaModelInfo(true);
+        } else if (id == kModelEditorOllamaSearch) {
+            OpenOllamaModelSearch();
+        } else if (id == kModelEditorOllamaPull) {
+            PullOllamaCurrentModel();
+        } else if (id == kModelEditorOllamaNoGpuCheck && notification == BN_CLICKED) {
+            UpdateGpuLayersEnableState();
+        } else if (id == kModelEditorAddTarget) {
+            AddBindingTarget();
+        } else if (id == kModelEditorEditTarget) {
+            EditBindingTarget();
+        } else if (id == kModelEditorRemoveTarget) {
+            RemoveBindingTarget();
+        } else if (id == kModelEditorMoveTargetUp) {
+            MoveBindingTarget(-1);
+        } else if (id == kModelEditorMoveTargetDown) {
+            MoveBindingTarget(1);
+        } else if (id == kModelEditorSave) {
+            ValidateAndSave();
+        } else if (id == kModelEditorCancel) {
+            DestroyWindow(hwnd_);
+        }
+    }
+
+    bool ShowProviderSelector() const {
+        return !editing_ && !fixed_provider_ && providers_ && !providers_->empty();
+    }
+
+    bool IsBindingProviderContext() const {
+        const ProviderConfig* provider = CurrentProviderContext();
+        return provider && IsBindingProvider(*provider);
+    }
+
+    bool IsOllamaProviderContext() const {
+        const ProviderConfig* provider = CurrentProviderContext();
+        return provider && (IsOllamaProvider(*provider) || IsOllamaCloudProvider(*provider));
+    }
+
+    bool HasReasoningSelector() const {
+        return !model_.reasoning_efforts.empty();
+    }
+
+    bool HasVerbositySelector() const {
+        return !model_.text_verbosity_modes.empty();
+    }
+
+    bool HasAdvancedCapabilitySelectors() const {
+        return HasReasoningSelector() || HasVerbositySelector();
+    }
+
+    void SeedNewOllamaKeepAliveDefault() {
+        if (editing_ || !IsOllamaProviderContext() || model_.ollama_keep_alive_seconds > 0) {
+            return;
+        }
+        if (ollama_timeout_edit_ && !TrimWide(GetWindowTextString(ollama_timeout_edit_)).empty()) {
+            return;
+        }
+        model_.ollama_keep_alive_seconds = 300;
+        if (ollama_timeout_edit_) {
+            SetWindowTextW(ollama_timeout_edit_, L"300");
+        }
+    }
+
+    void UpdateOllamaControlVisibility() {
+        const bool ollama = IsOllamaProviderContext();
+        ShowWindow(ollama_load_info_button_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_search_button_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_pull_button_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_timeout_label_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_timeout_edit_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_num_threads_label_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_num_threads_edit_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_no_gpu_check_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_gpu_layers_label_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_gpu_layers_edit_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_ctx_len_label_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_ctx_len_edit_, ollama ? SW_SHOW : SW_HIDE);
+        ShowWindow(ollama_verbose_check_, ollama ? SW_SHOW : SW_HIDE);
+        if (ollama) UpdateGpuLayersEnableState();
+    }
+
+    void UpdateGpuLayersEnableState() {
+        const bool no_gpu = Button_GetCheck(ollama_no_gpu_check_) == BST_CHECKED;
+        EnableWindow(ollama_gpu_layers_edit_, no_gpu ? FALSE : TRUE);
+        EnableWindow(ollama_gpu_layers_label_, no_gpu ? FALSE : TRUE);
+        if (no_gpu) SetWindowTextW(ollama_gpu_layers_edit_, L"");
+    }
+
+    void PullOllamaCurrentModel() {
+        const ProviderConfig* provider = CurrentProviderContext();
+        if (!provider || !IsOllamaProvider(*provider)) return;
+        const std::string model_id = WideToUtf8(TrimWide(GetWindowTextString(id_edit_)));
+        if (model_id.empty()) {
+            MessageBoxW(hwnd_, L"Enter the Ollama model ID first.", L"Missing Model ID", MB_OK | MB_ICONINFORMATION);
+            SetFocus(id_edit_);
+            return;
+        }
+        EnableWindow(ollama_pull_button_, FALSE);
+        std::thread([this, provider = *provider, model_id]() {
+            std::string error;
+            bool ok = PullOllamaModel(provider, model_id, {}, &error);
+            EnableWindow(ollama_pull_button_, TRUE);
+            if (ok) {
+                MessageBoxW(hwnd_, (L"Model '" + Utf8ToWide(model_id) + L"' pulled successfully.").c_str(), L"Pull Complete", MB_OK | MB_ICONINFORMATION);
+            } else {
+                MessageBoxW(hwnd_, (L"Pull failed: " + Utf8ToWide(error.empty() ? "Unknown error" : error)).c_str(), L"Pull Failed", MB_OK | MB_ICONERROR);
+            }
+        }).detach();
+    }
+
+    void OpenOllamaModelSearch() const {
+        std::wstring url = L"https://ollama.com/search";
+        const std::wstring model = TrimWide(GetWindowTextString(id_edit_));
+        if (!model.empty()) {
+            std::wstring query = model;
+            std::replace(query.begin(), query.end(), L':', L' ');
+            url += L"?q=" + query;
+        }
+        ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+
+    bool LoadOllamaModelInfo(bool interactive) {
+        const ProviderConfig* provider = CurrentProviderContext();
+        if (!provider || !IsOllamaProvider(*provider)) {
+            return false;
+        }
+
+        const std::string model_id = WideToUtf8(TrimWide(GetWindowTextString(id_edit_)));
+        if (model_id.empty()) {
+            if (interactive) {
+                MessageBoxW(hwnd_, L"Enter the Ollama model ID first.", L"Missing Model ID", MB_OK | MB_ICONINFORMATION);
+                SetFocus(id_edit_);
+            }
+            return false;
+        }
+
+        ModelConfig fetched = model_;
+        fetched.id = model_id;
+        std::string error;
+        if (!LoadOllamaModelMetadata(*provider, model_id, &fetched, &error)) {
+            if (interactive) {
+                MessageBoxW(hwnd_, Utf8ToWide(error).c_str(), L"Ollama Model Info", MB_OK | MB_ICONERROR);
+            }
+            return false;
+        }
+
+        model_.id = model_id;
+        model_.context_window = fetched.context_window;
+        model_.supports_streaming = fetched.supports_streaming;
+        model_.supports_tools = fetched.supports_tools;
+        model_.supports_vision = fetched.supports_vision;
+        model_.supports_embedding = fetched.supports_embedding;
+        model_.supports_thinking = fetched.supports_thinking;
+        ollama_metadata_loaded_ = true;
+
+        SetWindowTextW(context_edit_, fetched.context_window > 0 ? std::to_wstring(fetched.context_window).c_str() : L"");
+        Button_SetCheck(streaming_check_, fetched.supports_streaming ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(tools_check_, fetched.supports_tools ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(vision_check_, fetched.supports_vision ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(embedding_check_, fetched.supports_embedding ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(thinking_check_, fetched.supports_thinking ? BST_CHECKED : BST_UNCHECKED);
+        return true;
+    }
+
+    void RefreshBindingTargetsList() {
+        if (!targets_list_) {
+            return;
+        }
+        SendMessageW(targets_list_, LB_RESETCONTENT, 0, 0);
+        if (!providers_) {
+            return;
+        }
+        for (const auto& target : model_.binding_targets) {
+            const std::wstring label = DescribeBindingTarget(target, *providers_);
+            SendMessageW(targets_list_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        }
+        if (!model_.binding_targets.empty()) {
+            SendMessageW(targets_list_, LB_SETCURSEL, 0, 0);
+        }
+    }
+
+    void UpdateBindingControlVisibility() {
+        if (!targets_list_) {
+            return;
+        }
+        const bool binding = IsBindingProviderContext();
+        ShowWindow(routing_label_, binding ? SW_SHOW : SW_HIDE);
+        ShowWindow(routing_combo_, binding ? SW_SHOW : SW_HIDE);
+        ShowWindow(targets_label_, binding ? SW_SHOW : SW_HIDE);
+        ShowWindow(targets_list_, binding ? SW_SHOW : SW_HIDE);
+        ShowWindow(add_target_button_, binding ? SW_SHOW : SW_HIDE);
+        ShowWindow(edit_target_button_, binding ? SW_SHOW : SW_HIDE);
+        ShowWindow(remove_target_button_, binding ? SW_SHOW : SW_HIDE);
+        ShowWindow(move_target_up_button_, binding ? SW_SHOW : SW_HIDE);
+        ShowWindow(move_target_down_button_, binding ? SW_SHOW : SW_HIDE);
+    }
+
+    void PopulateCapabilitySelectors() {
+        PopulateOptionalValueCombo(
+            reasoning_combo_,
+            model_.reasoning_efforts,
+            model_.default_reasoning_effort,
+            BuildCapabilityDefaultLabel("automatic reasoning").c_str());
+        PopulateOptionalValueCombo(
+            verbosity_combo_,
+            model_.text_verbosity_modes,
+            model_.default_text_verbosity,
+            BuildCapabilityDefaultLabel("automatic verbosity").c_str());
+    }
+
+    void RelayoutToClientRect() const {
+        RECT client{};
+        GetClientRect(hwnd_, &client);
+        LayoutControls(client.right - client.left, client.bottom - client.top);
+    }
+
+    const ProviderConfig* CurrentProviderContext() const {
+        if (fixed_provider_) {
+            return fixed_provider_;
+        }
+        if (!providers_) {
+            return nullptr;
+        }
+        const int index = SelectedProviderIndex();
+        if (index < 0 || index >= static_cast<int>(providers_->size())) {
+            return nullptr;
+        }
+        return &providers_->at(static_cast<size_t>(index));
+    }
+
+    bool IsCatalogManagedEdit() const {
+        if (!editing_) {
+            return false;
+        }
+        const ProviderConfig* provider = CurrentProviderContext();
+        if (!provider || !IsCatalogDrivenProvider(*provider)) {
+            return false;
+        }
+        return model_.catalog_source != "manual";
+    }
+
+    void ApplyCatalogManagedEditState() {
+        const bool locked = IsCatalogManagedEdit();
+        SendMessageW(id_edit_, EM_SETREADONLY, locked ? TRUE : FALSE, 0);
+        SendMessageW(context_edit_, EM_SETREADONLY, locked ? TRUE : FALSE, 0);
+        EnableWindow(streaming_check_, !locked);
+        EnableWindow(tools_check_, !locked);
+        EnableWindow(vision_check_, !locked);
+        EnableWindow(embedding_check_, !locked);
+        EnableWindow(thinking_check_, !locked);
+        EnableWindow(max_completion_check_, !locked);
+        if (locked) {
+            SetWindowTextW(context_label_, L"Context window (catalog):");
+        } else {
+            SetWindowTextW(context_label_, L"Context window:");
+        }
+        EnableWindow(reasoning_combo_, HasReasoningSelector());
+        EnableWindow(verbosity_combo_, HasVerbositySelector());
+        EnableWindow(routing_combo_, IsBindingProviderContext());
+        EnableWindow(targets_list_, IsBindingProviderContext());
+        EnableWindow(add_target_button_, IsBindingProviderContext());
+        EnableWindow(edit_target_button_, IsBindingProviderContext());
+        EnableWindow(remove_target_button_, IsBindingProviderContext());
+        EnableWindow(move_target_up_button_, IsBindingProviderContext());
+        EnableWindow(move_target_down_button_, IsBindingProviderContext());
+        EnableWindow(ollama_load_info_button_, IsOllamaProviderContext());
+        EnableWindow(ollama_search_button_, IsOllamaProviderContext());
+        EnableWindow(ollama_timeout_edit_, IsOllamaProviderContext());
+        EnableWindow(ollama_num_threads_edit_, IsOllamaProviderContext());
+        EnableWindow(ollama_no_gpu_check_, IsOllamaProviderContext());
+        EnableWindow(ollama_gpu_layers_edit_, IsOllamaProviderContext());
+        EnableWindow(ollama_ctx_len_edit_, IsOllamaProviderContext());
+        EnableWindow(ollama_verbose_check_, IsOllamaProviderContext());
+    }
+
+    int SelectedProviderIndex() const {
+        if (!ShowProviderSelector()) {
+            return selected_provider_index_;
+        }
+        if (!provider_combo_) {
+            return selected_provider_index_;
+        }
+        const int selection = ComboBox_GetCurSel(provider_combo_);
+        return selection < 0 ? selected_provider_index_ : selection;
+    }
+
+    void OnProviderSelectionChanged() {
+        const int provider_index = SelectedProviderIndex();
+        selected_provider_index_ = provider_index;
+        ollama_metadata_loaded_ = false;
+        if (!providers_ || provider_index < 0 || provider_index >= static_cast<int>(providers_->size())) {
+            return;
+        }
+
+        const ProviderConfig& provider = providers_->at(static_cast<size_t>(provider_index));
+        model_.is_binding_model = IsBindingProvider(provider);
+        SeedNewOllamaKeepAliveDefault();
+        UpdateBindingControlVisibility();
+        UpdateOllamaControlVisibility();
+        ApplyCatalogManagedEditState();
+        RelayoutToClientRect();
+
+        if (!IsAgentHttpsProvider(provider)) {
+            return;
+        }
+
+        std::string error;
+        const auto worker = FetchAgentWorkerHealth(provider, &error);
+        if (!worker) {
+            MessageBoxW(hwnd_, Utf8ToWide(std::string("Could not retrieve the model from the selected Agent HTTPS provider: ") + error).c_str(),
+                L"Remote Model Discovery Failed", MB_OK | MB_ICONERROR);
+            return;
+        }
+
+        const std::string model_name = worker->model_name.empty() ? worker->worker_name : worker->model_name;
+        SetWindowTextW(id_edit_, Utf8ToWide(model_name).c_str());
+        SetWindowTextW(display_edit_, Utf8ToWide(model_name).c_str());
+        SetWindowTextW(context_edit_, L"");
+        Button_SetCheck(streaming_check_, BST_CHECKED);
+        Button_SetCheck(tools_check_, BST_CHECKED);
+        Button_SetCheck(vision_check_, worker->purpose == "image_ingestion" ? BST_CHECKED : BST_UNCHECKED);
+        model_.catalog_source = "agent_health";
+        model_.reasoning_efforts.clear();
+        model_.text_verbosity_modes.clear();
+        model_.default_reasoning_effort.clear();
+        model_.default_text_verbosity.clear();
+        PopulateCapabilitySelectors();
+        ApplyCatalogManagedEditState();
+        UpdateBindingControlVisibility();
+        RelayoutToClientRect();
+    }
+
+    int SelectedBindingTargetIndex() const {
+        if (!targets_list_) {
+            return -1;
+        }
+        const LRESULT selection = SendMessageW(targets_list_, LB_GETCURSEL, 0, 0);
+        return selection == LB_ERR ? -1 : static_cast<int>(selection);
+    }
+
+    std::string CurrentBindingProviderId() const {
+        const ProviderConfig* provider = CurrentProviderContext();
+        return provider ? provider->id : std::string();
+    }
+
+    void AddBindingTarget() {
+        if (!providers_ || !IsBindingProviderContext()) {
+            return;
+        }
+        auto edited = BindingTargetEditorDialog::Show(hwnd_, *providers_, CurrentBindingProviderId(), BindingTargetConfig{}, false);
+        if (!edited) {
+            return;
+        }
+        const auto duplicate = std::find_if(
+            model_.binding_targets.begin(),
+            model_.binding_targets.end(),
+            [&](const BindingTargetConfig& existing) {
+                return existing.provider_id == edited->provider_id && existing.model_id == edited->model_id;
+            });
+        if (duplicate != model_.binding_targets.end()) {
+            MessageBoxW(hwnd_, L"That provider/model target is already in this binding model.", L"Duplicate Target", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        model_.binding_targets.push_back(std::move(*edited));
+        RefreshBindingTargetsList();
+        SendMessageW(targets_list_, LB_SETCURSEL, static_cast<WPARAM>(model_.binding_targets.size() - 1), 0);
+    }
+
+    void EditBindingTarget() {
+        if (!providers_ || !IsBindingProviderContext()) {
+            return;
+        }
+        const int index = SelectedBindingTargetIndex();
+        if (index < 0 || index >= static_cast<int>(model_.binding_targets.size())) {
+            return;
+        }
+        auto edited = BindingTargetEditorDialog::Show(
+            hwnd_,
+            *providers_,
+            CurrentBindingProviderId(),
+            model_.binding_targets[static_cast<size_t>(index)],
+            true);
+        if (!edited) {
+            return;
+        }
+        for (size_t i = 0; i < model_.binding_targets.size(); ++i) {
+            if (static_cast<int>(i) == index) {
+                continue;
+            }
+            const auto& existing = model_.binding_targets[i];
+            if (existing.provider_id == edited->provider_id && existing.model_id == edited->model_id) {
+                MessageBoxW(hwnd_, L"That provider/model target is already in this binding model.", L"Duplicate Target", MB_OK | MB_ICONINFORMATION);
+                return;
+            }
+        }
+        model_.binding_targets[static_cast<size_t>(index)] = std::move(*edited);
+        RefreshBindingTargetsList();
+        SendMessageW(targets_list_, LB_SETCURSEL, index, 0);
+    }
+
+    void RemoveBindingTarget() {
+        const int index = SelectedBindingTargetIndex();
+        if (index < 0 || index >= static_cast<int>(model_.binding_targets.size())) {
+            return;
+        }
+        model_.binding_targets.erase(model_.binding_targets.begin() + index);
+        RefreshBindingTargetsList();
+    }
+
+    void MoveBindingTarget(int delta) {
+        const int index = SelectedBindingTargetIndex();
+        const int other = index + delta;
+        if (index < 0 || other < 0 ||
+            index >= static_cast<int>(model_.binding_targets.size()) ||
+            other >= static_cast<int>(model_.binding_targets.size())) {
+            return;
+        }
+        std::swap(model_.binding_targets[static_cast<size_t>(index)], model_.binding_targets[static_cast<size_t>(other)]);
+        RefreshBindingTargetsList();
+        SendMessageW(targets_list_, LB_SETCURSEL, other, 0);
+    }
+
+    void ValidateAndSave() {
+        ModelConfig model = model_;
+        const bool locked = IsCatalogManagedEdit();
+        const bool binding = IsBindingProviderContext();
+        model.id = locked ? model_.id : WideToUtf8(TrimWide(GetWindowTextString(id_edit_)));
+        model.display_name = WideToUtf8(TrimWide(GetWindowTextString(display_edit_)));
+        if (model.id.empty()) {
+            MessageBoxW(hwnd_, L"Model ID is required.", L"Missing Model ID", MB_OK | MB_ICONERROR);
+            SetFocus(id_edit_);
+            return;
+        }
+        if (model.display_name.empty()) {
+            model.display_name = model.id;
+        }
+        if (IsOllamaProviderContext() && !editing_ && !ollama_metadata_loaded_) {
+            LoadOllamaModelInfo(false);
+        }
+        if (!locked) {
+            model.context_window = 0;
+            const std::wstring context = TrimWide(GetWindowTextString(context_edit_));
+            if (!context.empty()) {
+                const auto parsed = ParseInt(context);
+                if (!parsed || *parsed < 0) {
+                    MessageBoxW(hwnd_, L"Context window must be a positive whole number, 0, or blank.", L"Invalid Context Window", MB_OK | MB_ICONERROR);
+                    SetFocus(context_edit_);
+                    return;
+                }
+                model.context_window = *parsed;
+            }
+            model.supports_streaming = Button_GetCheck(streaming_check_) == BST_CHECKED;
+            model.supports_tools = Button_GetCheck(tools_check_) == BST_CHECKED;
+            model.supports_vision = Button_GetCheck(vision_check_) == BST_CHECKED;
+            model.supports_embedding = Button_GetCheck(embedding_check_) == BST_CHECKED;
+            model.supports_thinking = Button_GetCheck(thinking_check_) == BST_CHECKED;
+            model.prefer_max_completion_tokens = Button_GetCheck(max_completion_check_) == BST_CHECKED;
+        }
+        model.ollama_keep_alive_seconds = 0;
+        const std::wstring ollama_timeout = TrimWide(GetWindowTextString(ollama_timeout_edit_));
+        if (!ollama_timeout.empty()) {
+            const auto parsed = ParseInt(ollama_timeout);
+            if (!parsed || *parsed < 0) {
+                MessageBoxW(hwnd_, L"Idle unload seconds must be a whole number, 0, or blank.", L"Invalid Idle Timeout", MB_OK | MB_ICONERROR);
+                SetFocus(ollama_timeout_edit_);
+                return;
+            }
+            model.ollama_keep_alive_seconds = *parsed;
+        }
+        model.ollama_num_threads = 0;
+        const std::wstring ollama_num_threads = TrimWide(GetWindowTextString(ollama_num_threads_edit_));
+        if (!ollama_num_threads.empty()) {
+            const auto parsed = ParseInt(ollama_num_threads);
+            if (!parsed || *parsed < 0) {
+                MessageBoxW(hwnd_, L"CPU threads must be a whole number, 0, or blank.", L"Invalid CPU Threads", MB_OK | MB_ICONERROR);
+                SetFocus(ollama_num_threads_edit_);
+                return;
+            }
+            model.ollama_num_threads = *parsed;
+        }
+        model.ollama_no_gpu = Button_GetCheck(ollama_no_gpu_check_) == BST_CHECKED;
+        model.ollama_gpu_layers = 0;
+        const std::wstring ollama_gpu_layers = TrimWide(GetWindowTextString(ollama_gpu_layers_edit_));
+        if (!ollama_gpu_layers.empty()) {
+            const auto parsed = ParseInt(ollama_gpu_layers);
+            if (!parsed || *parsed < 0) {
+                MessageBoxW(hwnd_, L"GPU layers must be a whole number, 0, or blank.", L"Invalid GPU Layers", MB_OK | MB_ICONERROR);
+                SetFocus(ollama_gpu_layers_edit_);
+                return;
+            }
+            model.ollama_gpu_layers = *parsed;
+        }
+        model.ollama_context_length = 0;
+        const std::wstring ollama_ctx_len = TrimWide(GetWindowTextString(ollama_ctx_len_edit_));
+        if (!ollama_ctx_len.empty()) {
+            const auto parsed = ParseInt(ollama_ctx_len);
+            if (!parsed || *parsed < 0) {
+                MessageBoxW(hwnd_, L"Ollama context length must be a whole number, 0, or blank.", L"Invalid Context Length", MB_OK | MB_ICONERROR);
+                SetFocus(ollama_ctx_len_edit_);
+                return;
+            }
+            model.ollama_context_length = *parsed;
+        }
+        model.ollama_verbose = Button_GetCheck(ollama_verbose_check_) == BST_CHECKED;
+        model.is_binding_model = binding;
+        model.binding_routing_mode = ComboBox_GetCurSel(routing_combo_) == 1
+            ? BindingRoutingMode::RoundRobin
+            : BindingRoutingMode::TopDownFailover;
+        model.binding_targets = binding ? model_.binding_targets : std::vector<BindingTargetConfig>{};
+        if (binding) {
+            if (model.context_window <= 0) {
+                MessageBoxW(hwnd_, L"Binding models require an explicit context window greater than 0.", L"Missing Context Window", MB_OK | MB_ICONERROR);
+                SetFocus(context_edit_);
+                return;
+            }
+            if (model.binding_targets.empty()) {
+                MessageBoxW(hwnd_, L"Add at least one concrete provider/model target to this binding model.", L"Missing Binding Targets", MB_OK | MB_ICONERROR);
+                return;
+            }
+            if (providers_) {
+                int min_context_window = 0;
+                bool has_unknown_context = false;
+                for (const auto& target : model.binding_targets) {
+                    const auto provider_it = std::find_if(
+                        providers_->begin(),
+                        providers_->end(),
+                        [&](const ProviderConfig& provider) { return provider.id == target.provider_id; });
+                    if (provider_it == providers_->end()) {
+                        MessageBoxW(hwnd_, L"One or more binding targets point to a provider that no longer exists.", L"Invalid Binding Target", MB_OK | MB_ICONERROR);
+                        return;
+                    }
+                    if (IsBindingProvider(*provider_it)) {
+                        MessageBoxW(hwnd_, L"Binding targets cannot point to another binding provider in phase 1.", L"Nested Binding Not Supported", MB_OK | MB_ICONERROR);
+                        return;
+                    }
+                    const auto model_it = std::find_if(
+                        provider_it->models.begin(),
+                        provider_it->models.end(),
+                        [&](const ModelConfig& candidate) { return candidate.id == target.model_id; });
+                    if (model_it == provider_it->models.end()) {
+                        MessageBoxW(hwnd_, L"One or more binding targets point to a model that no longer exists.", L"Invalid Binding Target", MB_OK | MB_ICONERROR);
+                        return;
+                    }
+                    if (model_it->context_window <= 0) {
+                        has_unknown_context = true;
+                    } else if (min_context_window <= 0 || model_it->context_window < min_context_window) {
+                        min_context_window = model_it->context_window;
+                    }
+                    if (model.supports_streaming && !model_it->supports_streaming) {
+                        MessageBoxW(hwnd_, L"Every binding target must support streaming if the binding model is marked as streaming-capable.", L"Incompatible Streaming Capability", MB_OK | MB_ICONERROR);
+                        return;
+                    }
+                    if (model.supports_tools && !model_it->supports_tools) {
+                        MessageBoxW(hwnd_, L"Every binding target must support tools if the binding model is marked as tool-capable.", L"Incompatible Tool Capability", MB_OK | MB_ICONERROR);
+                        return;
+                    }
+                    if (model.supports_vision && !model_it->supports_vision) {
+                        MessageBoxW(hwnd_, L"Every binding target must support vision if the binding model is marked as vision-capable.", L"Incompatible Vision Capability", MB_OK | MB_ICONERROR);
+                        return;
+                    }
+                    if (model.supports_embedding && !model_it->supports_embedding) {
+                        MessageBoxW(hwnd_, L"Every binding target must support embeddings if the binding model is marked as embedding-capable.", L"Incompatible Embedding Capability", MB_OK | MB_ICONERROR);
+                        return;
+                    }
+                    if (model.supports_thinking && !model_it->supports_thinking) {
+                        MessageBoxW(hwnd_, L"Every binding target must support thinking if the binding model is marked as thinking-capable.", L"Incompatible Thinking Capability", MB_OK | MB_ICONERROR);
+                        return;
+                    }
+                }
+                if (min_context_window > 0 && model.context_window > min_context_window) {
+                    MessageBoxW(hwnd_, (L"Binding model context window cannot exceed the smallest known target context window (" + std::to_wstring(min_context_window) + L").").c_str(), L"Context Window Too Large", MB_OK | MB_ICONERROR);
+                    SetFocus(context_edit_);
+                    return;
+                }
+                if (has_unknown_context) {
+                    const std::wstring warning = L"One or more binding targets have an unknown context window. The binding model will still save, but the configured context window should be checked carefully.";
+                    MessageBoxW(hwnd_, warning.c_str(), L"Binding Context Warning", MB_OK | MB_ICONWARNING);
+                }
+            }
+        }
+        model.default_reasoning_effort = HasReasoningSelector() ? SelectedOptionalComboValue(reasoning_combo_) : "";
+        model.default_text_verbosity = HasVerbositySelector() ? SelectedOptionalComboValue(verbosity_combo_) : "";
+        ModelEditorResult result;
+        result.model = std::move(model);
+        result.provider_index = SelectedProviderIndex();
+        result_ = std::move(result);
+        DestroyWindow(hwnd_);
+    }
+
+    HWND owner_ = nullptr;
+    HWND hwnd_ = nullptr;
+    HFONT font_ = nullptr;
+    ModelConfig model_;
+    bool editing_ = false;
+    const std::vector<ProviderConfig>* providers_ = nullptr;
+    const ProviderConfig* fixed_provider_ = nullptr;
+    int selected_provider_index_ = -1;
+    std::optional<ModelEditorResult> result_;
+    HWND provider_label_ = nullptr;
+    HWND provider_combo_ = nullptr;
+    HWND id_label_ = nullptr;
+    HWND id_edit_ = nullptr;
+    HWND ollama_load_info_button_ = nullptr;
+    HWND ollama_search_button_ = nullptr;
+    HWND display_label_ = nullptr;
+    HWND display_edit_ = nullptr;
+    HWND context_label_ = nullptr;
+    HWND context_edit_ = nullptr;
+    HWND ollama_timeout_label_ = nullptr;
+    HWND ollama_timeout_edit_ = nullptr;
+    HWND ollama_num_threads_label_ = nullptr;
+    HWND ollama_num_threads_edit_ = nullptr;
+    HWND ollama_no_gpu_check_ = nullptr;
+    HWND ollama_gpu_layers_label_ = nullptr;
+    HWND ollama_gpu_layers_edit_ = nullptr;
+    HWND ollama_ctx_len_label_ = nullptr;
+    HWND ollama_ctx_len_edit_ = nullptr;
+    HWND ollama_verbose_check_ = nullptr;
+    HWND ollama_pull_button_ = nullptr;
+    HWND streaming_check_ = nullptr;
+    HWND tools_check_ = nullptr;
+    HWND vision_check_ = nullptr;
+    HWND embedding_check_ = nullptr;
+    HWND thinking_check_ = nullptr;
+    HWND max_completion_check_ = nullptr;
+    HWND reasoning_label_ = nullptr;
+    HWND reasoning_combo_ = nullptr;
+    HWND verbosity_label_ = nullptr;
+    HWND verbosity_combo_ = nullptr;
+    HWND routing_label_ = nullptr;
+    HWND routing_combo_ = nullptr;
+    HWND targets_label_ = nullptr;
+    HWND targets_list_ = nullptr;
+    HWND add_target_button_ = nullptr;
+    HWND edit_target_button_ = nullptr;
+    HWND remove_target_button_ = nullptr;
+    HWND move_target_up_button_ = nullptr;
+    HWND move_target_down_button_ = nullptr;
+    bool ollama_metadata_loaded_ = false;
+    HWND save_button_ = nullptr;
+    HWND cancel_button_ = nullptr;
+};
+
+struct ProviderParsedUrl {
+    bool secure = false;
+    INTERNET_PORT port = 0;
+    std::wstring host;
+    std::wstring path;
+};
+
+ProviderParsedUrl CrackProviderUrl(const std::string& url_utf8) {
+    std::wstring url = Utf8ToWide(url_utf8);
+    URL_COMPONENTSW components{};
+    components.dwStructSize = sizeof(components);
+    wchar_t host[2048] = {};
+    wchar_t path[4096] = {};
+    components.lpszHostName = host;
+    components.dwHostNameLength = static_cast<DWORD>(std::size(host));
+    components.lpszUrlPath = path;
+    components.dwUrlPathLength = static_cast<DWORD>(std::size(path));
+    if (!WinHttpCrackUrl(url.c_str(), static_cast<DWORD>(url.size()), 0, &components)) {
+        throw std::runtime_error("Invalid URL.");
+    }
+    ProviderParsedUrl parsed;
+    parsed.secure = components.nScheme == INTERNET_SCHEME_HTTPS;
+    parsed.port = components.nPort;
+    parsed.host.assign(components.lpszHostName, components.dwHostNameLength);
+    parsed.path.assign(components.lpszUrlPath, components.dwUrlPathLength);
+    if (parsed.path.empty()) parsed.path = L"/";
+    return parsed;
+}
+
+std::string JoinUrlPath(std::string base_url, const std::string& path) {
+    while (!base_url.empty() && base_url.back() == '/') {
+        base_url.pop_back();
+    }
+    return base_url + path;
+}
+
+std::string ReadProviderResponse(HINTERNET request) {
+    std::string response;
+    for (;;) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(request, &available) || available == 0) {
+            break;
+        }
+        std::vector<char> buffer(static_cast<size_t>(available));
+        DWORD read = 0;
+        if (!WinHttpReadData(request, buffer.data(), available, &read)) {
+            break;
+        }
+        response.append(buffer.data(), buffer.data() + read);
+    }
+    return response;
+}
+
+std::optional<RemoteWorkerInfo> FetchAgentWorkerHealth(const ProviderConfig& provider, std::string* error) {
+    try {
+        const std::string url = JoinUrlPath(provider.base_url, "/health");
+        const auto parsed = CrackProviderUrl(url);
+        struct HandleCloser {
+            void operator()(void* handle) const {
+                if (handle) WinHttpCloseHandle(static_cast<HINTERNET>(handle));
+            }
+        };
+        using Handle = std::unique_ptr<void, HandleCloser>;
+        Handle session(WinHttpOpen(L"AgentProviderManager/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+        if (!session) throw std::runtime_error("Could not open WinHTTP session.");
+        Handle connection(WinHttpConnect(static_cast<HINTERNET>(session.get()), parsed.host.c_str(), parsed.port, 0));
+        if (!connection) throw std::runtime_error("Could not connect to remote worker.");
+        const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
+        Handle request(WinHttpOpenRequest(static_cast<HINTERNET>(connection.get()), L"GET", parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
+        if (!request) throw std::runtime_error("Could not create health request.");
+        if (parsed.secure && !provider.tls_certificate_fingerprint.empty()) {
+            DWORD security_flags =
+                SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+            WinHttpSetOption(static_cast<HINTERNET>(request.get()), WINHTTP_OPTION_SECURITY_FLAGS, &security_flags, sizeof(security_flags));
+        }
+        WinHttpSetTimeouts(static_cast<HINTERNET>(request.get()), 10000, 10000, 15000, 15000);
+        std::wstring headers = L"Accept: application/json\r\n";
+        if (!provider.api_key.empty()) {
+            headers += L"Authorization: Bearer " + Utf8ToWide(provider.api_key) + L"\r\n";
+        }
+        if (!WinHttpSendRequest(static_cast<HINTERNET>(request.get()), headers.c_str(), static_cast<DWORD>(headers.size()), nullptr, 0, 0, 0)) {
+            throw std::runtime_error("Could not send health request.");
+        }
+        if (!WinHttpReceiveResponse(static_cast<HINTERNET>(request.get()), nullptr)) {
+            throw std::runtime_error("Could not receive health response.");
+        }
+        DWORD status = 0;
+        DWORD status_size = sizeof(status);
+        WinHttpQueryHeaders(static_cast<HINTERNET>(request.get()), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size, WINHTTP_NO_HEADER_INDEX);
+        const std::string body = ReadProviderResponse(static_cast<HINTERNET>(request.get()));
+        if (status < 200 || status >= 300) {
+            std::ostringstream stream;
+            stream << "Remote worker returned HTTP " << status;
+            if (!body.empty()) stream << ": " << body;
+            throw std::runtime_error(stream.str());
+        }
+        const auto data = json::parse(body);
+        RemoteWorkerInfo info;
+        info.worker_name = data.value("worker_name", provider.name);
+        info.model_name = data.value("model", "");
+        info.purpose = data.value("purpose", "");
+        info.https_port = data.value("agent_https_port", 0);
+        info.shared_secret = provider.api_key;
+        info.certificate_fingerprint = provider.tls_certificate_fingerprint;
+        return info;
+    } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+    }
+    return std::nullopt;
+}
+
+class CatalogModelPickerDialog {
+public:
+    static std::optional<ModelConfig> Show(HWND owner,
+                                           const std::wstring& title,
+                                           std::vector<ModelConfig> models) {
+        CatalogModelPickerDialog dialog(owner, title, std::move(models));
+        return dialog.Run();
+    }
+
+private:
+    CatalogModelPickerDialog(HWND owner, std::wstring title, std::vector<ModelConfig> models)
+        : owner_(owner), title_(std::move(title)), models_(std::move(models)) {}
+
+    static constexpr wchar_t kClassName[] = L"AgentCatalogModelPickerWindow";
+
+    static void RegisterWindowClass(HINSTANCE instance) {
+        static bool registered = false;
+        if (registered) return;
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.hInstance = instance;
+        wc.lpfnWndProc = &CatalogModelPickerDialog::WindowProc;
+        wc.lpszClassName = kClassName;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        RegisterClassExW(&wc);
+        registered = true;
+    }
+
+    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        auto* self = reinterpret_cast<CatalogModelPickerDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+            self = reinterpret_cast<CatalogModelPickerDialog*>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            self->hwnd_ = hwnd;
+        }
+        if (!self) return DefWindowProcW(hwnd, message, w_param, l_param);
+        switch (message) {
+        case WM_CREATE:
+            self->OnCreate();
+            return 0;
+        case WM_SIZE:
+            self->LayoutControls(LOWORD(l_param), HIWORD(l_param));
+            return 0;
+        case WM_COMMAND:
+            self->OnCommand(LOWORD(w_param), HIWORD(w_param));
+            return 0;
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        default:
+            return DefWindowProcW(hwnd, message, w_param, l_param);
+        }
+    }
+
+    std::optional<ModelConfig> Run() {
+        RegisterWindowClass(reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr)));
+        hwnd_ = CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            kClassName,
+            title_.c_str(),
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            720,
+            520,
+            owner_,
+            nullptr,
+            reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr)),
+            this);
+        if (!hwnd_) {
+            return std::nullopt;
+        }
+        CenterWindowToOwner(hwnd_, owner_);
+        EnableWindow(owner_, FALSE);
+        MSG msg{};
+        while (IsWindow(hwnd_) && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (!IsDialogMessageW(hwnd_, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+        EnableWindow(owner_, TRUE);
+        SetForegroundWindow(owner_);
+        return result_;
+    }
+
+    int Scale(int value) const {
+        return MulDiv(value, GetDpiForWindow(hwnd_), 96);
+    }
+
+    void OnCreate() {
+        font_ = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        listbox_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
+            0, 0, 0, 0, hwnd_, nullptr, nullptr, nullptr);
+        details_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr,
+            WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,
+            0, 0, 0, 0, hwnd_, nullptr, nullptr, nullptr);
+        add_button_ = CreateWindowExW(0, L"BUTTON", L"Add Selected", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+        cancel_button_ = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+        for (HWND control : {listbox_, details_, add_button_, cancel_button_}) {
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+        }
+        for (const auto& model : models_) {
+            std::wstring label = Utf8ToWide(model.display_name + " (" + model.id + ")");
+            if (!Trim(model.catalog_source).empty()) {
+                label += L"  [" + Utf8ToWide(model.catalog_source) + L"]";
+            }
+            SendMessageW(listbox_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        }
+        if (!models_.empty()) {
+            SendMessageW(listbox_, LB_SETCURSEL, 0, 0);
+            UpdateDetails();
+        }
+        LayoutControls(720, 520);
+    }
+
+    void LayoutControls(int width, int height) const {
+        const int margin = Scale(14);
+        const int gutter = Scale(10);
+        const int button_height = Scale(30);
+        const int footer_y = height - margin - button_height;
+        const int list_width = (width - margin * 2 - gutter) / 2;
+        MoveWindow(listbox_, margin, margin, list_width, footer_y - margin - gutter, TRUE);
+        MoveWindow(details_, margin + list_width + gutter, margin, list_width, footer_y - margin - gutter, TRUE);
+        MoveWindow(cancel_button_, width - margin - Scale(90), footer_y, Scale(90), button_height, TRUE);
+        MoveWindow(add_button_, width - margin - Scale(200), footer_y, Scale(100), button_height, TRUE);
+    }
+
+    void UpdateDetails() {
+        const LRESULT index = SendMessageW(listbox_, LB_GETCURSEL, 0, 0);
+        if (index == LB_ERR || index < 0 || index >= static_cast<LRESULT>(models_.size())) {
+            SetWindowTextW(details_, L"");
+            return;
+        }
+        SetWindowTextW(details_, DescribeModelCatalogEntry(models_[static_cast<size_t>(index)]).c_str());
+    }
+
+    void OnCommand(int id, int notification) {
+        if (id == IDOK) {
+            const LRESULT index = SendMessageW(listbox_, LB_GETCURSEL, 0, 0);
+            if (index != LB_ERR && index >= 0 && index < static_cast<LRESULT>(models_.size())) {
+                result_ = models_[static_cast<size_t>(index)];
+                DestroyWindow(hwnd_);
+            }
+        } else if (id == IDCANCEL) {
+            DestroyWindow(hwnd_);
+        } else if (notification == LBN_SELCHANGE) {
+            UpdateDetails();
+        }
+    }
+
+    HWND owner_ = nullptr;
+    HWND hwnd_ = nullptr;
+    HFONT font_ = nullptr;
+    std::wstring title_;
+    std::vector<ModelConfig> models_;
+    std::optional<ModelConfig> result_;
+    HWND listbox_ = nullptr;
+    HWND details_ = nullptr;
+    HWND add_button_ = nullptr;
+    HWND cancel_button_ = nullptr;
+};
+
+class ProviderManagerWindow {
+public:
+    ProviderManagerWindow(HWND owner, AppStorage* storage, std::vector<ProviderConfig>* providers, std::function<void()> on_changed)
+        : owner_(owner), storage_(storage), providers_(providers), on_changed_(std::move(on_changed)) {}
+
+    HWND Create(HINSTANCE instance) {
+        RegisterWindowClass(instance);
+        hwnd_ = CreateWindowExW(
+            WS_EX_APPWINDOW,
+            kProviderManagerClassName,
+            L"Provider Manager",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            900,
+            520,
+            owner_,
+            nullptr,
+            instance,
+            this);
+        return hwnd_;
+    }
+
+    static void RegisterWindowClass(HINSTANCE instance) {
+        static bool registered = false;
+        if (registered) {
+            return;
+        }
+
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.hInstance = instance;
+        wc.lpfnWndProc = &ProviderManagerWindow::WindowProc;
+        wc.lpszClassName = kProviderManagerClassName;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        RegisterClassExW(&wc);
+        registered = true;
+    }
+
+private:
+    static int Scale(HWND hwnd, int value) {
+        return MulDiv(value, GetDpiForWindow(hwnd), 96);
+    }
+
+    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        ProviderManagerWindow* self = reinterpret_cast<ProviderManagerWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+            self = reinterpret_cast<ProviderManagerWindow*>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            self->hwnd_ = hwnd;
+        }
+
+        if (!self) {
+            return DefWindowProcW(hwnd, message, w_param, l_param);
+        }
+
+        switch (message) {
+        case WM_CREATE:
+            self->OnCreate();
+            return 0;
+        case WM_SIZE:
+            self->LayoutControls(LOWORD(l_param), HIWORD(l_param));
+            return 0;
+        case WM_COMMAND:
+            self->OnCommand(LOWORD(w_param), HIWORD(w_param));
+            return 0;
+        case kProviderTestResultMessage:
+            self->OnTestCompleted(reinterpret_cast<ProviderTestPayload*>(l_param));
+            return 0;
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        case WM_NCDESTROY:
+            delete self;
+            return 0;
+        default:
+            return DefWindowProcW(hwnd, message, w_param, l_param);
+        }
+    }
+
+    void OnCreate() {
+        font_ = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+
+        providers_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr, WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProvidersList), nullptr, nullptr);
+        models_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr, WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelsList), nullptr, nullptr);
+
+        add_provider_button_ = CreateWindowExW(0, L"BUTTON", L"Add Provider", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAddProvider), nullptr, nullptr);
+        edit_provider_button_ = CreateWindowExW(0, L"BUTTON", L"Edit Provider", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kEditProvider), nullptr, nullptr);
+        remove_provider_button_ = CreateWindowExW(0, L"BUTTON", L"Remove Provider", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRemoveProvider), nullptr, nullptr);
+        add_model_button_ = CreateWindowExW(0, L"BUTTON", L"Add Model", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAddModel), nullptr, nullptr);
+        edit_model_button_ = CreateWindowExW(0, L"BUTTON", L"Edit Model", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kEditModel), nullptr, nullptr);
+        remove_model_button_ = CreateWindowExW(0, L"BUTTON", L"Remove Model", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRemoveModel), nullptr, nullptr);
+        test_connection_button_ = CreateWindowExW(0, L"BUTTON", L"Test Connection", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kTestConnection), nullptr, nullptr);
+        close_button_ = CreateWindowExW(0, L"BUTTON", L"Close", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCloseButton), nullptr, nullptr);
+        status_label_ = CreateWindowExW(0, L"STATIC", L"Select a provider and model to test the connection.", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatusLabel), nullptr, nullptr);
+
+        for (HWND control : {providers_list_, models_list_, add_provider_button_, edit_provider_button_, remove_provider_button_, add_model_button_, edit_model_button_, remove_model_button_, test_connection_button_, close_button_, status_label_}) {
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+        }
+
+        RefreshProviders();
+    }
+
+    void LayoutControls(int width, int height) {
+        const int margin = Scale(hwnd_, 12);
+        const int button_height = Scale(hwnd_, 28);
+        const int status_height = Scale(hwnd_, 22);
+        const int gutter = Scale(hwnd_, 12);
+        const int list_top = margin;
+        const int lists_height = height - margin * 2 - button_height * 2 - status_height - gutter * 3;
+        const int list_width = (width - margin * 2 - gutter) / 2;
+
+        MoveWindow(providers_list_, margin, list_top, list_width, lists_height, TRUE);
+        MoveWindow(models_list_, margin + list_width + gutter, list_top, list_width, lists_height, TRUE);
+
+        const int provider_buttons_top = list_top + lists_height + gutter;
+        const int model_buttons_top = provider_buttons_top;
+        const int small_button_width = (list_width - gutter * 2) / 3;
+
+        MoveWindow(add_provider_button_, margin, provider_buttons_top, small_button_width, button_height, TRUE);
+        MoveWindow(edit_provider_button_, margin + small_button_width + gutter, provider_buttons_top, small_button_width, button_height, TRUE);
+        MoveWindow(remove_provider_button_, margin + (small_button_width + gutter) * 2, provider_buttons_top, small_button_width, button_height, TRUE);
+
+        MoveWindow(add_model_button_, margin + list_width + gutter, model_buttons_top, small_button_width, button_height, TRUE);
+        MoveWindow(edit_model_button_, margin + list_width + gutter + small_button_width + gutter, model_buttons_top, small_button_width, button_height, TRUE);
+        MoveWindow(remove_model_button_, margin + list_width + gutter + (small_button_width + gutter) * 2, model_buttons_top, small_button_width, button_height, TRUE);
+
+        const int footer_top = provider_buttons_top + button_height + gutter;
+        MoveWindow(status_label_, margin, footer_top, width - margin * 2 - Scale(hwnd_, 220), status_height, TRUE);
+        MoveWindow(test_connection_button_, width - margin - Scale(hwnd_, 210), footer_top - Scale(hwnd_, 4), Scale(hwnd_, 110), button_height, TRUE);
+        MoveWindow(close_button_, width - margin - Scale(hwnd_, 90), footer_top - Scale(hwnd_, 4), Scale(hwnd_, 90), button_height, TRUE);
+    }
+
+    void RefreshProviders() {
+        SendMessageW(providers_list_, LB_RESETCONTENT, 0, 0);
+        for (const auto& provider : *providers_) {
+            const std::string type_label = ProviderTypeDisplayLabel(provider);
+            std::string detail = provider.base_url;
+            if (IsOAuthProvider(provider) && !provider.oauth_account_label.empty()) {
+                detail = provider.oauth_account_label;
+            }
+            if (NormalizeProviderType(provider.provider_type) == "ollama_local") {
+                detail = "localhost:" + std::to_string(provider.ollama_local_port > 0 ? provider.ollama_local_port : 12434);
+            }
+            const std::wstring label = Utf8ToWide(provider.name + "  [" + type_label + " | " + detail + "]");
+            SendMessageW(providers_list_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        }
+        if (!providers_->empty()) {
+            SendMessageW(providers_list_, LB_SETCURSEL, 0, 0);
+        }
+        RefreshModels();
+    }
+
+    void RefreshModels() {
+        SendMessageW(models_list_, LB_RESETCONTENT, 0, 0);
+
+        const int provider_index = SelectedProviderIndex();
+        if (provider_index < 0) {
+            return;
+        }
+
+        for (const auto& model : providers_->at(static_cast<size_t>(provider_index)).models) {
+            std::wstring label = Utf8ToWide(model.display_name + " (" + model.id + ")");
+            if (model.context_window > 0) {
+                label += L"  ";
+                label += std::to_wstring(model.context_window);
+                label += L" ctx";
+            }
+            if (model.ollama_context_length > 0) {
+                label += L"  ctx=" + std::to_wstring(model.ollama_context_length);
+            }
+            if (model.ollama_num_threads > 0) {
+                label += L"  thr=" + std::to_wstring(model.ollama_num_threads);
+            }
+            if (model.ollama_gpu_layers > 0) {
+                label += L"  gpu=" + std::to_wstring(model.ollama_gpu_layers);
+            }
+            if (!Trim(model.default_reasoning_effort).empty()) {
+                label += L"  effort=" + Utf8ToWide(model.default_reasoning_effort);
+            }
+            if (!Trim(model.default_text_verbosity).empty()) {
+                label += L"  verbosity=" + Utf8ToWide(model.default_text_verbosity);
+            }
+            if (!Trim(model.catalog_source).empty() && model.catalog_source != "manual") {
+                label += L"  [" + Utf8ToWide(model.catalog_source) + L"]";
+            }
+            if (model.is_binding_model) {
+                label += L"  [binding]";
+            }
+            if (model.supports_embedding) {
+                label += L"  [embedding]";
+            }
+            if (model.supports_thinking) {
+                label += L"  [thinking]";
+            }
+            SendMessageW(models_list_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        }
+
+        if (!providers_->at(static_cast<size_t>(provider_index)).models.empty()) {
+            SendMessageW(models_list_, LB_SETCURSEL, 0, 0);
+        }
+    }
+
+    int SelectedProviderIndex() const {
+        const LRESULT selection = SendMessageW(providers_list_, LB_GETCURSEL, 0, 0);
+        return selection == LB_ERR ? -1 : static_cast<int>(selection);
+    }
+
+    int SelectedModelIndex() const {
+        const LRESULT selection = SendMessageW(models_list_, LB_GETCURSEL, 0, 0);
+        return selection == LB_ERR ? -1 : static_cast<int>(selection);
+    }
+
+    void PersistAndNotify() {
+        storage_->SaveProviders(*providers_);
+        if (on_changed_) {
+            on_changed_();
+        }
+    }
+
+    static bool AskYesNo(HWND hwnd, const std::wstring& text, const std::wstring& title) {
+        return MessageBoxW(hwnd, text.c_str(), title.c_str(), MB_YESNO | MB_ICONQUESTION) == IDYES;
+    }
+
+    bool PromptProviderFields(ProviderConfig& provider, bool editing) {
+        auto name = ShowPromptDialog(hwnd_, PromptOptions{
+                                             editing ? L"Edit Provider Name" : L"Add Provider",
+                                             L"Provider name",
+                                             Utf8ToWide(provider.name),
+                                         });
+        if (!name) {
+            return false;
+        }
+
+        auto url = ShowPromptDialog(hwnd_, PromptOptions{
+                                            editing ? L"Edit Provider URL" : L"Provider URL",
+                                            L"Base URL (for example https://api.openai.com/v1)",
+                                            Utf8ToWide(provider.base_url),
+                                        });
+        if (!url) {
+            return false;
+        }
+
+        auto api_key = ShowPromptDialog(hwnd_, PromptOptions{
+                                                editing ? L"Edit API Key" : L"Provider API Key",
+                                                L"API key (leave blank for local endpoints)",
+                                                Utf8ToWide(provider.api_key),
+                                            });
+        if (!api_key) {
+            return false;
+        }
+
+        provider.name = WideToUtf8(*name);
+        provider.base_url = WideToUtf8(*url);
+        provider.api_key = WideToUtf8(*api_key);
+        return true;
+    }
+
+    bool PromptModelFields(ModelConfig& model, bool editing) {
+        auto model_id = ShowPromptDialog(hwnd_, PromptOptions{
+                                                editing ? L"Edit Model ID" : L"Add Model",
+                                                L"Model ID",
+                                                Utf8ToWide(model.id),
+                                            });
+        if (!model_id) {
+            return false;
+        }
+
+        auto display_name = ShowPromptDialog(hwnd_, PromptOptions{
+                                                     editing ? L"Edit Display Name" : L"Model Display Name",
+                                                     L"Display name",
+                                                     Utf8ToWide(model.display_name),
+                                                 });
+        if (!display_name) {
+            return false;
+        }
+
+        auto context_window = ShowPromptDialog(hwnd_, PromptOptions{
+                                                       editing ? L"Edit Context Window" : L"Context Window",
+                                                       L"Context window token limit (blank or 0 if unknown)",
+                                                       model.context_window > 0 ? std::to_wstring(model.context_window) : L"",
+                                                   });
+        if (!context_window) {
+            return false;
+        }
+
+        int parsed_context = 0;
+        const std::wstring trimmed_context = TrimWide(*context_window);
+        if (!trimmed_context.empty()) {
+            const auto value = ParseInt(trimmed_context);
+            if (!value || *value < 0) {
+                MessageBoxW(hwnd_, L"Context window must be a positive whole number, 0, or blank if unknown.", L"Invalid Value", MB_OK | MB_ICONERROR);
+                return false;
+            }
+            parsed_context = *value;
+        }
+
+        model.id = WideToUtf8(*model_id);
+        model.display_name = WideToUtf8(*display_name);
+        model.context_window = parsed_context;
+        model.supports_streaming = AskYesNo(hwnd_, L"Should this model be marked as streaming-capable?", L"Streaming Support");
+        model.supports_tools = AskYesNo(hwnd_, L"Should this model be marked as tool-capable?", L"Tool Support");
+        model.supports_vision = AskYesNo(hwnd_, L"Should this model be marked as vision-capable?", L"Vision Support");
+        model.supports_embedding = AskYesNo(hwnd_, L"Should this model be marked as embedding-capable?", L"Embedding Support");
+        model.supports_thinking = AskYesNo(hwnd_, L"Should this model be marked as thinking-capable?", L"Thinking Support");
+        return true;
+    }
+
+    void OnCommand(int control_id, int notification_code) {
+        switch (control_id) {
+        case kProvidersList:
+            if (notification_code == LBN_SELCHANGE) {
+                RefreshModels();
+            }
+            break;
+        case kAddProvider:
+            AddProvider();
+            break;
+        case kEditProvider:
+            EditProvider();
+            break;
+        case kRemoveProvider:
+            RemoveProvider();
+            break;
+        case kAddModel:
+            AddModel();
+            break;
+        case kEditModel:
+            EditModel();
+            break;
+        case kRemoveModel:
+            RemoveModel();
+            break;
+        case kTestConnection:
+            TestConnection();
+            break;
+        case kCloseButton:
+            DestroyWindow(hwnd_);
+            break;
+        default:
+            break;
+        }
+    }
+
+    void AddProvider() {
+        ProviderConfig provider;
+        provider.id = MakeId("provider");
+        auto edited = ProviderEditorDialog::Show(hwnd_, storage_, provider, false);
+        if (!edited) {
+            return;
+        }
+
+        providers_->push_back(std::move(*edited));
+        PersistAndNotify();
+        RefreshProviders();
+        SendMessageW(providers_list_, LB_SETCURSEL, static_cast<WPARAM>(providers_->size() - 1), 0);
+        RefreshModels();
+    }
+
+    void EditProvider() {
+        const int provider_index = SelectedProviderIndex();
+        if (provider_index < 0) {
+            return;
+        }
+
+        ProviderConfig provider = providers_->at(static_cast<size_t>(provider_index));
+        auto edited = ProviderEditorDialog::Show(hwnd_, storage_, provider, true);
+        if (!edited) {
+            return;
+        }
+
+        providers_->at(static_cast<size_t>(provider_index)) = std::move(*edited);
+        PersistAndNotify();
+        RefreshProviders();
+        SendMessageW(providers_list_, LB_SETCURSEL, provider_index, 0);
+        RefreshModels();
+    }
+
+    void RemoveProvider() {
+        const int provider_index = SelectedProviderIndex();
+        if (provider_index < 0) {
+            return;
+        }
+
+        const std::wstring provider_name = Utf8ToWide(providers_->at(static_cast<size_t>(provider_index)).name);
+        if (MessageBoxW(hwnd_, (L"Remove provider \"" + provider_name + L"\" and all of its models?").c_str(), L"Confirm Removal", MB_YESNO | MB_ICONWARNING) != IDYES) {
+            return;
+        }
+
+        providers_->erase(providers_->begin() + provider_index);
+        PersistAndNotify();
+        RefreshProviders();
+    }
+
+    void AddModel() {
+        const int provider_index = SelectedProviderIndex();
+        if (provider_index < 0) {
+            MessageBoxW(hwnd_, L"Select a provider before adding a model.", L"No Provider Selected", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+
+        ModelConfig model;
+        ProviderConfig& provider = providers_->at(static_cast<size_t>(provider_index));
+        if (IsOAuthProvider(provider) || IsLmStudioProvider(provider)) {
+            std::string error;
+            auto catalog = LoadProviderCatalog(storage_, provider, &error);
+            if (!error.empty() && catalog.empty()) {
+                MessageBoxW(hwnd_, Utf8ToWide(error).c_str(), L"Provider Model Catalog", MB_OK | MB_ICONERROR);
+                return;
+            }
+            catalog.erase(
+                std::remove_if(catalog.begin(), catalog.end(), [&](const ModelConfig& candidate) {
+                    return std::any_of(
+                        provider.models.begin(),
+                        provider.models.end(),
+                        [&](const ModelConfig& existing) { return existing.id == candidate.id; });
+                }),
+                catalog.end());
+            if (catalog.empty()) {
+                MessageBoxW(hwnd_, L"All catalog models are already present for this provider. Use Edit Provider -> Refresh Models if the provider catalog has changed.", L"No Additional Models", MB_OK | MB_ICONINFORMATION);
+                return;
+            }
+            auto selected = CatalogModelPickerDialog::Show(
+                hwnd_,
+                IsOAuthProvider(provider) ? L"Add OpenAI OAuth Model" : L"Add LM Studio Model",
+                std::move(catalog));
+            if (!selected) {
+                return;
+            }
+            auto edited = ModelEditorDialog::Show(hwnd_, std::move(*selected), false, nullptr, provider_index, &provider);
+            if (!edited) {
+                return;
+            }
+            provider.models.push_back(std::move(edited->model));
+            PersistAndNotify();
+            RefreshModels();
+            return;
+        }
+        if (IsAgentHttpsProvider(provider)) {
+            std::string error;
+            const auto worker = FetchAgentWorkerHealth(provider, &error);
+            if (!worker) {
+                MessageBoxW(hwnd_, Utf8ToWide(std::string("Could not retrieve models from the Agent HTTPS worker: ") + error).c_str(), L"Remote Model Discovery Failed", MB_OK | MB_ICONERROR);
+                return;
+            }
+            model.id = worker->model_name;
+            model.display_name = worker->model_name.empty() ? worker->worker_name : worker->model_name;
+            model.context_window = 0;
+            model.supports_streaming = true;
+            model.supports_tools = true;
+            model.supports_vision = worker->purpose == "image_ingestion";
+        }
+
+        auto edited = ModelEditorDialog::Show(
+            hwnd_,
+            model,
+            false,
+            providers_,
+            provider_index,
+            IsBindingProvider(provider) ? &provider : nullptr);
+        if (!edited) {
+            return;
+        }
+
+        int target_provider_index = edited->provider_index;
+        if (target_provider_index < 0 || target_provider_index >= static_cast<int>(providers_->size())) {
+            target_provider_index = provider_index;
+        }
+
+        ProviderConfig& target_provider = providers_->at(static_cast<size_t>(target_provider_index));
+        const auto duplicate = std::find_if(
+            target_provider.models.begin(),
+            target_provider.models.end(),
+            [&](const ModelConfig& existing) {
+                return existing.id == edited->model.id;
+            });
+        if (duplicate != target_provider.models.end()) {
+            MessageBoxW(hwnd_,
+                (L"The selected provider already has a model with ID \"" + Utf8ToWide(edited->model.id) + L"\". Edit the existing model or remove it first.").c_str(),
+                L"Duplicate Model",
+                MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+
+        target_provider.models.push_back(std::move(edited->model));
+        PersistAndNotify();
+        SendMessageW(providers_list_, LB_SETCURSEL, static_cast<WPARAM>(target_provider_index), 0);
+        RefreshModels();
+    }
+
+    void EditModel() {
+        const int provider_index = SelectedProviderIndex();
+        const int model_index = SelectedModelIndex();
+        if (provider_index < 0 || model_index < 0) {
+            return;
+        }
+
+        ModelConfig model = providers_->at(static_cast<size_t>(provider_index)).models.at(static_cast<size_t>(model_index));
+        const ProviderConfig& provider = providers_->at(static_cast<size_t>(provider_index));
+        auto edited = ModelEditorDialog::Show(
+            hwnd_,
+            model,
+            true,
+            IsBindingProvider(provider) ? providers_ : nullptr,
+            provider_index,
+            &provider);
+        if (!edited) {
+            return;
+        }
+
+        providers_->at(static_cast<size_t>(provider_index)).models.at(static_cast<size_t>(model_index)) = std::move(edited->model);
+        PersistAndNotify();
+        RefreshModels();
+        SendMessageW(models_list_, LB_SETCURSEL, model_index, 0);
+    }
+
+    void RemoveModel() {
+        const int provider_index = SelectedProviderIndex();
+        const int model_index = SelectedModelIndex();
+        if (provider_index < 0 || model_index < 0) {
+            return;
+        }
+
+        const auto& model = providers_->at(static_cast<size_t>(provider_index)).models.at(static_cast<size_t>(model_index));
+        if (MessageBoxW(hwnd_, (L"Remove model \"" + Utf8ToWide(model.display_name) + L"\"?").c_str(), L"Confirm Removal", MB_YESNO | MB_ICONWARNING) != IDYES) {
+            return;
+        }
+
+        auto& models = providers_->at(static_cast<size_t>(provider_index)).models;
+        models.erase(models.begin() + model_index);
+        PersistAndNotify();
+        RefreshModels();
+    }
+
+    void TestConnection() {
+        const int provider_index = SelectedProviderIndex();
+        const int model_index = SelectedModelIndex();
+        if (provider_index < 0 || model_index < 0) {
+            MessageBoxW(hwnd_, L"Select both a provider and a model first.", L"Missing Selection", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+
+        const ProviderConfig provider = providers_->at(static_cast<size_t>(provider_index));
+        const ModelConfig model = provider.models.at(static_cast<size_t>(model_index));
+        if (IsOAuthProvider(provider) && !provider.oauth_authenticated) {
+            const wchar_t* message = L"This provider is not authenticated. Use Edit Provider and Sign In first.";
+            MessageBoxW(hwnd_, message, L"OpenAI OAuth Not Ready", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+
+        EnableWindow(test_connection_button_, FALSE);
+        SetWindowTextW(status_label_, L"Testing provider connection...");
+
+        std::thread([hwnd = hwnd_, provider, model, storage = storage_]() {
+            const TestConnectionResult result = OpenAIClient::TestConnection(provider, model);
+            // Write diagnostic log to file
+            if (!result.details_log.empty() && storage) {
+                try {
+                    const auto log_path = storage->log_root() / "providers" / "test_connection.log";
+                    std::filesystem::create_directories(log_path.parent_path());
+                    std::ofstream log_file(log_path, std::ios::binary | std::ios::app);
+                    if (log_file.is_open()) {
+                        log_file << result.details_log;
+                        log_file << "--- end connection test ---\r\n\r\n";
+                    }
+                } catch (...) {}
+            }
+            auto* payload = new ProviderTestPayload;
+            payload->success = result.success;
+            payload->message = Utf8ToWide(result.message);
+            payload->details_log = result.details_log;
+            PostMessageW(hwnd, kProviderTestResultMessage, 0, reinterpret_cast<LPARAM>(payload));
+        }).detach();
+    }
+
+    void OnTestCompleted(ProviderTestPayload* payload) {
+        std::unique_ptr<ProviderTestPayload> guard(payload);
+        EnableWindow(test_connection_button_, TRUE);
+        SetWindowTextW(status_label_, payload->message.c_str());
+        MessageBoxW(hwnd_, payload->message.c_str(), payload->success ? L"Connection Successful" : L"Connection Failed", MB_OK | (payload->success ? MB_ICONINFORMATION : MB_ICONERROR));
+    }
+
+    HWND owner_ = nullptr;
+    HWND hwnd_ = nullptr;
+    AppStorage* storage_ = nullptr;
+    std::vector<ProviderConfig>* providers_ = nullptr;
+    std::function<void()> on_changed_;
+
+    HFONT font_ = nullptr;
+    HWND providers_list_ = nullptr;
+    HWND models_list_ = nullptr;
+    HWND add_provider_button_ = nullptr;
+    HWND edit_provider_button_ = nullptr;
+    HWND remove_provider_button_ = nullptr;
+    HWND add_model_button_ = nullptr;
+    HWND edit_model_button_ = nullptr;
+    HWND remove_model_button_ = nullptr;
+    HWND test_connection_button_ = nullptr;
+    HWND close_button_ = nullptr;
+    HWND status_label_ = nullptr;
+};
+}  // namespace
+
+HWND CreateProviderManagerWindow(HWND owner, AppStorage* storage, std::vector<ProviderConfig>* providers, std::function<void()> on_changed) {
+    auto* window = new ProviderManagerWindow(owner, storage, providers, std::move(on_changed));
+    return window->Create(reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr)));
+}

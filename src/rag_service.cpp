@@ -1,0 +1,7572 @@
+#include "rag_service.h"
+
+#include "util.h"
+
+// Suppress MSVC warnings inside the hnswlib header.
+#pragma warning(push)
+#pragma warning(disable: 4267 4305 4244)
+#include "../third_party/hnswlib/hnswlib.h"
+#pragma warning(pop)
+
+#include <nlohmann/json.hpp>
+#include <sqlite3.h>
+#include <compressapi.h>
+#include <shellapi.h>
+#include <windows.h>
+#include <bcrypt.h>
+#include <winhttp.h>
+#include <wincrypt.h>
+
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <cctype>
+#include <cstring>
+#include <cmath>
+#include <cstdint>
+#include <cwchar>
+#include <cwctype>
+#include <deque>
+#include <functional>
+#include <fstream>
+#include <future>
+#include <iomanip>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <memory>
+#include <regex>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <thread>
+
+using json = nlohmann::json;
+
+namespace {
+std::string BytesToHex(uint64_t value);
+std::string StableHash(const std::string& text);
+bool LooksLikeText(const std::string& content);
+int EstimateTokens(const std::string& text);
+std::string ColumnText(sqlite3_stmt* statement, int column);
+std::string ReadWholeFile(const std::filesystem::path& path);
+std::vector<std::string> ChunkText(const std::string& text, int chunk_size, int overlap);
+std::wstring LowerExtension(const std::filesystem::path& path);
+bool IsHtmlExtension(const std::filesystem::path& path);
+std::string MimeTypeForPath(const std::filesystem::path& path);
+std::string HtmlToMarkdownText(const std::string& html);
+bool IsRichExtractionExtension(const std::filesystem::path& path);
+bool IsImageExtension(const std::filesystem::path& path);
+std::string ExtractRichDocumentToMarkdown(const std::filesystem::path& path, std::string* extractor_id);
+std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* extractor_id);
+std::optional<std::string> DescribeImageWithOllamaVisionDirect(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error);
+std::string SanitizeUtf8ForJson(const std::string& text);
+bool PythonModuleAvailable(const std::wstring& python_executable, const std::string& module_name);
+
+std::string RagStorageModeToString(RagDocumentStorageMode mode) {
+    switch (mode) {
+    case RagDocumentStorageMode::CopyIntoRagStore:
+        return "copy_into_rag_store";
+    case RagDocumentStorageMode::ReferenceInPlace:
+        return "reference_in_place";
+    case RagDocumentStorageMode::CopyAndTrackOriginal:
+    default:
+        return "copy_and_track_original";
+    }
+}
+
+RagDocumentStorageMode RagStorageModeFromString(const std::string& value) {
+    if (value == "copy_into_rag_store") {
+        return RagDocumentStorageMode::CopyIntoRagStore;
+    }
+    if (value == "reference_in_place") {
+        return RagDocumentStorageMode::ReferenceInPlace;
+    }
+    return RagDocumentStorageMode::CopyAndTrackOriginal;
+}
+
+std::string DefaultImageVisionPrompt() {
+    return "Describe this image for RAG ingestion. Include visible text, objects, layout, chart or graph interpretation, axes, legends, units, notable trends, and any uncertainty. Return concise Markdown with factual observations only.";
+}
+
+std::string EffectiveRemoteAgentModel(const RagImageIngestSettings& settings) {
+    const std::string remote_model = Trim(settings.remote_agent_model);
+    if (!remote_model.empty()) {
+        return remote_model;
+    }
+    return Trim(settings.vision_model);
+}
+
+std::string NormalizeImageIngestMode(std::string mode) {
+    mode = Trim(mode);
+    std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (mode == "paddle" || mode == "paddleocr" || mode == "paddle_ocr" || mode == "paddle_ocr_gpu") {
+        return "paddle_ocr_gpu";
+    }
+    if (mode == "vision" || mode == "vlm" || mode == "vision_language" || mode == "vision_language_gpu") {
+        return "vision_language_gpu";
+    }
+    if (mode == "remote" || mode == "remote_agent" || mode == "agent_remote" || mode == "agent_https") {
+        return "remote_agent";
+    }
+    return "tesseract_cpu";
+}
+
+std::string NormalizeImageVisionProvider(std::string provider) {
+    provider = Trim(provider);
+    std::transform(provider.begin(), provider.end(), provider.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (provider == "ollama") {
+        return "ollama";
+    }
+    if (provider == "remote" || provider == "remote_agent" || provider == "agent_remote" || provider == "agent_https") {
+        return "remote_agent";
+    }
+    return provider.empty() ? "none" : provider;
+}
+
+int ClampOllamaInstanceCount(int value) {
+    return std::clamp(value <= 0 ? 1 : value, 1, 32);
+}
+
+int ClampOllamaStartPort(int value) {
+    return std::clamp(value <= 0 ? 11434 : value, 1, 65535);
+}
+
+int ClampRemoteAgentHttpsPort(int value) {
+    return std::clamp(value <= 0 ? 8765 : value, 1, 65535);
+}
+
+json RemoteAgentConfigJsonValue(const RagImageIngestSettings& settings) {
+    const std::string text = Trim(settings.remote_agent_config_json);
+    if (text.empty()) {
+        return nullptr;
+    }
+    try {
+        return json::parse(text);
+    } catch (...) {
+        return text;
+    }
+}
+
+void ApplyRemoteAgentConfigToImageSettings(const json& config, RagImageIngestSettings& settings) {
+    if (!config.is_object()) {
+        return;
+    }
+    settings.remote_agent_worker_name = config.value("worker_name", settings.remote_agent_worker_name);
+    if (config.contains("agent_server") && config["agent_server"].is_object()) {
+        const auto& server = config["agent_server"];
+        settings.remote_agent_https_port =
+            ClampRemoteAgentHttpsPort(server.value("https_port", settings.remote_agent_https_port));
+        settings.remote_agent_shared_secret = server.value("shared_secret", settings.remote_agent_shared_secret);
+        settings.remote_agent_certificate_fingerprint =
+            server.value("certificate_fingerprint", settings.remote_agent_certificate_fingerprint);
+    }
+    if (config.contains("model") && config["model"].is_object()) {
+        settings.remote_agent_model = config["model"].value("name", settings.remote_agent_model);
+    } else {
+        settings.remote_agent_model = config.value("vision_model", settings.remote_agent_model);
+    }
+    if (config.contains("ollama") && config["ollama"].is_object()) {
+        settings.ollama_instance_count =
+            ClampOllamaInstanceCount(config["ollama"].value("instance_count", settings.ollama_instance_count));
+        settings.ollama_start_port =
+            ClampOllamaStartPort(config["ollama"].value("start_port", settings.ollama_start_port));
+    } else {
+        settings.ollama_instance_count =
+            ClampOllamaInstanceCount(config.value("ollama_instance_count", settings.ollama_instance_count));
+        settings.ollama_start_port =
+            ClampOllamaStartPort(config.value("ollama_start_port", settings.ollama_start_port));
+    }
+}
+
+json RagImageIngestSettingsToJson(const RagImageIngestSettings& settings) {
+    return json{
+        {"enabled", settings.enabled},
+        {"mode", NormalizeImageIngestMode(settings.mode)},
+        {"tesseract_language", settings.tesseract_language.empty() ? "eng" : settings.tesseract_language},
+        {"paddle_python_command", settings.paddle_python_command.empty() ? "python" : settings.paddle_python_command},
+        {"paddle_language", settings.paddle_language.empty() ? "en" : settings.paddle_language},
+        {"vision_provider", NormalizeImageVisionProvider(settings.vision_provider)},
+        {"vision_base_url", settings.vision_base_url.empty() ? "http://localhost" : settings.vision_base_url},
+        {"vision_model", settings.vision_model.empty() ? "qwen2.5vl:7b" : settings.vision_model},
+        {"remote_agent_model", settings.remote_agent_model},
+        {"vision_prompt", settings.vision_prompt.empty() ? DefaultImageVisionPrompt() : settings.vision_prompt},
+        {"ollama_instance_count", ClampOllamaInstanceCount(settings.ollama_instance_count)},
+        {"ollama_start_port", ClampOllamaStartPort(settings.ollama_start_port)},
+        {"ollama_start_locally", settings.ollama_start_locally},
+        {"remote_agent_base_url", settings.remote_agent_base_url.empty() ? "https://127.0.0.1" : settings.remote_agent_base_url},
+        {"remote_agent_https_port", ClampRemoteAgentHttpsPort(settings.remote_agent_https_port)},
+        {"remote_agent_shared_secret", settings.remote_agent_shared_secret},
+        {"remote_agent_certificate_fingerprint", settings.remote_agent_certificate_fingerprint},
+        {"remote_agent_worker_name", settings.remote_agent_worker_name},
+        {"remote_agent_config", RemoteAgentConfigJsonValue(settings)},
+        {"include_ocr_text", settings.include_ocr_text},
+        {"include_visual_description", settings.include_visual_description},
+    };
+}
+
+RagImageIngestSettings RagImageIngestSettingsFromJson(const json& item) {
+    RagImageIngestSettings settings;
+    settings.enabled = item.value("enabled", true);
+    settings.mode = NormalizeImageIngestMode(item.value("mode", "tesseract_cpu"));
+    settings.tesseract_language = item.value("tesseract_language", "eng");
+    if (Trim(settings.tesseract_language).empty()) {
+        settings.tesseract_language = "eng";
+    }
+    settings.paddle_python_command = item.value("paddle_python_command", "python");
+    if (Trim(settings.paddle_python_command).empty()) {
+        settings.paddle_python_command = "python";
+    }
+    settings.paddle_language = item.value("paddle_language", "en");
+    if (Trim(settings.paddle_language).empty()) {
+        settings.paddle_language = "en";
+    }
+    settings.vision_provider = NormalizeImageVisionProvider(item.value("vision_provider", "ollama"));
+    settings.vision_base_url = item.value("vision_base_url", "http://localhost");
+    if (Trim(settings.vision_base_url).empty()) {
+        settings.vision_base_url = "http://localhost";
+    }
+    settings.vision_model = item.value("vision_model", "qwen2.5vl:7b");
+    if (Trim(settings.vision_model).empty()) {
+        settings.vision_model = "qwen2.5vl:7b";
+    }
+    settings.remote_agent_model = item.value("remote_agent_model", "");
+    settings.vision_prompt = item.value("vision_prompt", DefaultImageVisionPrompt());
+    if (Trim(settings.vision_prompt).empty()) {
+        settings.vision_prompt = DefaultImageVisionPrompt();
+    }
+    settings.ollama_instance_count = ClampOllamaInstanceCount(item.value("ollama_instance_count", 1));
+    settings.ollama_start_port = ClampOllamaStartPort(item.value("ollama_start_port", 11434));
+    settings.ollama_start_locally = item.value("ollama_start_locally", false);
+    settings.remote_agent_base_url = item.value("remote_agent_base_url", "https://127.0.0.1");
+    if (Trim(settings.remote_agent_base_url).empty()) {
+        settings.remote_agent_base_url = "https://127.0.0.1";
+    }
+    settings.remote_agent_https_port = ClampRemoteAgentHttpsPort(item.value("remote_agent_https_port", 8765));
+    settings.remote_agent_shared_secret = item.value("remote_agent_shared_secret", "");
+    settings.remote_agent_certificate_fingerprint = item.value("remote_agent_certificate_fingerprint", "");
+    settings.remote_agent_worker_name = item.value("remote_agent_worker_name", "");
+    if (item.contains("remote_agent_config") && !item["remote_agent_config"].is_null()) {
+        settings.remote_agent_config_json = item["remote_agent_config"].is_string()
+            ? item["remote_agent_config"].get<std::string>()
+            : item["remote_agent_config"].dump(2);
+        if (item["remote_agent_config"].is_object()) {
+            ApplyRemoteAgentConfigToImageSettings(item["remote_agent_config"], settings);
+        }
+    } else {
+        settings.remote_agent_config_json = item.value("remote_agent_config_json", "");
+        if (!Trim(settings.remote_agent_config_json).empty()) {
+            try {
+                ApplyRemoteAgentConfigToImageSettings(json::parse(settings.remote_agent_config_json), settings);
+            } catch (...) {
+            }
+        }
+    }
+    if (Trim(settings.remote_agent_model).empty() &&
+        (settings.mode == "remote_agent" || !Trim(settings.remote_agent_config_json).empty())) {
+        settings.remote_agent_model = Trim(settings.vision_model);
+    }
+    settings.include_ocr_text = item.value("include_ocr_text", true);
+    settings.include_visual_description = item.value("include_visual_description", true);
+    return settings;
+}
+
+json RagLibraryToJson(const RagLibraryConfig& config) {
+    return json{
+        {"id", config.id},
+        {"name", config.name},
+        {"description", config.description},
+        {"storage_path", config.storage_path},
+        {"embedding_provider", config.embedding_provider},
+        {"embedding_base_url", config.embedding_base_url},
+        {"embedding_model", config.embedding_model},
+        {"embedding_dimensions", config.embedding_dimensions},
+        {"vector_backend", config.vector_backend},
+        {"max_file_size_mb", config.max_file_size_mb},
+        {"storage_mode", RagStorageModeToString(config.storage_mode)},
+        {"enabled", config.enabled},
+        {"chunk_size_chars", config.chunk_size_chars},
+        {"chunk_overlap_chars", config.chunk_overlap_chars},
+        {"default_max_chunks", config.default_max_chunks},
+        {"rebuild_required", config.rebuild_required},
+        {"rebuild_reason", config.rebuild_reason},
+        {"split_large_extracted_documents", config.split_large_extracted_documents},
+        {"extracted_segment_threshold_mb", config.extracted_segment_threshold_mb},
+        {"extracted_segment_size_mb", config.extracted_segment_size_mb},
+        {"extracted_segment_overlap_chars", config.extracted_segment_overlap_chars},
+        {"created_at", config.created_at},
+        {"updated_at", config.updated_at},
+    };
+}
+
+RagLibraryConfig RagLibraryFromJson(const json& item, const std::string& fallback_id) {
+    RagLibraryConfig config;
+    config.id = item.value("id", fallback_id);
+    config.name = item.value("name", fallback_id);
+    config.description = item.value("description", "");
+    config.storage_path = item.value("storage_path", "");
+    config.embedding_provider = item.value("embedding_provider", "none");
+    config.embedding_base_url = item.value("embedding_base_url", "http://localhost:11434");
+    config.embedding_model = item.value("embedding_model", "");
+    config.embedding_dimensions = std::max(0, item.value("embedding_dimensions", 0));
+    config.vector_backend = item.value("vector_backend", "sqlite_vector_scan");
+    config.max_file_size_mb = std::max(1, item.value("max_file_size_mb", 512));
+    config.storage_mode = RagStorageModeFromString(item.value("storage_mode", "copy_and_track_original"));
+    config.enabled = item.value("enabled", true);
+    config.chunk_size_chars = std::max(500, item.value("chunk_size_chars", 3500));
+    config.chunk_overlap_chars = std::max(0, item.value("chunk_overlap_chars", 350));
+    if (config.chunk_overlap_chars >= config.chunk_size_chars) {
+        config.chunk_overlap_chars = config.chunk_size_chars / 10;
+    }
+    config.default_max_chunks = std::max(1, item.value("default_max_chunks", 8));
+    config.rebuild_required = item.value("rebuild_required", false);
+    config.rebuild_reason = item.value("rebuild_reason", "");
+    config.split_large_extracted_documents = item.value("split_large_extracted_documents", true);
+    config.extracted_segment_threshold_mb = std::max(1, item.value("extracted_segment_threshold_mb", 1));
+    config.extracted_segment_size_mb = std::max(1, item.value("extracted_segment_size_mb", 1));
+    config.extracted_segment_overlap_chars = std::max(0, item.value("extracted_segment_overlap_chars", 8000));
+    config.created_at = item.value("created_at", "");
+    config.updated_at = item.value("updated_at", "");
+    return config;
+}
+
+json ProjectRagBindingToJson(const ProjectRagBinding& binding) {
+    return json{
+        {"rag_id", binding.rag_id},
+        {"enabled", binding.enabled},
+        {"can_read", binding.can_read},
+        {"can_write", binding.can_write},
+        {"expose_as_tool", binding.expose_as_tool},
+        {"can_delete", binding.can_delete},
+        {"can_export", binding.can_export},
+        {"export_path_template", binding.export_path_template},
+        {"default_ingest_target", binding.default_ingest_target},
+        {"retrieval_priority", binding.retrieval_priority},
+        {"max_chunks", binding.max_chunks},
+        {"default_min_confidence", binding.default_min_confidence},
+        {"default_max_confidence", binding.default_max_confidence},
+    };
+}
+
+ProjectRagBinding ProjectRagBindingFromJson(const json& item) {
+    ProjectRagBinding binding;
+    binding.rag_id = item.value("rag_id", "");
+    binding.enabled = item.value("enabled", true);
+    binding.can_read = item.value("can_read", true);
+    binding.can_write = item.value("can_write", false);
+    binding.expose_as_tool = item.value("expose_as_tool", false);
+    binding.can_delete = item.value("can_delete", false);
+    binding.can_export = item.value("can_export", false);
+    binding.export_path_template = item.value("export_path_template", "");
+    binding.default_ingest_target = item.value("default_ingest_target", false);
+    binding.retrieval_priority = item.value("retrieval_priority", 10);
+    binding.max_chunks = std::max(1, item.value("max_chunks", 8));
+    binding.default_min_confidence = std::clamp(item.value("default_min_confidence", 0.0), 0.0, 1.0);
+    binding.default_max_confidence = std::clamp(item.value("default_max_confidence", 1.0), 0.0, 1.0);
+    if (binding.default_min_confidence > binding.default_max_confidence) {
+        binding.default_min_confidence = 0.0;
+        binding.default_max_confidence = 1.0;
+    }
+    return binding;
+}
+
+json RagDocumentToJson(const RagDocumentRecord& document) {
+    return json{
+        {"id", document.id},
+        {"rag_id", document.rag_id},
+        {"display_name", document.display_name},
+        {"original_source_uri", document.original_source_uri},
+        {"original_source_type", document.original_source_type},
+        {"stored_relative_path", document.stored_relative_path},
+        {"extracted_relative_path", document.extracted_relative_path},
+        {"content_hash", document.content_hash},
+        {"file_size", document.file_size},
+        {"mime_type", document.mime_type},
+        {"imported_at", document.imported_at},
+        {"last_indexed_at", document.last_indexed_at},
+        {"metadata_json", document.metadata_json},
+    };
+}
+
+RagDocumentRecord RagDocumentFromJson(const json& item) {
+    RagDocumentRecord document;
+    document.id = item.value("id", "");
+    document.rag_id = item.value("rag_id", "");
+    document.display_name = item.value("display_name", "");
+    document.original_source_uri = item.value("original_source_uri", "");
+    document.original_source_type = item.value("original_source_type", "");
+    document.stored_relative_path = item.value("stored_relative_path", "");
+    document.extracted_relative_path = item.value("extracted_relative_path", "");
+    document.content_hash = item.value("content_hash", "");
+    document.file_size = item.value("file_size", static_cast<uintmax_t>(0));
+    document.mime_type = item.value("mime_type", "");
+    document.imported_at = item.value("imported_at", "");
+    document.last_indexed_at = item.value("last_indexed_at", "");
+    document.metadata_json = item.value("metadata_json", "");
+    return document;
+}
+
+json RagChunkToJson(const RagChunkRecord& chunk) {
+    return json{
+        {"id", chunk.id},
+        {"document_id", chunk.document_id},
+        {"rag_id", chunk.rag_id},
+        {"text", chunk.text},
+        {"content_hash", chunk.content_hash},
+        {"chunk_index", chunk.chunk_index},
+        {"token_estimate", chunk.token_estimate},
+        {"metadata_json", chunk.metadata_json},
+    };
+}
+
+RagChunkRecord RagChunkFromJson(const json& item) {
+    RagChunkRecord chunk;
+    chunk.id = item.value("id", "");
+    chunk.document_id = item.value("document_id", "");
+    chunk.rag_id = item.value("rag_id", "");
+    chunk.text = item.value("text", "");
+    chunk.content_hash = item.value("content_hash", "");
+    chunk.chunk_index = item.value("chunk_index", 0);
+    chunk.token_estimate = item.value("token_estimate", 0);
+    chunk.metadata_json = item.value("metadata_json", "");
+    return chunk;
+}
+
+json LoadJsonFile(const std::filesystem::path& path, const json& fallback) {
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        return fallback;
+    }
+    try {
+        json data;
+        input >> data;
+        return data;
+    } catch (...) {
+        return fallback;
+    }
+}
+
+void SaveJsonFile(const std::filesystem::path& path, const json& data) {
+    std::filesystem::create_directories(path.parent_path());
+    const std::filesystem::path tmp_path = path.string() + ".tmp";
+    {
+        std::ofstream output(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!output.is_open()) {
+            throw std::runtime_error("Unable to open file for writing: " + tmp_path.string());
+        }
+        output << data.dump(2);
+        output.flush();
+    }
+    for (int attempt = 1; attempt <= 5; ++attempt) {
+        try {
+            std::filesystem::rename(tmp_path, path);
+            return;
+        } catch (const std::filesystem::filesystem_error&) {
+            if (attempt == 5) {
+                std::filesystem::remove(tmp_path);
+                throw std::runtime_error("Unable to replace file: " + path.string());
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+}
+
+struct SqliteDeleter {
+    void operator()(sqlite3* db) const {
+        if (db) {
+            sqlite3_close(db);
+        }
+    }
+};
+
+struct StatementDeleter {
+    void operator()(sqlite3_stmt* statement) const {
+        if (statement) {
+            sqlite3_finalize(statement);
+        }
+    }
+};
+
+using SqliteDb = std::unique_ptr<sqlite3, SqliteDeleter>;
+using SqliteStatement = std::unique_ptr<sqlite3_stmt, StatementDeleter>;
+
+void ThrowSqlite(sqlite3* db, const std::string& action) {
+    throw std::runtime_error(action + ": " + sqlite3_errmsg(db));
+}
+
+SqliteDb OpenDatabase(const std::filesystem::path& path) {
+    std::filesystem::create_directories(path.parent_path());
+    sqlite3* raw = nullptr;
+    const std::string path_utf8 = WideToUtf8(path.wstring());
+    if (sqlite3_open_v2(path_utf8.c_str(), &raw, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr) != SQLITE_OK) {
+        std::string message = raw ? sqlite3_errmsg(raw) : "unknown SQLite open error";
+        if (raw) {
+            sqlite3_close(raw);
+        }
+        throw std::runtime_error("Could not open RAG database: " + message);
+    }
+    return SqliteDb(raw);
+}
+
+void ExecSql(sqlite3* db, const char* sql) {
+    char* error = nullptr;
+    if (sqlite3_exec(db, sql, nullptr, nullptr, &error) != SQLITE_OK) {
+        std::string message = error ? error : sqlite3_errmsg(db);
+        sqlite3_free(error);
+        throw std::runtime_error(message);
+    }
+}
+
+SqliteStatement PrepareSql(sqlite3* db, const char* sql) {
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(db, sql, -1, &raw, nullptr) != SQLITE_OK) {
+        ThrowSqlite(db, "Could not prepare SQL statement");
+    }
+    return SqliteStatement(raw);
+}
+
+void BindText(sqlite3_stmt* statement, int index, const std::string& value) {
+    sqlite3_bind_text(statement, index, value.c_str(), static_cast<int>(value.size()), SQLITE_TRANSIENT);
+}
+
+void BindBlob(sqlite3_stmt* statement, int index, const std::string& value) {
+    sqlite3_bind_blob(statement, index, value.data(), static_cast<int>(value.size()), SQLITE_TRANSIENT);
+}
+
+struct InternetHandleCloser {
+    void operator()(void* handle) const {
+        if (handle) {
+            WinHttpCloseHandle(static_cast<HINTERNET>(handle));
+        }
+    }
+};
+
+using UniqueInternetHandle = std::unique_ptr<void, InternetHandleCloser>;
+
+struct ParsedUrl {
+    bool secure = false;
+    INTERNET_PORT port = 0;
+    std::wstring host;
+    std::wstring path;
+};
+
+ParsedUrl CrackUrl(const std::string& url_utf8) {
+    std::wstring url = Utf8ToWide(url_utf8);
+    URL_COMPONENTSW components{};
+    components.dwStructSize = sizeof(components);
+
+    wchar_t host[2048] = {};
+    wchar_t path[4096] = {};
+    components.lpszHostName = host;
+    components.dwHostNameLength = static_cast<DWORD>(std::size(host));
+    components.lpszUrlPath = path;
+    components.dwUrlPathLength = static_cast<DWORD>(std::size(path));
+
+    if (!WinHttpCrackUrl(url.c_str(), static_cast<DWORD>(url.size()), 0, &components)) {
+        throw std::runtime_error("Invalid URL: " + url_utf8);
+    }
+
+    ParsedUrl parsed;
+    parsed.secure = components.nScheme == INTERNET_SCHEME_HTTPS;
+    parsed.port = components.nPort;
+    parsed.host.assign(components.lpszHostName, components.dwHostNameLength);
+    parsed.path.assign(components.lpszUrlPath, components.dwUrlPathLength);
+    if (parsed.path.empty()) {
+        parsed.path = L"/";
+    }
+    return parsed;
+}
+
+std::string JoinUrlPath(std::string base_url, const std::string& path) {
+    while (!base_url.empty() && base_url.back() == '/') {
+        base_url.pop_back();
+    }
+    return base_url + path;
+}
+
+std::string NormalizeFingerprint(std::string value) {
+    std::string lower = value;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    const size_t colon = lower.find(':');
+    if (colon != std::string::npos && lower.substr(0, colon).find("sha256") != std::string::npos) {
+        value = value.substr(colon + 1);
+    }
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (char ch : value) {
+        if (std::isxdigit(static_cast<unsigned char>(ch))) {
+            normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        }
+    }
+    return normalized;
+}
+
+std::string HexDigest(const unsigned char* bytes, DWORD length) {
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
+    for (DWORD i = 0; i < length; ++i) {
+        out << std::setw(2) << static_cast<int>(bytes[i]);
+    }
+    return out.str();
+}
+
+void ConfigurePinnedCertificateRequestSecurity(HINTERNET request, const std::string& certificate_fingerprint) {
+    if (Trim(certificate_fingerprint).empty()) {
+        return;
+    }
+    DWORD security_flags =
+        SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+        SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+        SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+        SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+    WinHttpSetOption(request, WINHTTP_OPTION_SECURITY_FLAGS, &security_flags, sizeof(security_flags));
+}
+
+bool VerifyPinnedCertificateFingerprint(HINTERNET request, const std::string& certificate_fingerprint, std::string* error) {
+    const std::string expected = NormalizeFingerprint(certificate_fingerprint);
+    if (expected.empty()) {
+        return true;
+    }
+
+    PCCERT_CONTEXT cert_context = nullptr;
+    DWORD cert_size = sizeof(cert_context);
+    if (!WinHttpQueryOption(request, WINHTTP_OPTION_SERVER_CERT_CONTEXT, &cert_context, &cert_size) || !cert_context) {
+        if (error) {
+            *error = "Could not inspect the remote Agent HTTPS certificate.";
+        }
+        return false;
+    }
+
+    unsigned char hash[32] = {};
+    DWORD hash_size = sizeof(hash);
+    const BOOL hashed = CryptHashCertificate2(
+        BCRYPT_SHA256_ALGORITHM,
+        0,
+        nullptr,
+        cert_context->pbCertEncoded,
+        cert_context->cbCertEncoded,
+        hash,
+        &hash_size);
+    CertFreeCertificateContext(cert_context);
+    if (!hashed) {
+        if (error) {
+            *error = "Could not compute the remote Agent HTTPS certificate fingerprint.";
+        }
+        return false;
+    }
+
+    if (HexDigest(hash, hash_size) != expected) {
+        if (error) {
+            *error = "Remote Agent HTTPS certificate fingerprint did not match the image ingest settings.";
+        }
+        return false;
+    }
+    return true;
+}
+
+std::wstring RemoteAgentAuthHeader(const RagImageIngestSettings& settings) {
+    if (Trim(settings.remote_agent_shared_secret).empty()) {
+        return {};
+    }
+    return L"Authorization: Bearer " + Utf8ToWide(settings.remote_agent_shared_secret) + L"\r\n";
+}
+
+bool UrlHasExplicitPort(const std::string& url) {
+    const size_t scheme = url.find("://");
+    const size_t host_start = scheme == std::string::npos ? 0 : scheme + 3;
+    const size_t host_end = url.find('/', host_start);
+    const std::string host_part = url.substr(host_start, host_end == std::string::npos ? std::string::npos : host_end - host_start);
+    if (!host_part.empty() && host_part.front() == '[') {
+        const size_t closing = host_part.find(']');
+        return closing != std::string::npos && closing + 1 < host_part.size() && host_part[closing + 1] == ':';
+    }
+    return host_part.find(':') != std::string::npos;
+}
+
+std::string BuildRemoteAgentBaseUrl(const RagImageIngestSettings& settings) {
+    std::string base_url = Trim(settings.remote_agent_base_url);
+    if (base_url.empty()) {
+        base_url = "https://127.0.0.1";
+    }
+    if (base_url.find("://") == std::string::npos) {
+        base_url = "https://" + base_url;
+    }
+    while (!base_url.empty() && base_url.back() == '/') {
+        base_url.pop_back();
+    }
+    if (!UrlHasExplicitPort(base_url)) {
+        base_url += ":" + std::to_string(ClampRemoteAgentHttpsPort(settings.remote_agent_https_port));
+    }
+    return base_url;
+}
+
+std::string HttpRequestText(
+    const std::string& method,
+    const std::string& url,
+    const std::string& body,
+    const std::wstring& extra_headers,
+    const std::string& certificate_fingerprint,
+    DWORD receive_timeout_ms) {
+    ParsedUrl parsed = CrackUrl(url);
+    UniqueInternetHandle session(WinHttpOpen(L"AgentRagService/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+    if (!session) {
+        throw std::runtime_error("Could not open HTTP session.");
+    }
+
+    UniqueInternetHandle connection(WinHttpConnect(static_cast<HINTERNET>(session.get()), parsed.host.c_str(), parsed.port, 0));
+    if (!connection) {
+        throw std::runtime_error("Could not connect to embedding provider.");
+    }
+
+    const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
+    const std::wstring method_wide = Utf8ToWide(method);
+    UniqueInternetHandle request(WinHttpOpenRequest(static_cast<HINTERNET>(connection.get()), method_wide.c_str(), parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
+    if (!request) {
+        throw std::runtime_error("Could not create embedding provider request.");
+    }
+
+    if (parsed.secure) {
+        ConfigurePinnedCertificateRequestSecurity(static_cast<HINTERNET>(request.get()), certificate_fingerprint);
+    }
+
+    WinHttpSetTimeouts(static_cast<HINTERNET>(request.get()), 10000, 10000, 30000, receive_timeout_ms);
+    std::wstring headers = L"Accept: application/json\r\n";
+    if (!body.empty()) {
+        headers += L"Content-Type: application/json\r\n";
+    }
+    headers += extra_headers;
+    LPVOID request_body = body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(body.data());
+    if (!WinHttpSendRequest(static_cast<HINTERNET>(request.get()), headers.c_str(), static_cast<DWORD>(headers.size()), request_body, static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0)) {
+        throw std::runtime_error("Could not send embedding provider request.");
+    }
+    if (!WinHttpReceiveResponse(static_cast<HINTERNET>(request.get()), nullptr)) {
+        throw std::runtime_error("Could not receive embedding provider response.");
+    }
+
+    if (parsed.secure && !Trim(certificate_fingerprint).empty()) {
+        std::string certificate_error;
+        if (!VerifyPinnedCertificateFingerprint(static_cast<HINTERNET>(request.get()), certificate_fingerprint, &certificate_error)) {
+            throw std::runtime_error(certificate_error);
+        }
+    }
+
+    DWORD status_code = 0;
+    DWORD status_size = sizeof(status_code);
+    WinHttpQueryHeaders(static_cast<HINTERNET>(request.get()), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status_code, &status_size, WINHTTP_NO_HEADER_INDEX);
+
+    std::string response;
+    for (;;) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(static_cast<HINTERNET>(request.get()), &available)) {
+            throw std::runtime_error("Could not read embedding provider response.");
+        }
+        if (available == 0) {
+            break;
+        }
+        std::string buffer(available, '\0');
+        DWORD read = 0;
+        if (!WinHttpReadData(static_cast<HINTERNET>(request.get()), buffer.data(), available, &read)) {
+            throw std::runtime_error("Could not read embedding provider response body.");
+        }
+        buffer.resize(read);
+        response += buffer;
+    }
+
+    if (status_code < 200 || status_code >= 300) {
+        std::ostringstream message;
+        message << "Embedding provider HTTP " << status_code;
+        if (!response.empty()) {
+            message << ": " << response.substr(0, 500);
+        }
+        throw std::runtime_error(message.str());
+    }
+    return response;
+}
+
+std::string HttpPostJson(const std::string& url, const std::string& body, DWORD receive_timeout_ms = 180000) {
+    return HttpRequestText("POST", url, body, {}, {}, receive_timeout_ms);
+}
+
+std::string HttpPostJsonWithAgentAuth(const std::string& url, const std::string& body, const RagImageIngestSettings& settings) {
+    return HttpRequestText(
+        "POST",
+        url,
+        body,
+        RemoteAgentAuthHeader(settings),
+        settings.remote_agent_certificate_fingerprint,
+        600000);
+}
+
+std::string HttpPostOllamaGenerateStreamWithAgentAuth(
+    const std::string& url,
+    const std::string& body,
+    const RagImageIngestSettings& settings,
+    const std::function<void(const std::string&)>& on_delta = {}) {
+    ParsedUrl parsed = CrackUrl(url);
+    UniqueInternetHandle session(WinHttpOpen(L"AgentRagService/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+    if (!session) {
+        throw std::runtime_error("Could not open Remote Agent streaming session.");
+    }
+
+    UniqueInternetHandle connection(WinHttpConnect(static_cast<HINTERNET>(session.get()), parsed.host.c_str(), parsed.port, 0));
+    if (!connection) {
+        throw std::runtime_error("Could not connect to Remote Agent.");
+    }
+
+    const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
+    UniqueInternetHandle request(WinHttpOpenRequest(static_cast<HINTERNET>(connection.get()), L"POST", parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
+    if (!request) {
+        throw std::runtime_error("Could not create Remote Agent streaming request.");
+    }
+
+    if (parsed.secure) {
+        ConfigurePinnedCertificateRequestSecurity(static_cast<HINTERNET>(request.get()), settings.remote_agent_certificate_fingerprint);
+    }
+
+    WinHttpSetTimeouts(static_cast<HINTERNET>(request.get()), 10000, 10000, 30000, 600000);
+    std::wstring headers =
+        L"Accept: application/x-ndjson, application/json\r\n"
+        L"Content-Type: application/json\r\n" +
+        RemoteAgentAuthHeader(settings);
+    if (!WinHttpSendRequest(static_cast<HINTERNET>(request.get()), headers.c_str(), static_cast<DWORD>(headers.size()), const_cast<char*>(body.data()), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0)) {
+        throw std::runtime_error("Could not send Remote Agent streaming request.");
+    }
+    if (!WinHttpReceiveResponse(static_cast<HINTERNET>(request.get()), nullptr)) {
+        throw std::runtime_error("Could not receive Remote Agent streaming response.");
+    }
+
+    if (parsed.secure && !Trim(settings.remote_agent_certificate_fingerprint).empty()) {
+        std::string certificate_error;
+        if (!VerifyPinnedCertificateFingerprint(static_cast<HINTERNET>(request.get()), settings.remote_agent_certificate_fingerprint, &certificate_error)) {
+            throw std::runtime_error(certificate_error);
+        }
+    }
+
+    DWORD status_code = 0;
+    DWORD status_size = sizeof(status_code);
+    WinHttpQueryHeaders(static_cast<HINTERNET>(request.get()), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status_code, &status_size, WINHTTP_NO_HEADER_INDEX);
+
+    std::string line_buffer;
+    std::string raw_response;
+    std::string generated_text;
+    auto consume_lines = [&](bool flush) {
+        for (;;) {
+            const size_t newline = line_buffer.find('\n');
+            if (newline == std::string::npos) {
+                if (!flush || Trim(line_buffer).empty()) {
+                    break;
+                }
+            }
+
+            std::string line;
+            if (newline == std::string::npos) {
+                line = Trim(line_buffer);
+                line_buffer.clear();
+            } else {
+                line = Trim(line_buffer.substr(0, newline));
+                line_buffer.erase(0, newline + 1);
+            }
+            if (line.empty()) {
+                continue;
+            }
+            try {
+                const auto item = json::parse(line);
+                if (item.contains("error")) {
+                    const auto& err = item["error"];
+                    throw std::runtime_error(err.is_string() ? err.get<std::string>() : err.dump());
+                }
+                const std::string piece = item.value("response", "");
+                if (!piece.empty()) {
+                    generated_text += piece;
+                    if (on_delta) {
+                        on_delta(piece);
+                    }
+                }
+            } catch (const json::exception&) {
+                // Some proxies/providers may still return one final JSON object.
+            }
+        }
+    };
+
+    for (;;) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(static_cast<HINTERNET>(request.get()), &available)) {
+            throw std::runtime_error("Could not read Remote Agent streaming response.");
+        }
+        if (available == 0) {
+            break;
+        }
+        std::string buffer(available, '\0');
+        DWORD read = 0;
+        if (!WinHttpReadData(static_cast<HINTERNET>(request.get()), buffer.data(), available, &read)) {
+            throw std::runtime_error("Could not read Remote Agent streaming response body.");
+        }
+        buffer.resize(read);
+        raw_response += buffer;
+        line_buffer += buffer;
+        consume_lines(false);
+    }
+    consume_lines(true);
+
+    if (status_code < 200 || status_code >= 300) {
+        std::ostringstream message;
+        message << "Remote Agent HTTP " << status_code;
+        if (!raw_response.empty()) {
+            message << ": " << raw_response.substr(0, 500);
+        }
+        throw std::runtime_error(message.str());
+    }
+
+    if (!generated_text.empty()) {
+        return generated_text;
+    }
+
+    try {
+        const auto payload = json::parse(raw_response);
+        return payload.value("response", "");
+    } catch (...) {
+    }
+    return raw_response;
+}
+
+std::string HttpGetJsonWithAgentAuth(const std::string& url, const RagImageIngestSettings& settings) {
+    return HttpRequestText(
+        "GET",
+        url,
+        {},
+        RemoteAgentAuthHeader(settings),
+        settings.remote_agent_certificate_fingerprint,
+        30000);
+}
+
+std::vector<float> ExtractEmbeddingArray(const json& value) {
+    if (!value.is_array()) {
+        throw std::runtime_error("Embedding response did not contain an array.");
+    }
+    std::vector<float> vector;
+    vector.reserve(value.size());
+    for (const auto& item : value) {
+        if (!item.is_number()) {
+            throw std::runtime_error("Embedding response contained a non-numeric value.");
+        }
+        vector.push_back(item.get<float>());
+    }
+    if (vector.empty()) {
+        throw std::runtime_error("Embedding response was empty.");
+    }
+    return vector;
+}
+
+bool IsUtf8ContinuationByte(unsigned char ch) {
+    return (ch & 0xC0) == 0x80;
+}
+
+uint32_t DecodeAnsiByte(unsigned char ch) {
+    if (ch < 0x80) {
+        return ch;
+    }
+
+    const char input = static_cast<char>(ch);
+    wchar_t output[2]{};
+    const int count = MultiByteToWideChar(CP_ACP, 0, &input, 1, output, 2);
+    if (count <= 0) {
+        return L' ';
+    }
+    return static_cast<uint32_t>(output[0]);
+}
+
+void AppendSanitizedCodePoint(std::wstring& output, uint32_t code_point) {
+    if (code_point == L'\r' || code_point == L'\n' || code_point == L'\t') {
+        output.push_back(static_cast<wchar_t>(code_point));
+        return;
+    }
+    if (code_point < 32 || code_point == 127 || (code_point >= 0x80 && code_point <= 0x9F) ||
+        (code_point >= 0xD800 && code_point <= 0xDFFF) || code_point > 0x10FFFF) {
+        output.push_back(L' ');
+        return;
+    }
+    if (code_point <= 0xFFFF) {
+        output.push_back(static_cast<wchar_t>(code_point));
+        return;
+    }
+
+    code_point -= 0x10000;
+    output.push_back(static_cast<wchar_t>(0xD800 + (code_point >> 10)));
+    output.push_back(static_cast<wchar_t>(0xDC00 + (code_point & 0x3FF)));
+}
+
+std::string SanitizeUtf8ForJson(const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+
+    std::wstring cleaned;
+    cleaned.reserve(text.size());
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char first = static_cast<unsigned char>(text[i]);
+        if (first < 0x80) {
+            AppendSanitizedCodePoint(cleaned, first);
+            ++i;
+            continue;
+        }
+
+        uint32_t code_point = 0;
+        uint32_t minimum = 0;
+        size_t continuation_count = 0;
+        if ((first & 0xE0) == 0xC0) {
+            code_point = first & 0x1F;
+            minimum = 0x80;
+            continuation_count = 1;
+        } else if ((first & 0xF0) == 0xE0) {
+            code_point = first & 0x0F;
+            minimum = 0x800;
+            continuation_count = 2;
+        } else if ((first & 0xF8) == 0xF0) {
+            code_point = first & 0x07;
+            minimum = 0x10000;
+            continuation_count = 3;
+        } else {
+            AppendSanitizedCodePoint(cleaned, DecodeAnsiByte(first));
+            ++i;
+            continue;
+        }
+
+        bool valid = i + continuation_count < text.size();
+        for (size_t offset = 1; valid && offset <= continuation_count; ++offset) {
+            const unsigned char next = static_cast<unsigned char>(text[i + offset]);
+            if (!IsUtf8ContinuationByte(next)) {
+                valid = false;
+                break;
+            }
+            code_point = (code_point << 6) | (next & 0x3F);
+        }
+
+        if (!valid || code_point < minimum || code_point > 0x10FFFF || (code_point >= 0xD800 && code_point <= 0xDFFF)) {
+            AppendSanitizedCodePoint(cleaned, DecodeAnsiByte(first));
+            ++i;
+            continue;
+        }
+
+        AppendSanitizedCodePoint(cleaned, code_point);
+        i += continuation_count + 1;
+    }
+
+    return WideToUtf8(cleaned);
+}
+
+class IRagEmbeddingProvider {
+public:
+    virtual ~IRagEmbeddingProvider() = default;
+    virtual std::vector<std::vector<float>> Embed(const std::vector<std::string>& texts) = 0;
+    virtual std::string ProviderId() const = 0;
+    virtual std::string ModelId() const = 0;
+};
+
+class OllamaEmbeddingProvider final : public IRagEmbeddingProvider {
+public:
+    explicit OllamaEmbeddingProvider(std::string base_url, std::string model)
+        : base_url_(std::move(base_url)), model_(std::move(model)) {}
+
+    std::vector<std::vector<float>> Embed(const std::vector<std::string>& texts) override {
+        if (texts.empty()) {
+            return {};
+        }
+
+        std::vector<std::string> clean_texts;
+        clean_texts.reserve(texts.size());
+        for (const auto& text : texts) {
+            clean_texts.push_back(SanitizeUtf8ForJson(text));
+        }
+
+        try {
+            json body;
+            body["model"] = model_;
+            body["input"] = clean_texts;
+            const std::string response_text = HttpPostJson(JoinUrlPath(base_url_, "/api/embed"), body.dump());
+            const json response = json::parse(response_text);
+            if (!response.contains("embeddings") || !response["embeddings"].is_array()) {
+                throw std::runtime_error("Ollama /api/embed response did not include embeddings.");
+            }
+            std::vector<std::vector<float>> embeddings;
+            for (const auto& item : response["embeddings"]) {
+                embeddings.push_back(ExtractEmbeddingArray(item));
+            }
+            if (embeddings.size() != clean_texts.size()) {
+                throw std::runtime_error("Ollama returned a different number of embeddings than requested.");
+            }
+            return embeddings;
+        } catch (...) {
+            std::vector<std::vector<float>> embeddings;
+            embeddings.reserve(clean_texts.size());
+            for (const auto& text : clean_texts) {
+                json body;
+                body["model"] = model_;
+                body["prompt"] = text;
+                const std::string response_text = HttpPostJson(JoinUrlPath(base_url_, "/api/embeddings"), body.dump());
+                const json response = json::parse(response_text);
+                if (!response.contains("embedding")) {
+                    throw std::runtime_error("Ollama embedding response did not include an embedding.");
+                }
+                embeddings.push_back(ExtractEmbeddingArray(response["embedding"]));
+            }
+            return embeddings;
+        }
+    }
+
+    std::string ProviderId() const override {
+        return "ollama";
+    }
+
+    std::string ModelId() const override {
+        return model_;
+    }
+
+private:
+    std::string base_url_;
+    std::string model_;
+};
+
+class LmStudioEmbeddingProvider final : public IRagEmbeddingProvider {
+public:
+    explicit LmStudioEmbeddingProvider(std::string base_url, std::string model)
+        : base_url_(std::move(base_url)), model_(std::move(model)) {}
+
+    std::vector<std::vector<float>> Embed(const std::vector<std::string>& texts) override {
+        if (texts.empty()) {
+            return {};
+        }
+        std::vector<std::string> clean_texts;
+        clean_texts.reserve(texts.size());
+        for (const auto& text : texts) {
+            clean_texts.push_back(SanitizeUtf8ForJson(text));
+        }
+        json body;
+        body["model"] = model_;
+        body["input"] = clean_texts;
+        const std::string response_text = HttpPostJson(JoinUrlPath(base_url_, "/embeddings"), body.dump());
+        const json response = json::parse(response_text);
+        if (!response.contains("data") || !response["data"].is_array()) {
+            throw std::runtime_error("LM Studio embedding response did not include data.");
+        }
+
+        std::vector<std::pair<int, std::vector<float>>> indexed_embeddings;
+        for (size_t fallback_index = 0; fallback_index < response["data"].size(); ++fallback_index) {
+            const auto& item = response["data"][fallback_index];
+            if (!item.contains("embedding")) {
+                throw std::runtime_error("LM Studio embedding response item did not include an embedding.");
+            }
+            const int index = item.value("index", static_cast<int>(fallback_index));
+            indexed_embeddings.emplace_back(index, ExtractEmbeddingArray(item["embedding"]));
+        }
+        std::sort(indexed_embeddings.begin(), indexed_embeddings.end(), [](const auto& left, const auto& right) {
+            return left.first < right.first;
+        });
+
+        std::vector<std::vector<float>> embeddings;
+        embeddings.reserve(indexed_embeddings.size());
+        for (auto& item : indexed_embeddings) {
+            embeddings.push_back(std::move(item.second));
+        }
+        if (embeddings.size() != clean_texts.size()) {
+            throw std::runtime_error("LM Studio returned a different number of embeddings than requested.");
+        }
+        return embeddings;
+    }
+
+    std::string ProviderId() const override {
+        return "lmstudio";
+    }
+
+    std::string ModelId() const override {
+        return model_;
+    }
+
+private:
+    std::string base_url_;
+    std::string model_;
+};
+
+std::unique_ptr<IRagEmbeddingProvider> CreateEmbeddingProvider(const RagLibraryConfig& library) {
+    std::string provider = library.embedding_provider;
+    std::transform(provider.begin(), provider.end(), provider.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (provider.empty() || provider == "none") {
+        return nullptr;
+    }
+    if (provider == "ollama") {
+        if (library.embedding_model.empty()) {
+            throw std::runtime_error("Ollama embedding provider requires an embedding model.");
+        }
+        const std::string base_url = library.embedding_base_url.empty() ? "http://localhost:11434" : library.embedding_base_url;
+        return std::make_unique<OllamaEmbeddingProvider>(base_url, library.embedding_model);
+    }
+    if (provider == "lmstudio" || provider == "lm studio") {
+        if (library.embedding_model.empty()) {
+            throw std::runtime_error("LM Studio embedding provider requires an embedding model.");
+        }
+        const std::string base_url = library.embedding_base_url.empty() ? "http://localhost:1234/v1" : library.embedding_base_url;
+        return std::make_unique<LmStudioEmbeddingProvider>(base_url, library.embedding_model);
+    }
+    throw std::runtime_error("Unsupported embedding provider: " + library.embedding_provider);
+}
+
+bool IsHttpEndpointAvailable(const std::string& url) {
+    try {
+        ParsedUrl parsed = CrackUrl(url);
+        UniqueInternetHandle session(WinHttpOpen(L"AgentRagService/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+        if (!session) {
+            return false;
+        }
+        UniqueInternetHandle connection(WinHttpConnect(static_cast<HINTERNET>(session.get()), parsed.host.c_str(), parsed.port, 0));
+        if (!connection) {
+            return false;
+        }
+        const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
+        UniqueInternetHandle request(WinHttpOpenRequest(static_cast<HINTERNET>(connection.get()), L"GET", parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
+        if (!request) {
+            return false;
+        }
+        WinHttpSetTimeouts(static_cast<HINTERNET>(request.get()), 1000, 1000, 1000, 1000);
+        if (!WinHttpSendRequest(static_cast<HINTERNET>(request.get()), WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+            return false;
+        }
+        if (!WinHttpReceiveResponse(static_cast<HINTERNET>(request.get()), nullptr)) {
+            return false;
+        }
+        DWORD status_code = 0;
+        DWORD status_size = sizeof(status_code);
+        if (!WinHttpQueryHeaders(static_cast<HINTERNET>(request.get()), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status_code, &status_size, WINHTTP_NO_HEADER_INDEX)) {
+            return false;
+        }
+        return status_code >= 200 && status_code < 500;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::string NormalizeRuntimeProvider(std::string provider) {
+    provider = Trim(provider);
+    std::transform(provider.begin(), provider.end(), provider.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (provider == "lm studio" || provider == "lm-studio" || provider == "lm_studio") {
+        return "lmstudio";
+    }
+    if (provider == "ollama") {
+        return "ollama";
+    }
+    return provider.empty() ? "none" : provider;
+}
+
+std::wstring QuoteCommandArgument(const std::wstring& value) {
+    std::wstring quoted = L"\"";
+    for (wchar_t ch : value) {
+        if (ch == L'"') {
+            quoted += L"\\\"";
+        } else {
+            quoted += ch;
+        }
+    }
+    quoted += L"\"";
+    return quoted;
+}
+
+std::optional<std::wstring> FindExecutableOnPath(const std::wstring& executable_name) {
+    DWORD size = SearchPathW(nullptr, executable_name.c_str(), nullptr, 0, nullptr, nullptr);
+    if (size == 0) {
+        return std::nullopt;
+    }
+    std::wstring buffer(size, L'\0');
+    DWORD written = SearchPathW(nullptr, executable_name.c_str(), nullptr, static_cast<DWORD>(buffer.size()), buffer.data(), nullptr);
+    if (written == 0 || written >= buffer.size()) {
+        return std::nullopt;
+    }
+    buffer.resize(written);
+    return buffer;
+}
+
+std::string SerializeVector(const std::vector<float>& vector) {
+    std::string blob(vector.size() * sizeof(float), '\0');
+    if (!vector.empty()) {
+        std::memcpy(blob.data(), vector.data(), blob.size());
+    }
+    return blob;
+}
+
+std::vector<float> DeserializeVector(const void* data, int bytes) {
+    if (!data || bytes <= 0 || bytes % static_cast<int>(sizeof(float)) != 0) {
+        return {};
+    }
+    std::vector<float> vector(static_cast<size_t>(bytes) / sizeof(float));
+    std::memcpy(vector.data(), data, static_cast<size_t>(bytes));
+    return vector;
+}
+
+double CosineSimilarity(const std::vector<float>& left, const std::vector<float>& right) {
+    if (left.empty() || left.size() != right.size()) {
+        return -1.0;
+    }
+    double dot = 0.0;
+    double left_norm = 0.0;
+    double right_norm = 0.0;
+    for (size_t i = 0; i < left.size(); ++i) {
+        dot += static_cast<double>(left[i]) * static_cast<double>(right[i]);
+        left_norm += static_cast<double>(left[i]) * static_cast<double>(left[i]);
+        right_norm += static_cast<double>(right[i]) * static_cast<double>(right[i]);
+    }
+    if (left_norm <= 0.0 || right_norm <= 0.0) {
+        return -1.0;
+    }
+    return dot / (std::sqrt(left_norm) * std::sqrt(right_norm));
+}
+
+void EnsureRagDatabase(sqlite3* db) {
+    ExecSql(db, "PRAGMA journal_mode=WAL;");
+    ExecSql(db, "PRAGMA synchronous=NORMAL;");
+    ExecSql(db, "PRAGMA foreign_keys=ON;");
+    ExecSql(db,
+        "CREATE TABLE IF NOT EXISTS documents ("
+        "id TEXT PRIMARY KEY,"
+        "rag_id TEXT NOT NULL,"
+        "display_name TEXT NOT NULL,"
+        "original_source_uri TEXT NOT NULL,"
+        "original_source_type TEXT NOT NULL,"
+        "stored_relative_path TEXT,"
+        "extracted_relative_path TEXT,"
+        "content_hash TEXT,"
+        "file_size INTEGER DEFAULT 0,"
+        "mime_type TEXT,"
+        "imported_at TEXT,"
+        "last_indexed_at TEXT,"
+        "metadata_json TEXT,"
+        "modified_time INTEGER DEFAULT 0,"
+        "deleted INTEGER DEFAULT 0"
+        ");");
+    ExecSql(db, "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_source ON documents(original_source_uri);");
+    ExecSql(db,
+        "CREATE TABLE IF NOT EXISTS chunks ("
+        "id TEXT PRIMARY KEY,"
+        "document_id TEXT NOT NULL,"
+        "rag_id TEXT NOT NULL,"
+        "text TEXT NOT NULL,"
+        "content_hash TEXT,"
+        "chunk_index INTEGER DEFAULT 0,"
+        "token_estimate INTEGER DEFAULT 0,"
+        "metadata_json TEXT"
+        ");");
+    ExecSql(db, "CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id);");
+    ExecSql(db, "CREATE INDEX IF NOT EXISTS idx_chunks_rag ON chunks(rag_id);");
+    ExecSql(db, "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_id UNINDEXED, document_id UNINDEXED, rag_id UNINDEXED, text);");
+    ExecSql(db,
+        "CREATE TABLE IF NOT EXISTS embeddings ("
+        "chunk_id TEXT NOT NULL,"
+        "provider TEXT NOT NULL,"
+        "model TEXT NOT NULL,"
+        "dimensions INTEGER NOT NULL,"
+        "vector_blob BLOB,"
+        "created_at TEXT,"
+        "PRIMARY KEY(chunk_id, provider, model)"
+        ");");
+    ExecSql(db, "CREATE INDEX IF NOT EXISTS idx_embeddings_provider_model ON embeddings(provider, model, dimensions);");
+    ExecSql(db,
+        "CREATE TABLE IF NOT EXISTS ingestion_events ("
+        "id TEXT PRIMARY KEY,"
+        "event_time TEXT,"
+        "level TEXT,"
+        "message TEXT"
+        ");");
+}
+
+std::optional<RagDocumentRecord> FindDocumentBySource(sqlite3* db, const std::string& source) {
+    auto statement = PrepareSql(db,
+        "SELECT id, rag_id, display_name, original_source_uri, original_source_type, stored_relative_path, "
+        "extracted_relative_path, content_hash, file_size, mime_type, imported_at, last_indexed_at, metadata_json "
+        "FROM documents WHERE original_source_uri = ? AND deleted = 0;");
+    BindText(statement.get(), 1, source);
+    if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+        return std::nullopt;
+    }
+
+    RagDocumentRecord document;
+    document.id = ColumnText(statement.get(), 0);
+    document.rag_id = ColumnText(statement.get(), 1);
+    document.display_name = ColumnText(statement.get(), 2);
+    document.original_source_uri = ColumnText(statement.get(), 3);
+    document.original_source_type = ColumnText(statement.get(), 4);
+    document.stored_relative_path = ColumnText(statement.get(), 5);
+    document.extracted_relative_path = ColumnText(statement.get(), 6);
+    document.content_hash = ColumnText(statement.get(), 7);
+    document.file_size = static_cast<uintmax_t>(sqlite3_column_int64(statement.get(), 8));
+    document.mime_type = ColumnText(statement.get(), 9);
+    document.imported_at = ColumnText(statement.get(), 10);
+    document.last_indexed_at = ColumnText(statement.get(), 11);
+    document.metadata_json = ColumnText(statement.get(), 12);
+    return document;
+}
+
+std::optional<RagDocumentRecord> FindDocumentById(sqlite3* db, const std::string& document_id) {
+    auto statement = PrepareSql(db,
+        "SELECT id, rag_id, display_name, original_source_uri, original_source_type, stored_relative_path, "
+        "extracted_relative_path, content_hash, file_size, mime_type, imported_at, last_indexed_at, metadata_json "
+        "FROM documents WHERE id = ? AND deleted = 0;");
+    BindText(statement.get(), 1, document_id);
+    if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+        return std::nullopt;
+    }
+
+    RagDocumentRecord document;
+    document.id = ColumnText(statement.get(), 0);
+    document.rag_id = ColumnText(statement.get(), 1);
+    document.display_name = ColumnText(statement.get(), 2);
+    document.original_source_uri = ColumnText(statement.get(), 3);
+    document.original_source_type = ColumnText(statement.get(), 4);
+    document.stored_relative_path = ColumnText(statement.get(), 5);
+    document.extracted_relative_path = ColumnText(statement.get(), 6);
+    document.content_hash = ColumnText(statement.get(), 7);
+    document.file_size = static_cast<uintmax_t>(sqlite3_column_int64(statement.get(), 8));
+    document.mime_type = ColumnText(statement.get(), 9);
+    document.imported_at = ColumnText(statement.get(), 10);
+    document.last_indexed_at = ColumnText(statement.get(), 11);
+    document.metadata_json = ColumnText(statement.get(), 12);
+    return document;
+}
+
+std::vector<RagDocumentRecord> LoadActiveDocuments(sqlite3* db) {
+    auto statement = PrepareSql(db,
+        "SELECT id, rag_id, display_name, original_source_uri, original_source_type, stored_relative_path, "
+        "extracted_relative_path, content_hash, file_size, mime_type, imported_at, last_indexed_at, metadata_json "
+        "FROM documents WHERE deleted = 0 ORDER BY display_name, id;");
+
+    std::vector<RagDocumentRecord> documents;
+    int rc = SQLITE_OK;
+    while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+        RagDocumentRecord document;
+        document.id = ColumnText(statement.get(), 0);
+        document.rag_id = ColumnText(statement.get(), 1);
+        document.display_name = ColumnText(statement.get(), 2);
+        document.original_source_uri = ColumnText(statement.get(), 3);
+        document.original_source_type = ColumnText(statement.get(), 4);
+        document.stored_relative_path = ColumnText(statement.get(), 5);
+        document.extracted_relative_path = ColumnText(statement.get(), 6);
+        document.content_hash = ColumnText(statement.get(), 7);
+        document.file_size = static_cast<uintmax_t>(sqlite3_column_int64(statement.get(), 8));
+        document.mime_type = ColumnText(statement.get(), 9);
+        document.imported_at = ColumnText(statement.get(), 10);
+        document.last_indexed_at = ColumnText(statement.get(), 11);
+        document.metadata_json = ColumnText(statement.get(), 12);
+        documents.push_back(std::move(document));
+    }
+    if (rc != SQLITE_DONE) {
+        ThrowSqlite(db, "Could not load RAG documents");
+    }
+    return documents;
+}
+
+std::filesystem::path ResolveRebuildSourcePath(const std::filesystem::path& library_path, const RagDocumentRecord& document) {
+    std::filesystem::path stored_candidate;
+    if (!document.stored_relative_path.empty()) {
+        std::filesystem::path stored_path(Utf8ToWide(document.stored_relative_path));
+        if (stored_path.is_absolute()) {
+            stored_candidate = stored_path;
+        } else {
+            stored_candidate = library_path / stored_path;
+        }
+        if (std::filesystem::exists(stored_candidate)) {
+            return stored_candidate;
+        }
+    }
+    if (document.original_source_type == "file" && !document.original_source_uri.empty()) {
+        std::filesystem::path original_path(Utf8ToWide(document.original_source_uri));
+        if (std::filesystem::exists(original_path) || stored_candidate.empty()) {
+            return original_path;
+        }
+    }
+    return stored_candidate;
+}
+
+void SaveDocument(sqlite3* db, const RagDocumentRecord& document) {
+    auto statement = PrepareSql(db,
+        "INSERT INTO documents (id, rag_id, display_name, original_source_uri, original_source_type, stored_relative_path, "
+        "extracted_relative_path, content_hash, file_size, mime_type, imported_at, last_indexed_at, metadata_json, deleted) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "rag_id=excluded.rag_id, display_name=excluded.display_name, original_source_uri=excluded.original_source_uri, "
+        "original_source_type=excluded.original_source_type, stored_relative_path=excluded.stored_relative_path, "
+        "extracted_relative_path=excluded.extracted_relative_path, content_hash=excluded.content_hash, "
+        "file_size=excluded.file_size, mime_type=excluded.mime_type, last_indexed_at=excluded.last_indexed_at, "
+        "metadata_json=excluded.metadata_json, deleted=0;");
+    BindText(statement.get(), 1, document.id);
+    BindText(statement.get(), 2, document.rag_id);
+    BindText(statement.get(), 3, document.display_name);
+    BindText(statement.get(), 4, document.original_source_uri);
+    BindText(statement.get(), 5, document.original_source_type);
+    BindText(statement.get(), 6, document.stored_relative_path);
+    BindText(statement.get(), 7, document.extracted_relative_path);
+    BindText(statement.get(), 8, document.content_hash);
+    sqlite3_bind_int64(statement.get(), 9, static_cast<sqlite3_int64>(document.file_size));
+    BindText(statement.get(), 10, document.mime_type);
+    BindText(statement.get(), 11, document.imported_at);
+    BindText(statement.get(), 12, document.last_indexed_at);
+    BindText(statement.get(), 13, document.metadata_json);
+    if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+        ThrowSqlite(db, "Could not save RAG document");
+    }
+}
+
+void DeleteChunksForDocument(sqlite3* db, const std::string& document_id) {
+    {
+        auto statement = PrepareSql(db, "DELETE FROM chunks WHERE document_id = ?;");
+        BindText(statement.get(), 1, document_id);
+        if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+            ThrowSqlite(db, "Could not delete old RAG chunks");
+        }
+    }
+    {
+        auto statement = PrepareSql(db, "DELETE FROM chunks_fts WHERE document_id = ?;");
+        BindText(statement.get(), 1, document_id);
+        if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+            ThrowSqlite(db, "Could not delete old RAG full-text entries");
+        }
+    }
+    {
+        auto statement = PrepareSql(db, "DELETE FROM embeddings WHERE chunk_id NOT IN (SELECT id FROM chunks);");
+        if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+            ThrowSqlite(db, "Could not clean stale RAG embeddings");
+        }
+    }
+}
+
+void ClearRagDatabaseForRebuild(sqlite3* db) {
+    ExecSql(db, "BEGIN IMMEDIATE;");
+    try {
+        ExecSql(db, "DELETE FROM embeddings;");
+        ExecSql(db, "DELETE FROM chunks_fts;");
+        ExecSql(db, "DELETE FROM chunks;");
+        ExecSql(db, "DELETE FROM documents;");
+        ExecSql(db, "DELETE FROM ingestion_events;");
+        ExecSql(db, "COMMIT;");
+    } catch (...) {
+        try {
+            ExecSql(db, "ROLLBACK;");
+        } catch (...) {
+        }
+        throw;
+    }
+}
+
+void InsertChunk(sqlite3* db, const RagChunkRecord& chunk) {
+    {
+        auto statement = PrepareSql(db,
+            "INSERT INTO chunks (id, document_id, rag_id, text, content_hash, chunk_index, token_estimate, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?);");
+        BindText(statement.get(), 1, chunk.id);
+        BindText(statement.get(), 2, chunk.document_id);
+        BindText(statement.get(), 3, chunk.rag_id);
+        BindText(statement.get(), 4, chunk.text);
+        BindText(statement.get(), 5, chunk.content_hash);
+        sqlite3_bind_int(statement.get(), 6, chunk.chunk_index);
+        sqlite3_bind_int(statement.get(), 7, chunk.token_estimate);
+        BindText(statement.get(), 8, chunk.metadata_json);
+        if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+            ThrowSqlite(db, "Could not insert RAG chunk");
+        }
+    }
+    {
+        auto statement = PrepareSql(db, "INSERT INTO chunks_fts (chunk_id, document_id, rag_id, text) VALUES (?, ?, ?, ?);");
+        BindText(statement.get(), 1, chunk.id);
+        BindText(statement.get(), 2, chunk.document_id);
+        BindText(statement.get(), 3, chunk.rag_id);
+        BindText(statement.get(), 4, chunk.text);
+        if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+            ThrowSqlite(db, "Could not insert RAG full-text chunk");
+        }
+    }
+}
+
+void InsertEmbedding(sqlite3* db, const RagChunkRecord& chunk, const IRagEmbeddingProvider& provider, const std::vector<float>& vector) {
+    auto statement = PrepareSql(db,
+        "INSERT INTO embeddings (chunk_id, provider, model, dimensions, vector_blob, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(chunk_id, provider, model) DO UPDATE SET "
+        "dimensions=excluded.dimensions, vector_blob=excluded.vector_blob, created_at=excluded.created_at;");
+    const std::string blob = SerializeVector(vector);
+    BindText(statement.get(), 1, chunk.id);
+    BindText(statement.get(), 2, provider.ProviderId());
+    BindText(statement.get(), 3, provider.ModelId());
+    sqlite3_bind_int(statement.get(), 4, static_cast<int>(vector.size()));
+    BindBlob(statement.get(), 5, blob);
+    BindText(statement.get(), 6, CurrentTimestampUtc());
+    if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+        ThrowSqlite(db, "Could not save RAG embedding");
+    }
+}
+
+std::string HashFile(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        throw std::runtime_error("Could not open file.");
+    }
+    uint64_t hash = 1469598103934665603ull;
+    std::vector<char> buffer(1024 * 1024);
+    while (input) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize count = input.gcount();
+        for (std::streamsize i = 0; i < count; ++i) {
+            hash ^= static_cast<unsigned char>(buffer[static_cast<size_t>(i)]);
+            hash *= 1099511628211ull;
+        }
+    }
+    return BytesToHex(hash);
+}
+
+bool FileLooksLikeText(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        return false;
+    }
+    std::string sample(4096, '\0');
+    input.read(sample.data(), static_cast<std::streamsize>(sample.size()));
+    sample.resize(static_cast<size_t>(input.gcount()));
+    return LooksLikeText(sample);
+}
+
+// Returns true if the exception message looks like a model context-length overflow.
+bool IsContextLengthError(const std::string& msg) {
+    return msg.find("context length") != std::string::npos
+        || msg.find("context window") != std::string::npos
+        || msg.find("input length") != std::string::npos
+        || msg.find("max_seq_len") != std::string::npos
+        || msg.find("sequence length") != std::string::npos
+        || msg.find("token limit") != std::string::npos;
+}
+
+// Tries to embed a single text through the provider.  If it fails with a
+// context-length error, truncates the text by half and retries once.
+// Returns the resulting vector, or an empty vector if the embedding failed.
+// On failure, appends a *warning* (not an error) to result.
+std::vector<float> EmbedOneWithFallback(
+        const std::string& text,
+        IRagEmbeddingProvider* provider,
+        const std::string& display_name,
+        int chunk_index,
+        RagIngestionResult& result) {
+    // First attempt with original text.
+    try {
+        auto vecs = provider->Embed({text});
+        if (!vecs.empty() && !vecs.front().empty()) {
+            return vecs.front();
+        }
+    } catch (const std::exception& ex) {
+        if (!IsContextLengthError(ex.what())) {
+            // Not a context-length issue — surface as real error.
+            result.errors.push_back(display_name + " (chunk " + std::to_string(chunk_index) + "): embedding failed: " + ex.what());
+            return {};
+        }
+        // Context overflow: fall through to truncated retry.
+    } catch (...) {
+        result.errors.push_back(display_name + " (chunk " + std::to_string(chunk_index) + "): embedding failed unexpectedly.");
+        return {};
+    }
+
+    // Truncated retry: take the first half of the text (at a UTF-8 boundary).
+    const size_t truncated_len = text.size() / 2;
+    std::string truncated = text.substr(0, truncated_len);
+    // Walk back to a clean UTF-8 boundary.
+    while (!truncated.empty() && (static_cast<unsigned char>(truncated.back()) & 0xC0) == 0x80) {
+        truncated.pop_back();
+    }
+    try {
+        auto vecs = provider->Embed({truncated});
+        if (!vecs.empty() && !vecs.front().empty()) {
+            result.warnings.push_back(display_name + " (chunk " + std::to_string(chunk_index)
+                + "): text truncated to fit model context window ("
+                + std::to_string(truncated.size()) + " of " + std::to_string(text.size()) + " chars).");
+            return vecs.front();
+        }
+    } catch (...) {}
+
+    // If even the truncated text fails, skip this chunk silently.
+    result.warnings.push_back(display_name + " (chunk " + std::to_string(chunk_index)
+        + "): skipped — text too long for embedding model ("
+        + std::to_string(text.size()) + " chars).");
+    return {};
+}
+
+void InsertEmbeddingBatch(sqlite3* db, const RagLibraryConfig& library, const RagDocumentRecord& document, IRagEmbeddingProvider* embedding_provider, std::vector<RagChunkRecord>& embedding_batch, RagIngestionResult& result) {
+    if (!embedding_provider || embedding_batch.empty()) {
+        embedding_batch.clear();
+        return;
+    }
+
+    // Build the text list for a batch attempt.
+    std::vector<std::string> texts;
+    texts.reserve(embedding_batch.size());
+    for (const auto& chunk : embedding_batch) {
+        texts.push_back(chunk.text);
+    }
+
+    // --- Fast path: attempt the whole batch at once ---
+    bool batch_succeeded = false;
+    std::vector<std::vector<float>> vectors;
+    try {
+        vectors = embedding_provider->Embed(texts);
+        if (vectors.size() == embedding_batch.size()) {
+            batch_succeeded = true;
+        }
+    } catch (...) {
+        // Batch failed — fall through to per-chunk path.
+    }
+
+    if (batch_succeeded) {
+        // Validate dimensions and insert.
+        try {
+            for (size_t i = 0; i < embedding_batch.size(); ++i) {
+                if (library.embedding_dimensions > 0 && vectors[i].size() != static_cast<size_t>(library.embedding_dimensions)) {
+                    std::ostringstream message;
+                    message << "Embedding dimension mismatch for " << document.display_name
+                            << ": expected " << library.embedding_dimensions
+                            << ", got " << vectors[i].size() << ".";
+                    throw std::runtime_error(message.str());
+                }
+                InsertEmbedding(db, embedding_batch[i], *embedding_provider, vectors[i]);
+            }
+        } catch (const std::exception& ex) {
+            result.errors.push_back(document.display_name + ": embedding failed: " + ex.what());
+        } catch (...) {
+            result.errors.push_back(document.display_name + ": embedding failed unexpectedly.");
+        }
+        embedding_batch.clear();
+        return;
+    }
+
+    // --- Slow path: embed one chunk at a time with truncation fallback ---
+    for (size_t i = 0; i < embedding_batch.size(); ++i) {
+        const auto vec = EmbedOneWithFallback(
+            embedding_batch[i].text, embedding_provider,
+            document.display_name, embedding_batch[i].chunk_index, result);
+        if (vec.empty()) {
+            continue;  // already warned/errored inside EmbedOneWithFallback
+        }
+        if (library.embedding_dimensions > 0 && vec.size() != static_cast<size_t>(library.embedding_dimensions)) {
+            std::ostringstream message;
+            message << "Embedding dimension mismatch for " << document.display_name
+                    << ": expected " << library.embedding_dimensions
+                    << ", got " << vec.size() << ".";
+            result.errors.push_back(message.str());
+            continue;
+        }
+        try {
+            InsertEmbedding(db, embedding_batch[i], *embedding_provider, vec);
+        } catch (const std::exception& ex) {
+            result.errors.push_back(document.display_name + ": could not save embedding: " + ex.what());
+        }
+    }
+    embedding_batch.clear();
+}
+
+void InsertPreparedChunk(sqlite3* db, const RagDocumentRecord& document, std::string text, int& chunk_index, IRagEmbeddingProvider* embedding_provider, std::vector<RagChunkRecord>& embedding_batch, const std::string& metadata_json = {}) {
+    text = Trim(SanitizeUtf8ForJson(text));
+    if (text.empty()) {
+        return;
+    }
+    RagChunkRecord chunk;
+    chunk.id = MakeId("chunk");
+    chunk.document_id = document.id;
+    chunk.rag_id = document.rag_id;
+    chunk.text = std::move(text);
+    chunk.content_hash = StableHash(chunk.text);
+    chunk.chunk_index = chunk_index++;
+    chunk.token_estimate = EstimateTokens(chunk.text);
+    chunk.metadata_json = metadata_json;
+    InsertChunk(db, chunk);
+    if (embedding_provider) {
+        embedding_batch.push_back(std::move(chunk));
+    }
+}
+
+int InsertChunksFromTextStream(sqlite3* db, const RagLibraryConfig& library, const RagDocumentRecord& document, const std::filesystem::path& source, const std::filesystem::path& extracted_target, IRagEmbeddingProvider* embedding_provider, RagIngestionResult& result) {
+    std::ifstream input(source, std::ios::binary);
+    if (!input.is_open()) {
+        throw std::runtime_error("Could not open file.");
+    }
+    std::filesystem::create_directories(extracted_target.parent_path());
+    std::ofstream extracted(extracted_target, std::ios::binary | std::ios::trunc);
+    if (!extracted.is_open()) {
+        throw std::runtime_error("Could not write extracted text.");
+    }
+
+    const int chunk_size = std::max(500, library.chunk_size_chars);
+    const int overlap = std::max(0, std::min(library.chunk_overlap_chars, chunk_size - 1));
+    std::vector<char> read_buffer(256 * 1024);
+    std::string pending;
+    int chunk_index = 0;
+    std::vector<RagChunkRecord> embedding_batch;
+
+    while (input) {
+        input.read(read_buffer.data(), static_cast<std::streamsize>(read_buffer.size()));
+        const std::streamsize count = input.gcount();
+        if (count <= 0) {
+            continue;
+        }
+        extracted.write(read_buffer.data(), count);
+        pending.append(read_buffer.data(), read_buffer.data() + count);
+
+        while (pending.size() >= static_cast<size_t>(chunk_size)) {
+            size_t end = static_cast<size_t>(chunk_size);
+            const size_t paragraph_break = pending.rfind("\n\n", end);
+            if (paragraph_break != std::string::npos && paragraph_break > static_cast<size_t>(chunk_size / 2)) {
+                end = paragraph_break + 2;
+            }
+            InsertPreparedChunk(db, document, pending.substr(0, end), chunk_index, embedding_provider, embedding_batch);
+            if (embedding_batch.size() >= 8) {
+                InsertEmbeddingBatch(db, library, document, embedding_provider, embedding_batch, result);
+            }
+            pending.erase(0, end > static_cast<size_t>(overlap) ? end - static_cast<size_t>(overlap) : end);
+        }
+    }
+
+    InsertPreparedChunk(db, document, pending, chunk_index, embedding_provider, embedding_batch);
+    InsertEmbeddingBatch(db, library, document, embedding_provider, embedding_batch, result);
+    return chunk_index;
+}
+
+uintmax_t MegabytesToBytes(int megabytes) {
+    return static_cast<uintmax_t>(std::max(1, megabytes)) * 1024ull * 1024ull;
+}
+
+bool ShouldSegmentExtractedText(const RagLibraryConfig& library, const std::string& extracted_text) {
+    return library.split_large_extracted_documents &&
+        extracted_text.size() > static_cast<size_t>(MegabytesToBytes(library.extracted_segment_threshold_mb));
+}
+
+struct ExtractedSegmentRange {
+    size_t start = 0;
+    size_t end = 0;
+};
+
+std::vector<ExtractedSegmentRange> PlanExtractedSegments(const std::string& text, size_t segment_size, size_t overlap) {
+    std::vector<ExtractedSegmentRange> ranges;
+    if (text.empty()) {
+        return ranges;
+    }
+
+    segment_size = std::max<size_t>(1024, segment_size);
+    overlap = std::min(overlap, segment_size / 2);
+
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t end = std::min(text.size(), start + segment_size);
+        if (end < text.size()) {
+            const size_t paragraph_break = text.rfind("\n\n", end);
+            if (paragraph_break != std::string::npos && paragraph_break > start + (segment_size / 2)) {
+                end = paragraph_break + 2;
+            }
+        }
+        if (end <= start) {
+            end = std::min(text.size(), start + segment_size);
+        }
+        ranges.push_back({start, end});
+        if (end >= text.size()) {
+            break;
+        }
+        const size_t next_start = end > overlap ? end - overlap : end;
+        start = next_start > start ? next_start : end;
+    }
+    return ranges;
+}
+
+std::wstring SegmentFileName(size_t index) {
+    std::wostringstream stream;
+    stream << L"segment_" << std::setw(5) << std::setfill(L'0') << (index + 1) << L".md";
+    return stream.str();
+}
+
+std::string BuildSegmentChunkMetadata(const std::filesystem::path& segment_relative, size_t segment_index, size_t segment_count, size_t start, size_t end, size_t overlap) {
+    return json{
+        {"extracted_segment_index", segment_index},
+        {"extracted_segment_count", segment_count},
+        {"extracted_segment_relative_path", WideToUtf8(segment_relative.generic_wstring())},
+        {"extracted_segment_start", start},
+        {"extracted_segment_end", end},
+        {"extracted_segment_overlap_chars", overlap},
+    }.dump();
+}
+
+int InsertChunksFromExtractedText(sqlite3* db, const RagLibraryConfig& library, const RagDocumentRecord& document, const std::string& extracted_text, const std::filesystem::path& library_path, const std::filesystem::path& extracted_relative, IRagEmbeddingProvider* embedding_provider, RagIngestionResult& result) {
+    const std::string clean_extracted_text = SanitizeUtf8ForJson(extracted_text);
+    const std::filesystem::path extracted_target = library_path / extracted_relative;
+    if (ShouldSegmentExtractedText(library, clean_extracted_text)) {
+        const size_t segment_size = static_cast<size_t>(MegabytesToBytes(library.extracted_segment_size_mb));
+        const size_t overlap = std::min<size_t>(static_cast<size_t>(std::max(0, library.extracted_segment_overlap_chars)), segment_size / 2);
+        const auto ranges = PlanExtractedSegments(clean_extracted_text, segment_size, overlap);
+        const std::filesystem::path segment_dir_relative = extracted_relative.parent_path();
+        const std::filesystem::path segment_dir = library_path / segment_dir_relative;
+        std::error_code ec;
+        std::filesystem::remove_all(segment_dir, ec);
+        std::filesystem::create_directories(segment_dir);
+
+        int chunk_index = 0;
+        std::vector<RagChunkRecord> embedding_batch;
+        json manifest;
+        manifest["document_id"] = document.id;
+        manifest["source"] = document.original_source_uri;
+        manifest["extracted_content_type"] = "text/markdown";
+        manifest["split"] = true;
+        manifest["segment_size_mb"] = library.extracted_segment_size_mb;
+        manifest["segment_overlap_chars"] = library.extracted_segment_overlap_chars;
+        manifest["segments"] = json::array();
+
+        for (size_t i = 0; i < ranges.size(); ++i) {
+            const std::filesystem::path segment_relative = segment_dir_relative / SegmentFileName(i);
+            const std::filesystem::path segment_target = library_path / segment_relative;
+            const std::string segment_text = clean_extracted_text.substr(ranges[i].start, ranges[i].end - ranges[i].start);
+            std::ofstream segment_output(segment_target, std::ios::binary | std::ios::trunc);
+            if (!segment_output.is_open()) {
+                throw std::runtime_error("Could not write extracted text segment.");
+            }
+            segment_output.write(segment_text.data(), static_cast<std::streamsize>(segment_text.size()));
+
+            manifest["segments"].push_back(json{
+                {"index", i},
+                {"relative_path", WideToUtf8(segment_relative.generic_wstring())},
+                {"start", ranges[i].start},
+                {"end", ranges[i].end},
+                {"bytes", segment_text.size()},
+            });
+
+            const std::string metadata_json = BuildSegmentChunkMetadata(segment_relative, i, ranges.size(), ranges[i].start, ranges[i].end, overlap);
+            const auto chunks = ChunkText(segment_text, library.chunk_size_chars, library.chunk_overlap_chars);
+            for (const auto& chunk_text : chunks) {
+                InsertPreparedChunk(db, document, chunk_text, chunk_index, embedding_provider, embedding_batch, metadata_json);
+                if (embedding_batch.size() >= 8) {
+                    InsertEmbeddingBatch(db, library, document, embedding_provider, embedding_batch, result);
+                }
+            }
+        }
+        InsertEmbeddingBatch(db, library, document, embedding_provider, embedding_batch, result);
+
+        std::ofstream manifest_output(extracted_target, std::ios::binary | std::ios::trunc);
+        if (!manifest_output.is_open()) {
+            throw std::runtime_error("Could not write extracted segment manifest.");
+        }
+        manifest_output << manifest.dump(2);
+        return chunk_index;
+    }
+
+    std::filesystem::create_directories(extracted_target.parent_path());
+    std::ofstream extracted(extracted_target, std::ios::binary | std::ios::trunc);
+    if (!extracted.is_open()) {
+        throw std::runtime_error("Could not write extracted text.");
+    }
+    extracted.write(clean_extracted_text.data(), static_cast<std::streamsize>(clean_extracted_text.size()));
+
+    int chunk_index = 0;
+    std::vector<RagChunkRecord> embedding_batch;
+    const auto chunks = ChunkText(clean_extracted_text, library.chunk_size_chars, library.chunk_overlap_chars);
+    for (const auto& chunk_text : chunks) {
+        InsertPreparedChunk(db, document, chunk_text, chunk_index, embedding_provider, embedding_batch);
+        if (embedding_batch.size() >= 8) {
+            InsertEmbeddingBatch(db, library, document, embedding_provider, embedding_batch, result);
+        }
+    }
+    InsertEmbeddingBatch(db, library, document, embedding_provider, embedding_batch, result);
+    return chunk_index;
+}
+
+std::string BuildFtsQuery(const std::string& query) {
+    std::vector<std::string> terms;
+    std::string current;
+    for (unsigned char ch : query) {
+        if (std::isalnum(ch) != 0) {
+            current.push_back(static_cast<char>(std::tolower(ch)));
+        } else if (!current.empty()) {
+            if (current.size() > 1) {
+                terms.push_back(current);
+            }
+            current.clear();
+        }
+    }
+    if (current.size() > 1) {
+        terms.push_back(current);
+    }
+
+    std::sort(terms.begin(), terms.end());
+    terms.erase(std::unique(terms.begin(), terms.end()), terms.end());
+
+    std::ostringstream stream;
+    for (size_t i = 0; i < terms.size(); ++i) {
+        if (i > 0) {
+            stream << " OR ";
+        }
+        stream << terms[i];
+    }
+    return stream.str();
+}
+
+std::string ColumnText(sqlite3_stmt* statement, int column) {
+    const unsigned char* text = sqlite3_column_text(statement, column);
+    return text ? reinterpret_cast<const char*>(text) : std::string();
+}
+
+std::string BytesToHex(uint64_t value) {
+    std::ostringstream stream;
+    stream << std::hex << value;
+    return stream.str();
+}
+
+std::string StableHash(const std::string& text) {
+    uint64_t hash = 1469598103934665603ull;
+    for (unsigned char ch : text) {
+        hash ^= ch;
+        hash *= 1099511628211ull;
+    }
+    return BytesToHex(hash);
+}
+
+bool IsSupportedTextExtension(const std::filesystem::path& path) {
+    const std::wstring ext = LowerExtension(path);
+    static const std::set<std::wstring> extensions = {
+        L".txt", L".md", L".markdown", L".json", L".csv", L".log", L".xml",
+        L".cpp", L".c", L".h", L".hpp", L".cs", L".js", L".ts", L".tsx",
+        L".jsx", L".py", L".ps1", L".bat", L".cmd", L".ini", L".toml",
+        L".yaml", L".yml", L".html", L".htm", L".docx", L".docm",
+        L".xlsx", L".xlsm", L".pdf", L".css", L".sql",
+        L".png", L".jpg", L".jpeg", L".bmp", L".tif", L".tiff", L".webp",
+    };
+    return extensions.find(ext) != extensions.end();
+}
+
+std::string ReadWholeFile(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        throw std::runtime_error("Could not open file.");
+    }
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+bool LooksLikeText(const std::string& content) {
+    if (content.empty()) {
+        return true;
+    }
+    const size_t sample_size = std::min<size_t>(content.size(), 4096);
+    size_t control_count = 0;
+    for (size_t i = 0; i < sample_size; ++i) {
+        const unsigned char ch = static_cast<unsigned char>(content[i]);
+        if (ch == 0) {
+            return false;
+        }
+        if (ch < 9 || (ch > 13 && ch < 32)) {
+            ++control_count;
+        }
+    }
+    return control_count < sample_size / 20;
+}
+
+int EstimateTokens(const std::string& text) {
+    if (text.empty()) {
+        return 0;
+    }
+    return static_cast<int>(std::max<size_t>(1, (text.size() + 2) / 3));
+}
+
+std::vector<std::string> ChunkText(const std::string& text, int chunk_size, int overlap) {
+    std::vector<std::string> chunks;
+    const int bounded_chunk_size = std::max(500, chunk_size);
+    const int bounded_overlap = std::max(0, std::min(overlap, bounded_chunk_size - 1));
+    size_t offset = 0;
+    while (offset < text.size()) {
+        size_t end = std::min(text.size(), offset + static_cast<size_t>(bounded_chunk_size));
+        if (end < text.size()) {
+            const size_t paragraph_break = text.rfind("\n\n", end);
+            if (paragraph_break != std::string::npos && paragraph_break > offset + static_cast<size_t>(bounded_chunk_size / 2)) {
+                end = paragraph_break + 2;
+            }
+        }
+        std::string chunk = Trim(text.substr(offset, end - offset));
+        if (!chunk.empty()) {
+            chunks.push_back(std::move(chunk));
+        }
+        if (end >= text.size()) {
+            break;
+        }
+        offset = end > static_cast<size_t>(bounded_overlap) ? end - static_cast<size_t>(bounded_overlap) : end;
+    }
+    return chunks;
+}
+
+std::wstring LowerExtension(const std::filesystem::path& path) {
+    std::wstring ext = path.extension().wstring();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t ch) { return static_cast<wchar_t>(::towlower(ch)); });
+    return ext;
+}
+
+std::string LowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+bool IsHtmlExtension(const std::filesystem::path& path) {
+    const std::wstring ext = LowerExtension(path);
+    return ext == L".html" || ext == L".htm";
+}
+
+std::string MimeTypeForPath(const std::filesystem::path& path) {
+    const std::wstring ext = LowerExtension(path);
+    if (ext == L".html" || ext == L".htm") {
+        return "text/html";
+    }
+    if (ext == L".docx") {
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    }
+    if (ext == L".docm") {
+        return "application/vnd.ms-word.document.macroEnabled.12";
+    }
+    if (ext == L".xlsx") {
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    }
+    if (ext == L".xlsm") {
+        return "application/vnd.ms-excel.sheet.macroEnabled.12";
+    }
+    if (ext == L".pdf") {
+        return "application/pdf";
+    }
+    if (ext == L".png") {
+        return "image/png";
+    }
+    if (ext == L".jpg" || ext == L".jpeg") {
+        return "image/jpeg";
+    }
+    if (ext == L".bmp") {
+        return "image/bmp";
+    }
+    if (ext == L".tif" || ext == L".tiff") {
+        return "image/tiff";
+    }
+    if (ext == L".webp") {
+        return "image/webp";
+    }
+    if (ext == L".md" || ext == L".markdown") {
+        return "text/markdown";
+    }
+    if (ext == L".json") {
+        return "application/json";
+    }
+    if (ext == L".csv") {
+        return "text/csv";
+    }
+    if (ext == L".xml") {
+        return "application/xml";
+    }
+    if (ext == L".css") {
+        return "text/css";
+    }
+    if (ext == L".sql") {
+        return "application/sql";
+    }
+    return "text/plain";
+}
+
+size_t FindCaseInsensitive(const std::string& lower_haystack, const std::string& lower_needle, size_t start) {
+    return lower_haystack.find(lower_needle, start);
+}
+
+std::string HtmlTagName(const std::string& tag) {
+    size_t pos = 0;
+    while (pos < tag.size() && (std::isspace(static_cast<unsigned char>(tag[pos])) || tag[pos] == '/')) {
+        ++pos;
+    }
+    size_t start = pos;
+    while (pos < tag.size() && (std::isalnum(static_cast<unsigned char>(tag[pos])) || tag[pos] == '-' || tag[pos] == ':')) {
+        ++pos;
+    }
+    return LowerAscii(tag.substr(start, pos - start));
+}
+
+bool HtmlTagIsClosing(const std::string& tag) {
+    size_t pos = 0;
+    while (pos < tag.size() && std::isspace(static_cast<unsigned char>(tag[pos]))) {
+        ++pos;
+    }
+    return pos < tag.size() && tag[pos] == '/';
+}
+
+void AppendMarkdownBreak(std::string& output, int desired_newlines) {
+    int existing = 0;
+    for (size_t i = output.size(); i > 0 && output[i - 1] == '\n'; --i) {
+        ++existing;
+    }
+    while (existing < desired_newlines) {
+        output.push_back('\n');
+        ++existing;
+    }
+}
+
+int HexValue(char ch) {
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return 10 + ch - 'a';
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return 10 + ch - 'A';
+    }
+    return -1;
+}
+
+void AppendUtf8Codepoint(std::string& output, uint32_t codepoint) {
+    if (codepoint <= 0x7f) {
+        output.push_back(static_cast<char>(codepoint));
+    } else if (codepoint <= 0x7ff) {
+        output.push_back(static_cast<char>(0xc0 | ((codepoint >> 6) & 0x1f)));
+        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+    } else if (codepoint <= 0xffff) {
+        output.push_back(static_cast<char>(0xe0 | ((codepoint >> 12) & 0x0f)));
+        output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+    } else if (codepoint <= 0x10ffff) {
+        output.push_back(static_cast<char>(0xf0 | ((codepoint >> 18) & 0x07)));
+        output.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3f)));
+        output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+    }
+}
+
+std::string DecodeHtmlEntities(const std::string& text) {
+    std::string output;
+    output.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '&') {
+            output.push_back(text[i]);
+            continue;
+        }
+        const size_t semicolon = text.find(';', i + 1);
+        if (semicolon == std::string::npos || semicolon - i > 16) {
+            output.push_back(text[i]);
+            continue;
+        }
+
+        const std::string entity = text.substr(i + 1, semicolon - i - 1);
+        const std::string lower = LowerAscii(entity);
+        if (lower == "amp") {
+            output.push_back('&');
+        } else if (lower == "lt") {
+            output.push_back('<');
+        } else if (lower == "gt") {
+            output.push_back('>');
+        } else if (lower == "quot") {
+            output.push_back('"');
+        } else if (lower == "apos") {
+            output.push_back('\'');
+        } else if (lower == "nbsp") {
+            output.push_back(' ');
+        } else if (!lower.empty() && lower[0] == '#') {
+            uint32_t value = 0;
+            bool ok = true;
+            if (lower.size() > 2 && lower[1] == 'x') {
+                for (size_t pos = 2; pos < lower.size(); ++pos) {
+                    const int digit = HexValue(lower[pos]);
+                    if (digit < 0) {
+                        ok = false;
+                        break;
+                    }
+                    value = value * 16 + static_cast<uint32_t>(digit);
+                }
+            } else {
+                for (size_t pos = 1; pos < lower.size(); ++pos) {
+                    if (!std::isdigit(static_cast<unsigned char>(lower[pos]))) {
+                        ok = false;
+                        break;
+                    }
+                    value = value * 10 + static_cast<uint32_t>(lower[pos] - '0');
+                }
+            }
+            if (ok) {
+                AppendUtf8Codepoint(output, value);
+            } else {
+                output += "&" + entity + ";";
+            }
+        } else {
+            output += "&" + entity + ";";
+        }
+        i = semicolon;
+    }
+    return output;
+}
+
+std::string NormalizeMarkdownWhitespace(const std::string& text) {
+    std::string output;
+    output.reserve(text.size());
+    bool pending_space = false;
+    int newlines = 2;
+    for (unsigned char ch : text) {
+        if (ch == '\r') {
+            continue;
+        }
+        if (ch == '\n') {
+            while (!output.empty() && output.back() == ' ') {
+                output.pop_back();
+            }
+            if (newlines < 2) {
+                output.push_back('\n');
+            }
+            ++newlines;
+            pending_space = false;
+            continue;
+        }
+        if (std::isspace(ch)) {
+            pending_space = true;
+            continue;
+        }
+        if (pending_space && !output.empty() && output.back() != '\n') {
+            output.push_back(' ');
+        }
+        output.push_back(static_cast<char>(ch));
+        pending_space = false;
+        newlines = 0;
+    }
+    return Trim(output);
+}
+
+std::string HtmlToMarkdownText(const std::string& html) {
+    const std::string lower_html = LowerAscii(html);
+    std::string output;
+    output.reserve(html.size());
+
+    for (size_t i = 0; i < html.size();) {
+        if (html[i] != '<') {
+            output.push_back(html[i]);
+            ++i;
+            continue;
+        }
+
+        if (lower_html.compare(i, 4, "<!--") == 0) {
+            const size_t end = lower_html.find("-->", i + 4);
+            i = end == std::string::npos ? html.size() : end + 3;
+            continue;
+        }
+
+        const size_t close = html.find('>', i + 1);
+        if (close == std::string::npos) {
+            output.push_back(html[i]);
+            ++i;
+            continue;
+        }
+
+        const std::string tag = html.substr(i + 1, close - i - 1);
+        const std::string tag_name = HtmlTagName(tag);
+        const bool closing = HtmlTagIsClosing(tag);
+
+        if (!closing && (tag_name == "script" || tag_name == "style" || tag_name == "head" || tag_name == "noscript" || tag_name == "svg")) {
+            const size_t block_end = FindCaseInsensitive(lower_html, "</" + tag_name, close + 1);
+            if (block_end == std::string::npos) {
+                i = close + 1;
+            } else {
+                const size_t block_close = html.find('>', block_end);
+                i = block_close == std::string::npos ? html.size() : block_close + 1;
+            }
+            continue;
+        }
+
+        if (tag_name.size() == 2 && tag_name[0] == 'h' && tag_name[1] >= '1' && tag_name[1] <= '6') {
+            AppendMarkdownBreak(output, closing ? 2 : 2);
+            if (!closing) {
+                output.append(static_cast<size_t>(tag_name[1] - '0'), '#');
+                output.push_back(' ');
+            }
+        } else if (tag_name == "p" || tag_name == "div" || tag_name == "section" || tag_name == "article" ||
+                   tag_name == "header" || tag_name == "footer" || tag_name == "main" || tag_name == "aside" ||
+                   tag_name == "table" || tag_name == "tr" || tag_name == "pre" || tag_name == "blockquote") {
+            AppendMarkdownBreak(output, 2);
+        } else if (tag_name == "br") {
+            AppendMarkdownBreak(output, 1);
+        } else if (!closing && tag_name == "li") {
+            AppendMarkdownBreak(output, 1);
+            output += "- ";
+        } else if (tag_name == "ul" || tag_name == "ol") {
+            AppendMarkdownBreak(output, 2);
+        } else if (tag_name == "td" || tag_name == "th") {
+            output += " | ";
+        } else if (tag_name == "hr") {
+            AppendMarkdownBreak(output, 2);
+            output += "---";
+            AppendMarkdownBreak(output, 2);
+        } else if (tag_name == "title" && !closing) {
+            AppendMarkdownBreak(output, 2);
+            output += "# ";
+        } else if (tag_name == "title" && closing) {
+            AppendMarkdownBreak(output, 2);
+        }
+        i = close + 1;
+    }
+
+    return NormalizeMarkdownWhitespace(DecodeHtmlEntities(output));
+}
+
+bool IsDocxExtension(const std::filesystem::path& path) {
+    const std::wstring ext = LowerExtension(path);
+    return ext == L".docx" || ext == L".docm";
+}
+
+bool IsXlsxExtension(const std::filesystem::path& path) {
+    const std::wstring ext = LowerExtension(path);
+    return ext == L".xlsx" || ext == L".xlsm";
+}
+
+bool IsPdfExtension(const std::filesystem::path& path) {
+    return LowerExtension(path) == L".pdf";
+}
+
+bool IsImageExtension(const std::filesystem::path& path) {
+    const std::wstring ext = LowerExtension(path);
+    return ext == L".png" || ext == L".jpg" || ext == L".jpeg" || ext == L".bmp" ||
+        ext == L".tif" || ext == L".tiff" || ext == L".webp";
+}
+
+bool IsRichExtractionExtension(const std::filesystem::path& path) {
+    return IsHtmlExtension(path) || IsDocxExtension(path) || IsXlsxExtension(path) || IsPdfExtension(path);
+}
+
+std::filesystem::path CreateTempDirectory(const std::string& prefix) {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / Utf8ToWide(MakeId(prefix));
+    std::filesystem::create_directories(root);
+    return root;
+}
+
+bool RunProcessAndWait(std::wstring command_line, DWORD timeout_ms, std::string* error) {
+    std::vector<wchar_t> buffer(command_line.begin(), command_line.end());
+    buffer.push_back(L'\0');
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(nullptr, buffer.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
+    if (!created) {
+        if (error) {
+            *error = "Could not start process.";
+        }
+        return false;
+    }
+    const DWORD wait_result = WaitForSingleObject(process.hProcess, timeout_ms);
+    if (wait_result == WAIT_TIMEOUT) {
+        TerminateProcess(process.hProcess, 1);
+        WaitForSingleObject(process.hProcess, 5000);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        if (error) {
+            *error = "Process timed out.";
+        }
+        return false;
+    }
+
+    DWORD exit_code = 1;
+    GetExitCodeProcess(process.hProcess, &exit_code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    if (exit_code != 0) {
+        if (error) {
+            *error = "Process exited with code " + std::to_string(exit_code) + ".";
+        }
+        return false;
+    }
+    return true;
+}
+
+std::string NormalizeOllamaVisionBaseUrl(std::string base_url) {
+    base_url = Trim(base_url);
+    if (base_url.empty()) {
+        return "http://localhost";
+    }
+    if (base_url.find("://") == std::string::npos) {
+        base_url = "http://" + base_url;
+    }
+    return base_url;
+}
+
+std::vector<std::string> BuildOllamaVisionBaseUrls(const RagImageIngestSettings& settings) {
+    const int count = ClampOllamaInstanceCount(settings.ollama_instance_count);
+    const std::string base_url = NormalizeOllamaVisionBaseUrl(settings.vision_base_url);
+    std::string scheme = "http";
+    std::string host = "localhost";
+    try {
+        const ParsedUrl parsed = CrackUrl(base_url);
+        scheme = parsed.secure ? "https" : "http";
+        host = WideToUtf8(parsed.host);
+        if (Trim(host).empty()) {
+            host = "localhost";
+        }
+    } catch (...) {
+    }
+
+    const int start_port = ClampOllamaStartPort(settings.ollama_start_port);
+    std::vector<std::string> endpoints;
+    endpoints.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        const int port = std::min(65535, start_port + i);
+        endpoints.push_back(scheme + "://" + host + ":" + std::to_string(port));
+    }
+    return endpoints;
+}
+
+std::string JoinStrings(const std::vector<std::string>& values, const std::string& separator) {
+    std::ostringstream stream;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i) {
+            stream << separator;
+        }
+        stream << values[i];
+    }
+    return stream.str();
+}
+
+bool ImageSettingsNeedOllamaVisionRuntime(const RagImageIngestSettings& settings) {
+    return settings.enabled &&
+        NormalizeImageIngestMode(settings.mode) == "vision_language_gpu" &&
+        settings.include_visual_description &&
+        NormalizeImageVisionProvider(settings.vision_provider) == "ollama";
+}
+
+bool AnyPathNeedsOllamaVisionRuntime(
+    const std::vector<std::filesystem::path>& paths,
+    const RagImageIngestSettings& settings) {
+    if (!ImageSettingsNeedOllamaVisionRuntime(settings)) {
+        return false;
+    }
+    return std::any_of(paths.begin(), paths.end(), [](const std::filesystem::path& path) {
+        return IsImageExtension(path);
+    });
+}
+
+std::wstring LowerWide(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    return value;
+}
+
+std::vector<wchar_t> BuildEnvironmentBlockWithOverride(const std::wstring& name, const std::wstring& value) {
+    std::vector<std::wstring> entries;
+    const std::wstring prefix = LowerWide(name + L"=");
+
+    LPWCH environment = GetEnvironmentStringsW();
+    if (environment) {
+        for (LPWCH cursor = environment; *cursor != L'\0'; cursor += std::wcslen(cursor) + 1) {
+            std::wstring entry = cursor;
+            if (LowerWide(entry).rfind(prefix, 0) == 0) {
+                continue;
+            }
+            entries.push_back(std::move(entry));
+        }
+        FreeEnvironmentStringsW(environment);
+    }
+
+    entries.push_back(name + L"=" + value);
+    std::sort(entries.begin(), entries.end(), [](const std::wstring& left, const std::wstring& right) {
+        return LowerWide(left) < LowerWide(right);
+    });
+
+    std::vector<wchar_t> block;
+    for (const auto& entry : entries) {
+        block.insert(block.end(), entry.begin(), entry.end());
+        block.push_back(L'\0');
+    }
+    block.push_back(L'\0');
+    return block;
+}
+
+bool AnyOllamaVisionEndpointAvailable(const RagImageIngestSettings& settings) {
+    for (const auto& endpoint : BuildOllamaVisionBaseUrls(settings)) {
+        if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<json> FetchRemoteAgentHealth(const RagImageIngestSettings& settings, std::string* error) {
+    try {
+        if (Trim(settings.remote_agent_base_url).empty()) {
+            if (error) {
+                *error = "Remote Agent URL is empty.";
+            }
+            return std::nullopt;
+        }
+        if (Trim(settings.remote_agent_shared_secret).empty()) {
+            if (error) {
+                *error = "Remote Agent shared secret is missing. Load the remote worker JSON.";
+            }
+            return std::nullopt;
+        }
+        const std::string response = HttpGetJsonWithAgentAuth(
+            JoinUrlPath(BuildRemoteAgentBaseUrl(settings), "/health"),
+            settings);
+        return json::parse(response);
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    } catch (...) {
+        if (error) {
+            *error = "Unexpected Remote Agent status error.";
+        }
+    }
+    return std::nullopt;
+}
+
+std::string Base64Encode(const std::string& bytes) {
+    static constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string output;
+    output.reserve(((bytes.size() + 2) / 3) * 4);
+    size_t index = 0;
+    while (index < bytes.size()) {
+        const unsigned char a = static_cast<unsigned char>(bytes[index++]);
+        const bool has_b = index < bytes.size();
+        const unsigned char b = has_b ? static_cast<unsigned char>(bytes[index++]) : 0;
+        const bool has_c = index < bytes.size();
+        const unsigned char c = has_c ? static_cast<unsigned char>(bytes[index++]) : 0;
+
+        output.push_back(alphabet[(a >> 2) & 0x3F]);
+        output.push_back(alphabet[((a & 0x03) << 4) | ((b >> 4) & 0x0F)]);
+        output.push_back(has_b ? alphabet[((b & 0x0F) << 2) | ((c >> 6) & 0x03)] : '=');
+        output.push_back(has_c ? alphabet[c & 0x3F] : '=');
+    }
+    return output;
+}
+
+std::string ImageModeLabel(const std::string& mode) {
+    const std::string normalized = NormalizeImageIngestMode(mode);
+    if (normalized == "paddle_ocr_gpu") {
+        return "GPU OCR (PaddleOCR)";
+    }
+    if (normalized == "vision_language_gpu") {
+        return "Full vision understanding (OCR + vision-language model)";
+    }
+    if (normalized == "remote_agent") {
+        return "Remote Agent vision understanding";
+    }
+    return "CPU OCR (Tesseract)";
+}
+
+std::optional<std::string> ExtractImageWithTesseract(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    const auto tesseract = FindExecutableOnPath(L"tesseract.exe");
+    if (!tesseract) {
+        if (error) {
+            *error = "tesseract.exe was not found on PATH.";
+        }
+        return std::nullopt;
+    }
+
+    const std::filesystem::path temp = CreateTempDirectory("rag_tesseract");
+    try {
+        const std::filesystem::path output_base = temp / "ocr";
+        const std::filesystem::path output_text = temp / "ocr.txt";
+        std::wstring command = QuoteCommandArgument(*tesseract) + L" " +
+            QuoteCommandArgument(path.wstring()) + L" " +
+            QuoteCommandArgument(output_base.wstring());
+        const std::string language = Trim(settings.tesseract_language).empty() ? "eng" : Trim(settings.tesseract_language);
+        command += L" -l " + QuoteCommandArgument(Utf8ToWide(language));
+
+        std::string process_error;
+        if (!RunProcessAndWait(command, 180000, &process_error) || !std::filesystem::exists(output_text)) {
+            if (error) {
+                *error = process_error.empty() ? "Tesseract did not produce OCR output." : process_error;
+            }
+            std::error_code ec;
+            std::filesystem::remove_all(temp, ec);
+            return std::nullopt;
+        }
+
+        std::string text = NormalizeMarkdownWhitespace(ReadWholeFile(output_text));
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        if (Trim(text).empty()) {
+            if (error) {
+                *error = "Tesseract produced no readable OCR text.";
+            }
+            return std::nullopt;
+        }
+        return text;
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        throw;
+    }
+}
+
+std::optional<std::string> ExtractImageWithPaddleOcr(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    std::wstring python_command = Utf8ToWide(Trim(settings.paddle_python_command));
+    if (python_command.empty()) {
+        python_command = L"python";
+    }
+    if (python_command == L"python" || python_command == L"python.exe") {
+        const auto python = FindExecutableOnPath(L"python.exe");
+        if (!python) {
+            if (error) {
+                *error = "python.exe was not found on PATH.";
+            }
+            return std::nullopt;
+        }
+        python_command = *python;
+    }
+
+    const std::filesystem::path temp = CreateTempDirectory("rag_paddleocr");
+    try {
+        const std::filesystem::path script = temp / "paddle_ocr_extract.py";
+        const std::filesystem::path output = temp / "ocr.txt";
+        const std::filesystem::path error_output = temp / "ocr_error.txt";
+        {
+            std::ofstream script_file(script, std::ios::binary | std::ios::trunc);
+            script_file
+                << "import sys, traceback\n"
+                << "from pathlib import Path\n"
+                << "image_path = sys.argv[1]\n"
+                << "out_path = Path(sys.argv[2])\n"
+                << "err_path = Path(sys.argv[3])\n"
+                << "lang = sys.argv[4] if len(sys.argv) > 4 else 'en'\n"
+                << "texts = []\n"
+                << "def add_text(value):\n"
+                << "    value = str(value).strip()\n"
+                << "    if value and value not in texts:\n"
+                << "        texts.append(value)\n"
+                << "def collect(obj):\n"
+                << "    if obj is None:\n"
+                << "        return\n"
+                << "    if isinstance(obj, dict):\n"
+                << "        for key in ('rec_texts', 'texts'):\n"
+                << "            value = obj.get(key)\n"
+                << "            if isinstance(value, (list, tuple)):\n"
+                << "                for item in value:\n"
+                << "                    add_text(item)\n"
+                << "        value = obj.get('text')\n"
+                << "        if isinstance(value, str):\n"
+                << "            add_text(value)\n"
+                << "        for value in obj.values():\n"
+                << "            collect(value)\n"
+                << "        return\n"
+                << "    if isinstance(obj, (list, tuple)):\n"
+                << "        if len(obj) >= 2 and isinstance(obj[1], (list, tuple)) and obj[1] and isinstance(obj[1][0], str):\n"
+                << "            add_text(obj[1][0])\n"
+                << "        for item in obj:\n"
+                << "            collect(item)\n"
+                << "        return\n"
+                << "    for attr in ('json', 'res'):\n"
+                << "        if hasattr(obj, attr):\n"
+                << "            try:\n"
+                << "                collect(getattr(obj, attr))\n"
+                << "            except Exception:\n"
+                << "                pass\n"
+                << "try:\n"
+                << "    from paddleocr import PaddleOCR\n"
+                << "    try:\n"
+                << "        ocr = PaddleOCR(use_angle_cls=True, lang=lang)\n"
+                << "    except TypeError:\n"
+                << "        try:\n"
+                << "            ocr = PaddleOCR(lang=lang)\n"
+                << "        except TypeError:\n"
+                << "            ocr = PaddleOCR()\n"
+                << "    try:\n"
+                << "        result = ocr.ocr(image_path, cls=True)\n"
+                << "    except Exception:\n"
+                << "        try:\n"
+                << "            result = ocr.predict(image_path)\n"
+                << "        except TypeError:\n"
+                << "            result = ocr.predict(input=image_path)\n"
+                << "    collect(result)\n"
+                << "    out_path.write_text('\\n'.join(texts), encoding='utf-8', errors='replace')\n"
+                << "    sys.exit(0 if texts else 4)\n"
+                << "except Exception:\n"
+                << "    err_path.write_text(traceback.format_exc(), encoding='utf-8', errors='replace')\n"
+                << "    sys.exit(2)\n";
+        }
+
+        std::string process_error;
+        const std::string language = Trim(settings.paddle_language).empty() ? "en" : Trim(settings.paddle_language);
+        const std::wstring command = QuoteCommandArgument(python_command) + L" " +
+            QuoteCommandArgument(script.wstring()) + L" " +
+            QuoteCommandArgument(path.wstring()) + L" " +
+            QuoteCommandArgument(output.wstring()) + L" " +
+            QuoteCommandArgument(error_output.wstring()) + L" " +
+            QuoteCommandArgument(Utf8ToWide(language));
+        if (!RunProcessAndWait(command, 300000, &process_error) || !std::filesystem::exists(output)) {
+            if (error) {
+                std::string details = process_error;
+                if (std::filesystem::exists(error_output)) {
+                    details = ReadWholeFile(error_output);
+                }
+                *error = details.empty() ? "PaddleOCR did not produce OCR output." : details.substr(0, 1000);
+            }
+            std::error_code ec;
+            std::filesystem::remove_all(temp, ec);
+            return std::nullopt;
+        }
+
+        std::string text = NormalizeMarkdownWhitespace(ReadWholeFile(output));
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        if (Trim(text).empty()) {
+            if (error) {
+                *error = "PaddleOCR produced no readable OCR text.";
+            }
+            return std::nullopt;
+        }
+        return text;
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        throw;
+    }
+}
+
+std::optional<std::string> DescribeImageWithOllamaVisionDirect(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    if (NormalizeImageVisionProvider(settings.vision_provider) != "ollama") {
+        if (error) {
+            *error = "Only Ollama vision-language image description is currently wired in.";
+        }
+        return std::nullopt;
+    }
+    if (Trim(settings.vision_model).empty()) {
+        if (error) {
+            *error = "No vision-language model is configured.";
+        }
+        return std::nullopt;
+    }
+
+    try {
+        json body;
+        body["model"] = Trim(settings.vision_model);
+        body["prompt"] = Trim(settings.vision_prompt).empty() ? DefaultImageVisionPrompt() : settings.vision_prompt;
+        body["stream"] = false;
+        body["images"] = json::array({Base64Encode(ReadWholeFile(path))});
+        const auto endpoints = BuildOllamaVisionBaseUrls(settings);
+        const std::string base_url = endpoints.empty() ? "http://localhost:11434" : endpoints.front();
+        const json response = json::parse(HttpPostJson(JoinUrlPath(base_url, "/api/generate"), body.dump(), 600000));
+        std::string description = response.value("response", "");
+        description = NormalizeMarkdownWhitespace(description);
+        if (Trim(description).empty()) {
+            if (error) {
+                *error = "Ollama returned an empty image description.";
+            }
+            return std::nullopt;
+        }
+        return description;
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    } catch (...) {
+        if (error) {
+            *error = "Unexpected Ollama vision-language error.";
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> DescribeImageWithRemoteAgent(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    if (Trim(settings.remote_agent_shared_secret).empty()) {
+        if (error) {
+            *error = "Remote Agent shared secret is missing. Load the remote worker JSON in Image Ingest Settings.";
+        }
+        return std::nullopt;
+    }
+    const std::string remote_model = EffectiveRemoteAgentModel(settings);
+    if (remote_model.empty()) {
+        if (error) {
+            *error = "No remote vision model is configured. Load the remote worker JSON in Image Ingest Settings.";
+        }
+        return std::nullopt;
+    }
+
+    try {
+        json body;
+        body["model"] = remote_model;
+        body["prompt"] = Trim(settings.vision_prompt).empty() ? DefaultImageVisionPrompt() : settings.vision_prompt;
+        body["stream"] = true;
+        body["images"] = json::array({Base64Encode(ReadWholeFile(path))});
+        std::string description = HttpPostOllamaGenerateStreamWithAgentAuth(
+            JoinUrlPath(BuildRemoteAgentBaseUrl(settings), "/api/generate"),
+            body.dump(),
+            settings);
+        description = NormalizeMarkdownWhitespace(description);
+        if (Trim(description).empty()) {
+            if (error) {
+                *error = "Remote Agent returned an empty image description.";
+            }
+            return std::nullopt;
+        }
+        return description;
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    } catch (...) {
+        if (error) {
+            *error = "Unexpected Remote Agent vision-language error.";
+        }
+    }
+    return std::nullopt;
+}
+
+struct ImageVisionQueueStats {
+    int pending = 0;
+    int active = 0;
+    int desired_workers = 1;
+    int worker_threads = 0;
+};
+
+struct ImageVisionQueueResult {
+    std::optional<std::string> description;
+    std::string error;
+    std::string endpoint;
+};
+
+struct ImageVisionQueueTask {
+    uint64_t id = 0;
+    std::filesystem::path path;
+    RagImageIngestSettings settings;
+    std::promise<ImageVisionQueueResult> completion;
+};
+
+class ImageVisionWorkerQueue {
+public:
+    ~ImageVisionWorkerQueue() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+        }
+        cv_.notify_all();
+        for (auto& worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+    }
+
+    ImageVisionQueueResult Enqueue(const std::filesystem::path& path, const RagImageIngestSettings& settings) {
+        auto task = std::make_shared<ImageVisionQueueTask>();
+        task->path = path;
+        task->settings = settings;
+        auto future = task->completion.get_future();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            task->id = ++next_task_id_;
+            desired_workers_ = static_cast<size_t>(ClampOllamaInstanceCount(settings.ollama_instance_count));
+            EnsureWorkersLocked(desired_workers_);
+            tasks_.push_back(task);
+        }
+        cv_.notify_all();
+        return future.get();
+    }
+
+    ImageVisionQueueStats ConfigureAndSnapshot(const RagImageIngestSettings& settings) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        desired_workers_ = static_cast<size_t>(ClampOllamaInstanceCount(settings.ollama_instance_count));
+        EnsureWorkersLocked(desired_workers_);
+        return SnapshotLocked();
+    }
+
+private:
+    void EnsureWorkersLocked(size_t desired) {
+        desired = std::max<size_t>(1, desired);
+        while (workers_.size() < desired) {
+            const size_t worker_index = workers_.size();
+            workers_.emplace_back([this, worker_index]() {
+                WorkerLoop(worker_index);
+            });
+        }
+        cv_.notify_all();
+    }
+
+    ImageVisionQueueStats SnapshotLocked() const {
+        ImageVisionQueueStats stats;
+        stats.pending = static_cast<int>(tasks_.size());
+        stats.active = active_workers_;
+        stats.desired_workers = static_cast<int>(desired_workers_);
+        stats.worker_threads = static_cast<int>(workers_.size());
+        return stats;
+    }
+
+    std::string PickEndpointLocked(const RagImageIngestSettings& settings) {
+        const auto endpoints = BuildOllamaVisionBaseUrls(settings);
+        if (endpoints.empty()) {
+            return "http://localhost:11434";
+        }
+        const size_t index = next_endpoint_index_++ % endpoints.size();
+        return endpoints[index];
+    }
+
+    void WorkerLoop(size_t worker_index) {
+        for (;;) {
+            std::shared_ptr<ImageVisionQueueTask> task;
+            std::string endpoint;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [&]() {
+                    return stopping_ ||
+                        (worker_index < desired_workers_ && !tasks_.empty());
+                });
+                if (stopping_) {
+                    return;
+                }
+                if (worker_index >= desired_workers_ || tasks_.empty()) {
+                    continue;
+                }
+                task = std::move(tasks_.front());
+                tasks_.pop_front();
+                endpoint = PickEndpointLocked(task->settings);
+                ++active_workers_;
+            }
+
+            ImageVisionQueueResult result;
+            result.endpoint = endpoint;
+            try {
+                RagImageIngestSettings worker_settings = task->settings;
+                worker_settings.vision_base_url = endpoint;
+                result.description = DescribeImageWithOllamaVisionDirect(
+                    task->path, worker_settings, &result.error);
+            } catch (const std::exception& ex) {
+                result.error = ex.what();
+            } catch (...) {
+                result.error = "Unexpected Ollama vision worker error.";
+            }
+            task->completion.set_value(std::move(result));
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (active_workers_ > 0) {
+                    --active_workers_;
+                }
+            }
+            cv_.notify_all();
+        }
+    }
+
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::deque<std::shared_ptr<ImageVisionQueueTask>> tasks_;
+    std::vector<std::thread> workers_;
+    bool stopping_ = false;
+    size_t desired_workers_ = 1;
+    int active_workers_ = 0;
+    uint64_t next_task_id_ = 0;
+    uint64_t next_endpoint_index_ = 0;
+};
+
+ImageVisionWorkerQueue& GetImageVisionWorkerQueue() {
+    static ImageVisionWorkerQueue queue;
+    return queue;
+}
+
+std::optional<std::string> DescribeImageWithOllamaVision(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+    if (NormalizeImageVisionProvider(settings.vision_provider) == "remote_agent" ||
+        NormalizeImageIngestMode(settings.mode) == "remote_agent") {
+        return DescribeImageWithRemoteAgent(path, settings, error);
+    }
+    if (NormalizeImageVisionProvider(settings.vision_provider) != "ollama") {
+        return DescribeImageWithOllamaVisionDirect(path, settings, error);
+    }
+    const ImageVisionQueueResult result = GetImageVisionWorkerQueue().Enqueue(path, settings);
+    if (error) {
+        *error = result.error;
+        if (!result.description && !result.endpoint.empty()) {
+            *error += error->empty()
+                ? ("Ollama endpoint: " + result.endpoint)
+                : (" (Ollama endpoint: " + result.endpoint + ")");
+        }
+    }
+    return result.description;
+}
+
+std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* extractor_id) {
+    if (!settings.enabled) {
+        throw std::runtime_error("System-wide image ingestion is disabled.");
+    }
+
+    const std::string mode = NormalizeImageIngestMode(settings.mode);
+    const bool remote_agent_mode = mode == "remote_agent" ||
+        NormalizeImageVisionProvider(settings.vision_provider) == "remote_agent";
+    std::vector<std::string> warnings;
+    std::string ocr_text;
+    std::string ocr_engine;
+
+    if (!remote_agent_mode && (mode == "paddle_ocr_gpu" || mode == "vision_language_gpu")) {
+        std::string paddle_error;
+        if (const auto paddle_text = ExtractImageWithPaddleOcr(path, settings, &paddle_error)) {
+            ocr_text = *paddle_text;
+            ocr_engine = "paddleocr";
+        } else if (!paddle_error.empty()) {
+            warnings.push_back("PaddleOCR was requested but did not produce OCR text: " + paddle_error);
+        }
+    }
+
+    if (!remote_agent_mode && ocr_text.empty() && settings.include_ocr_text) {
+        std::string tesseract_error;
+        if (const auto tesseract_text = ExtractImageWithTesseract(path, settings, &tesseract_error)) {
+            ocr_text = *tesseract_text;
+            ocr_engine = "tesseract";
+        } else if (!tesseract_error.empty()) {
+            warnings.push_back("Tesseract OCR did not produce text: " + tesseract_error);
+        }
+    }
+
+    std::string visual_description;
+    if ((mode == "vision_language_gpu" || remote_agent_mode) &&
+        (settings.include_visual_description || remote_agent_mode)) {
+        std::string vision_error;
+        if (const auto description = DescribeImageWithOllamaVision(path, settings, &vision_error)) {
+            visual_description = *description;
+        } else if (!vision_error.empty()) {
+            warnings.push_back("Vision-language description was requested but did not produce output: " + vision_error);
+        }
+    }
+
+    const bool metadata_only_fallback = ocr_text.empty() && visual_description.empty();
+    if (metadata_only_fallback) {
+        std::string warning = "Image ingestion did not produce OCR text or a visual description for this file.";
+        if (!warnings.empty()) {
+            warning += " Last warning: " + warnings.back();
+        }
+        warnings.push_back(std::move(warning));
+    }
+
+    if (extractor_id) {
+        if (metadata_only_fallback) {
+            *extractor_id = "image_ingest_metadata_only";
+        } else if ((mode == "vision_language_gpu" || remote_agent_mode) && !visual_description.empty()) {
+            const std::string vision_id = remote_agent_mode ? "remote_agent_vision" : "ollama_vision";
+            *extractor_id = ocr_engine.empty() ? vision_id : (ocr_engine + "_plus_" + vision_id);
+        } else if (!ocr_engine.empty()) {
+            *extractor_id = ocr_engine;
+        } else {
+            *extractor_id = "image_ingest";
+        }
+    }
+
+    std::ostringstream markdown;
+    const std::string effective_vision_model = remote_agent_mode
+        ? EffectiveRemoteAgentModel(settings)
+        : Trim(settings.vision_model);
+    markdown << "# " << WideToUtf8(path.filename().wstring()) << "\n\n";
+    markdown << "## Image Ingest Metadata\n\n";
+    markdown << "- Pipeline mode: " << ImageModeLabel(mode) << "\n";
+    markdown << "- OCR engine: " << (ocr_engine.empty() ? "none" : ocr_engine) << "\n";
+    markdown << "- Vision provider: " << ((mode == "vision_language_gpu" || remote_agent_mode) ? NormalizeImageVisionProvider(settings.vision_provider) : "none") << "\n";
+    markdown << "- Vision model: " << ((mode == "vision_language_gpu" || remote_agent_mode) ? effective_vision_model : "none") << "\n";
+    markdown << "- Original image: preserved at the stored source location referenced by this record.\n\n";
+
+    if (!warnings.empty()) {
+        markdown << "## Image Ingest Warnings\n\n";
+        for (const auto& warning : warnings) {
+            markdown << "- " << NormalizeMarkdownWhitespace(warning) << "\n";
+        }
+        markdown << "\n";
+    }
+
+    if (!visual_description.empty()) {
+        markdown << "## Visual Description\n\n";
+        markdown << visual_description << "\n\n";
+    }
+
+    if (!ocr_text.empty()) {
+        markdown << "## OCR Text\n\n";
+        markdown << ocr_text << "\n";
+    } else if (metadata_only_fallback) {
+        markdown << "## Extraction Status\n\n";
+        markdown << "No OCR text or visual description was extracted for this image during ingestion.\n";
+    }
+
+    return NormalizeMarkdownWhitespace(markdown.str());
+}
+
+struct MarkdownExtractionQueueStats {
+    int pending = 0;
+    int active = 0;
+    int desired_workers = 1;
+    int worker_threads = 0;
+};
+
+struct MarkdownExtractionQueueResult {
+    bool success = false;
+    std::string markdown;
+    std::string extractor_id;
+    std::string error;
+};
+
+struct MarkdownExtractionQueueTask {
+    uint64_t id = 0;
+    std::filesystem::path path;
+    RagImageIngestSettings settings;
+    std::promise<MarkdownExtractionQueueResult> completion;
+};
+
+class MarkdownExtractionWorkerQueue {
+public:
+    ~MarkdownExtractionWorkerQueue() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+        }
+        cv_.notify_all();
+        for (auto& worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+    }
+
+    MarkdownExtractionQueueResult Enqueue(const std::filesystem::path& path, const RagImageIngestSettings& settings) {
+        auto task = std::make_shared<MarkdownExtractionQueueTask>();
+        task->path = path;
+        task->settings = settings;
+        auto future = task->completion.get_future();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            task->id = ++next_task_id_;
+            desired_workers_ = static_cast<size_t>(ClampOllamaInstanceCount(settings.ollama_instance_count));
+            EnsureWorkersLocked(desired_workers_);
+            tasks_.push_back(task);
+        }
+        cv_.notify_all();
+        return future.get();
+    }
+
+    MarkdownExtractionQueueStats ConfigureAndSnapshot(const RagImageIngestSettings& settings) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        desired_workers_ = static_cast<size_t>(ClampOllamaInstanceCount(settings.ollama_instance_count));
+        EnsureWorkersLocked(desired_workers_);
+        return SnapshotLocked();
+    }
+
+private:
+    void EnsureWorkersLocked(size_t desired) {
+        desired = std::max<size_t>(1, desired);
+        while (workers_.size() < desired) {
+            const size_t worker_index = workers_.size();
+            workers_.emplace_back([this, worker_index]() {
+                WorkerLoop(worker_index);
+            });
+        }
+        cv_.notify_all();
+    }
+
+    MarkdownExtractionQueueStats SnapshotLocked() const {
+        MarkdownExtractionQueueStats stats;
+        stats.pending = static_cast<int>(tasks_.size());
+        stats.active = active_workers_;
+        stats.desired_workers = static_cast<int>(desired_workers_);
+        stats.worker_threads = static_cast<int>(workers_.size());
+        return stats;
+    }
+
+    void WorkerLoop(size_t worker_index) {
+        for (;;) {
+            std::shared_ptr<MarkdownExtractionQueueTask> task;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [&]() {
+                    return stopping_ ||
+                        (worker_index < desired_workers_ && !tasks_.empty());
+                });
+                if (stopping_) {
+                    return;
+                }
+                if (worker_index >= desired_workers_ || tasks_.empty()) {
+                    continue;
+                }
+                task = std::move(tasks_.front());
+                tasks_.pop_front();
+                ++active_workers_;
+            }
+
+            MarkdownExtractionQueueResult result;
+            try {
+                const bool image_document = IsImageExtension(task->path);
+                const bool rich_document = IsRichExtractionExtension(task->path);
+                if (!image_document && !rich_document) {
+                    result.error = "No processed Markdown extractor is available for this file type.";
+                } else {
+                    result.markdown = image_document
+                        ? ExtractImageToMarkdown(task->path, task->settings, &result.extractor_id)
+                        : ExtractRichDocumentToMarkdown(task->path, &result.extractor_id);
+                    result.success = true;
+                }
+            } catch (const std::exception& ex) {
+                result.error = ex.what();
+            } catch (...) {
+                result.error = "Unexpected processed-document extraction error.";
+            }
+            task->completion.set_value(std::move(result));
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (active_workers_ > 0) {
+                    --active_workers_;
+                }
+            }
+            cv_.notify_all();
+        }
+    }
+
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::deque<std::shared_ptr<MarkdownExtractionQueueTask>> tasks_;
+    std::vector<std::thread> workers_;
+    bool stopping_ = false;
+    size_t desired_workers_ = 1;
+    int active_workers_ = 0;
+    uint64_t next_task_id_ = 0;
+};
+
+MarkdownExtractionWorkerQueue& GetMarkdownExtractionWorkerQueue() {
+    static MarkdownExtractionWorkerQueue queue;
+    return queue;
+}
+
+MarkdownExtractionQueueResult ExtractProcessedFileToMarkdownQueued(
+    const std::filesystem::path& path,
+    const RagImageIngestSettings& settings) {
+    const bool remote_agent_image =
+        IsImageExtension(path) &&
+        (NormalizeImageIngestMode(settings.mode) == "remote_agent" ||
+            NormalizeImageVisionProvider(settings.vision_provider) == "remote_agent");
+    if (remote_agent_image) {
+        MarkdownExtractionQueueResult result;
+        try {
+            result.markdown = ExtractImageToMarkdown(path, settings, &result.extractor_id);
+            result.success = true;
+        } catch (const std::exception& ex) {
+            result.error = ex.what();
+        } catch (...) {
+            result.error = "Unexpected Remote Agent image extraction error.";
+        }
+        return result;
+    }
+    return GetMarkdownExtractionWorkerQueue().Enqueue(path, settings);
+}
+
+bool ExtractZipWithTar(const std::filesystem::path& source, const std::filesystem::path& destination, std::string* error) {
+    const auto tar = FindExecutableOnPath(L"tar.exe");
+    if (!tar) {
+        if (error) {
+            *error = "tar.exe was not found on PATH. Windows tar is required to extract Office Open XML files.";
+        }
+        return false;
+    }
+    std::filesystem::create_directories(destination);
+    const std::wstring command = QuoteCommandArgument(*tar) + L" -xf " + QuoteCommandArgument(source.wstring()) + L" -C " + QuoteCommandArgument(destination.wstring());
+    return RunProcessAndWait(command, 120000, error);
+}
+
+std::string XmlAttribute(const std::string& tag, const std::string& name) {
+    for (char quote : {'"', '\''}) {
+        const std::string needle = name + "=" + quote;
+        size_t pos = tag.find(needle);
+        if (pos == std::string::npos) {
+            continue;
+        }
+        pos += needle.size();
+        const size_t end = tag.find(quote, pos);
+        if (end != std::string::npos) {
+            return DecodeHtmlEntities(tag.substr(pos, end - pos));
+        }
+    }
+    return {};
+}
+
+bool XmlTagMatches(const std::string& tag_name, const std::string& local_name) {
+    return tag_name == local_name ||
+        (tag_name.size() > local_name.size() &&
+         tag_name[tag_name.size() - local_name.size() - 1] == ':' &&
+         tag_name.compare(tag_name.size() - local_name.size(), local_name.size(), local_name) == 0);
+}
+
+std::string ExtractTagTextRuns(const std::string& xml, const std::string& local_tag_name) {
+    std::string text;
+    for (size_t i = 0; i < xml.size();) {
+        const size_t open = xml.find('<', i);
+        if (open == std::string::npos) {
+            break;
+        }
+        const size_t close = xml.find('>', open + 1);
+        if (close == std::string::npos) {
+            break;
+        }
+        const std::string tag = xml.substr(open + 1, close - open - 1);
+        const std::string tag_name = HtmlTagName(tag);
+        if (HtmlTagIsClosing(tag) || !XmlTagMatches(tag_name, local_tag_name)) {
+            i = close + 1;
+            continue;
+        }
+
+        const std::string closing = "</" + tag_name + ">";
+        std::string lower_xml = LowerAscii(xml);
+        const size_t end = lower_xml.find(LowerAscii(closing), close + 1);
+        if (end == std::string::npos) {
+            i = close + 1;
+            continue;
+        }
+        text += DecodeHtmlEntities(xml.substr(close + 1, end - close - 1));
+        i = end + closing.size();
+    }
+    return text;
+}
+
+std::string ExtractWordXmlText(const std::string& xml) {
+    std::string output;
+    const std::string lower_xml = LowerAscii(xml);
+    for (size_t i = 0; i < xml.size();) {
+        const size_t open = xml.find('<', i);
+        if (open == std::string::npos) {
+            break;
+        }
+        const size_t close = xml.find('>', open + 1);
+        if (close == std::string::npos) {
+            break;
+        }
+        const std::string tag = xml.substr(open + 1, close - open - 1);
+        const std::string tag_name = HtmlTagName(tag);
+        const bool closing = HtmlTagIsClosing(tag);
+
+        if (!closing && XmlTagMatches(tag_name, "t")) {
+            const std::string closing_tag = "</" + tag_name + ">";
+            const size_t end = lower_xml.find(LowerAscii(closing_tag), close + 1);
+            if (end == std::string::npos) {
+                i = close + 1;
+                continue;
+            }
+            output += DecodeHtmlEntities(xml.substr(close + 1, end - close - 1));
+            i = end + closing_tag.size();
+            continue;
+        }
+        if (!closing && XmlTagMatches(tag_name, "tab")) {
+            output.push_back('\t');
+        } else if (!closing && (XmlTagMatches(tag_name, "br") || XmlTagMatches(tag_name, "cr"))) {
+            AppendMarkdownBreak(output, 1);
+        } else if (closing && XmlTagMatches(tag_name, "p")) {
+            AppendMarkdownBreak(output, 2);
+        }
+        i = close + 1;
+    }
+    return NormalizeMarkdownWhitespace(output);
+}
+
+std::string ExtractDocxToMarkdown(const std::filesystem::path& path) {
+    const std::filesystem::path temp = CreateTempDirectory("rag_docx");
+    try {
+        std::string error;
+        if (!ExtractZipWithTar(path, temp, &error)) {
+            throw std::runtime_error(error);
+        }
+
+        std::ostringstream markdown;
+        markdown << "# " << WideToUtf8(path.filename().wstring()) << "\n\n";
+
+        const std::filesystem::path document_xml = temp / "word" / "document.xml";
+        if (std::filesystem::exists(document_xml)) {
+            const std::string text = ExtractWordXmlText(ReadWholeFile(document_xml));
+            if (!text.empty()) {
+                markdown << text << "\n\n";
+            }
+        }
+
+        const std::filesystem::path word_dir = temp / "word";
+        if (std::filesystem::exists(word_dir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(word_dir)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                const std::wstring name = entry.path().filename().wstring();
+                const std::wstring lower_name = LowerAscii(WideToUtf8(name)).empty() ? L"" : Utf8ToWide(LowerAscii(WideToUtf8(name)));
+                if (lower_name.rfind(L"header", 0) != 0 && lower_name.rfind(L"footer", 0) != 0 &&
+                    lower_name != L"footnotes.xml" && lower_name != L"endnotes.xml") {
+                    continue;
+                }
+                const std::string text = ExtractWordXmlText(ReadWholeFile(entry.path()));
+                if (!text.empty()) {
+                    markdown << "## " << WideToUtf8(entry.path().stem().wstring()) << "\n\n" << text << "\n\n";
+                }
+            }
+        }
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        const std::string result = NormalizeMarkdownWhitespace(markdown.str());
+        if (result.size() < 8) {
+            throw std::runtime_error("DOCX extraction produced no text.");
+        }
+        return result;
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        throw;
+    }
+}
+
+std::vector<std::string> ExtractXlsxSharedStrings(const std::filesystem::path& shared_strings_path) {
+    std::vector<std::string> shared;
+    if (!std::filesystem::exists(shared_strings_path)) {
+        return shared;
+    }
+    const std::string xml = ReadWholeFile(shared_strings_path);
+    const std::string lower_xml = LowerAscii(xml);
+    for (size_t pos = 0;;) {
+        const size_t open = lower_xml.find("<si", pos);
+        if (open == std::string::npos) {
+            break;
+        }
+        const size_t open_close = lower_xml.find('>', open + 1);
+        const size_t close = lower_xml.find("</si>", open_close == std::string::npos ? open + 1 : open_close + 1);
+        if (open_close == std::string::npos || close == std::string::npos) {
+            break;
+        }
+        shared.push_back(NormalizeMarkdownWhitespace(ExtractTagTextRuns(xml.substr(open_close + 1, close - open_close - 1), "t")));
+        pos = close + 5;
+    }
+    return shared;
+}
+
+std::map<std::string, std::string> ExtractWorkbookRelationships(const std::filesystem::path& rels_path) {
+    std::map<std::string, std::string> relationships;
+    if (!std::filesystem::exists(rels_path)) {
+        return relationships;
+    }
+    const std::string xml = ReadWholeFile(rels_path);
+    for (size_t pos = 0;;) {
+        const size_t open = xml.find("<Relationship", pos);
+        if (open == std::string::npos) {
+            break;
+        }
+        const size_t close = xml.find('>', open + 1);
+        if (close == std::string::npos) {
+            break;
+        }
+        const std::string tag = xml.substr(open + 1, close - open - 1);
+        const std::string id = XmlAttribute(tag, "Id");
+        std::string target = XmlAttribute(tag, "Target");
+        if (!id.empty() && !target.empty()) {
+            while (!target.empty() && target.front() == '/') {
+                target.erase(target.begin());
+            }
+            if (target.rfind("xl/", 0) != 0) {
+                target = "xl/" + target;
+            }
+            relationships[id] = target;
+        }
+        pos = close + 1;
+    }
+    return relationships;
+}
+
+struct XlsxSheetInfo {
+    std::string name;
+    std::string rel_id;
+};
+
+std::vector<XlsxSheetInfo> ExtractWorkbookSheets(const std::filesystem::path& workbook_path) {
+    std::vector<XlsxSheetInfo> sheets;
+    if (!std::filesystem::exists(workbook_path)) {
+        return sheets;
+    }
+    const std::string xml = ReadWholeFile(workbook_path);
+    for (size_t pos = 0;;) {
+        const size_t open = xml.find("<sheet", pos);
+        if (open == std::string::npos) {
+            break;
+        }
+        const size_t close = xml.find('>', open + 1);
+        if (close == std::string::npos) {
+            break;
+        }
+        const std::string tag = xml.substr(open + 1, close - open - 1);
+        XlsxSheetInfo sheet;
+        sheet.name = XmlAttribute(tag, "name");
+        sheet.rel_id = XmlAttribute(tag, "r:id");
+        if (!sheet.name.empty() || !sheet.rel_id.empty()) {
+            sheets.push_back(std::move(sheet));
+        }
+        pos = close + 1;
+    }
+    return sheets;
+}
+
+std::string FirstTagText(const std::string& xml, const std::string& local_tag_name) {
+    const std::string lower_xml = LowerAscii(xml);
+    for (size_t pos = 0;;) {
+        const size_t open = xml.find('<', pos);
+        if (open == std::string::npos) {
+            return {};
+        }
+        const size_t close = xml.find('>', open + 1);
+        if (close == std::string::npos) {
+            return {};
+        }
+        const std::string tag = xml.substr(open + 1, close - open - 1);
+        const std::string tag_name = HtmlTagName(tag);
+        if (HtmlTagIsClosing(tag) || !XmlTagMatches(tag_name, local_tag_name)) {
+            pos = close + 1;
+            continue;
+        }
+        const std::string closing_tag = "</" + tag_name + ">";
+        const size_t end = lower_xml.find(LowerAscii(closing_tag), close + 1);
+        if (end == std::string::npos) {
+            return {};
+        }
+        return DecodeHtmlEntities(xml.substr(close + 1, end - close - 1));
+    }
+}
+
+std::string ExtractXlsxCellValue(const std::string& cell_tag, const std::string& cell_body, const std::vector<std::string>& shared_strings) {
+    const std::string type = XmlAttribute(cell_tag, "t");
+    if (type == "s") {
+        const std::string index_text = Trim(FirstTagText(cell_body, "v"));
+        if (!index_text.empty()) {
+            try {
+                const size_t index = static_cast<size_t>(std::stoul(index_text));
+                if (index < shared_strings.size()) {
+                    return shared_strings[index];
+                }
+            } catch (...) {
+            }
+        }
+        return {};
+    }
+    if (type == "inlineStr") {
+        return NormalizeMarkdownWhitespace(ExtractTagTextRuns(cell_body, "t"));
+    }
+    if (type == "b") {
+        const std::string value = Trim(FirstTagText(cell_body, "v"));
+        return value == "1" ? "TRUE" : value == "0" ? "FALSE" : value;
+    }
+    std::string value = Trim(FirstTagText(cell_body, "v"));
+    if (value.empty()) {
+        value = NormalizeMarkdownWhitespace(ExtractTagTextRuns(cell_body, "t"));
+    }
+    return value;
+}
+
+std::string ExtractWorksheetMarkdown(const std::filesystem::path& worksheet_path, const std::vector<std::string>& shared_strings) {
+    const std::string xml = ReadWholeFile(worksheet_path);
+    const std::string lower_xml = LowerAscii(xml);
+    std::ostringstream markdown;
+    for (size_t row_pos = 0;;) {
+        const size_t row_open = lower_xml.find("<row", row_pos);
+        if (row_open == std::string::npos) {
+            break;
+        }
+        const size_t row_tag_end = lower_xml.find('>', row_open + 1);
+        const size_t row_close = lower_xml.find("</row>", row_tag_end == std::string::npos ? row_open + 1 : row_tag_end + 1);
+        if (row_tag_end == std::string::npos || row_close == std::string::npos) {
+            break;
+        }
+        const std::string row_body = xml.substr(row_tag_end + 1, row_close - row_tag_end - 1);
+        const std::string lower_row = LowerAscii(row_body);
+
+        std::vector<std::string> values;
+        for (size_t cell_pos = 0;;) {
+            const size_t cell_open = lower_row.find("<c", cell_pos);
+            if (cell_open == std::string::npos) {
+                break;
+            }
+            const size_t cell_tag_end = lower_row.find('>', cell_open + 1);
+            if (cell_tag_end == std::string::npos) {
+                break;
+            }
+            const std::string cell_tag = row_body.substr(cell_open + 1, cell_tag_end - cell_open - 1);
+            size_t cell_close = lower_row.find("</c>", cell_tag_end + 1);
+            std::string cell_body;
+            if (cell_close == std::string::npos) {
+                cell_body.clear();
+                cell_pos = cell_tag_end + 1;
+            } else {
+                cell_body = row_body.substr(cell_tag_end + 1, cell_close - cell_tag_end - 1);
+                cell_pos = cell_close + 4;
+            }
+            values.push_back(ExtractXlsxCellValue(cell_tag, cell_body, shared_strings));
+        }
+
+        bool any_value = false;
+        for (const auto& value : values) {
+            if (!Trim(value).empty()) {
+                any_value = true;
+                break;
+            }
+        }
+        if (any_value) {
+            markdown << "|";
+            for (const auto& value : values) {
+                std::string clean = NormalizeMarkdownWhitespace(value);
+                std::replace(clean.begin(), clean.end(), '|', '/');
+                markdown << " " << clean << " |";
+            }
+            markdown << "\n";
+        }
+        row_pos = row_close + 6;
+    }
+    return markdown.str();
+}
+
+std::string ExtractXlsxToMarkdown(const std::filesystem::path& path) {
+    const std::filesystem::path temp = CreateTempDirectory("rag_xlsx");
+    try {
+        std::string error;
+        if (!ExtractZipWithTar(path, temp, &error)) {
+            throw std::runtime_error(error);
+        }
+
+        const auto shared_strings = ExtractXlsxSharedStrings(temp / "xl" / "sharedStrings.xml");
+        const auto relationships = ExtractWorkbookRelationships(temp / "xl" / "_rels" / "workbook.xml.rels");
+        auto sheets = ExtractWorkbookSheets(temp / "xl" / "workbook.xml");
+
+        std::ostringstream markdown;
+        markdown << "# " << WideToUtf8(path.filename().wstring()) << "\n\n";
+        int fallback_index = 1;
+        if (sheets.empty()) {
+            const std::filesystem::path worksheets_dir = temp / "xl" / "worksheets";
+            if (std::filesystem::exists(worksheets_dir)) {
+                for (const auto& entry : std::filesystem::directory_iterator(worksheets_dir)) {
+                    if (entry.is_regular_file() && LowerExtension(entry.path()) == L".xml") {
+                        XlsxSheetInfo info;
+                        info.name = WideToUtf8(entry.path().stem().wstring());
+                        info.rel_id = WideToUtf8(entry.path().filename().wstring());
+                        sheets.push_back(std::move(info));
+                    }
+                }
+            }
+        }
+
+        for (const auto& sheet : sheets) {
+            std::filesystem::path sheet_path;
+            const auto rel = relationships.find(sheet.rel_id);
+            if (rel != relationships.end()) {
+                sheet_path = temp / std::filesystem::path(Utf8ToWide(rel->second));
+            } else if (sheet.rel_id.rfind("sheet", 0) == 0) {
+                sheet_path = temp / "xl" / "worksheets" / Utf8ToWide(sheet.rel_id);
+            } else {
+                sheet_path = temp / "xl" / "worksheets" / (L"sheet" + std::to_wstring(fallback_index++) + L".xml");
+            }
+            if (!std::filesystem::exists(sheet_path)) {
+                continue;
+            }
+            const std::string sheet_text = ExtractWorksheetMarkdown(sheet_path, shared_strings);
+            if (!Trim(sheet_text).empty()) {
+                markdown << "## Sheet: " << (sheet.name.empty() ? WideToUtf8(sheet_path.stem().wstring()) : sheet.name) << "\n\n";
+                markdown << sheet_text << "\n\n";
+            }
+        }
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        const std::string result = NormalizeMarkdownWhitespace(markdown.str());
+        if (result.size() < 8) {
+            throw std::runtime_error("XLSX extraction produced no text.");
+        }
+        return result;
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        throw;
+    }
+}
+
+std::string DecodePdfLiteralString(const std::string& raw) {
+    std::string output;
+    for (size_t i = 0; i < raw.size(); ++i) {
+        char ch = raw[i];
+        if (ch != '\\') {
+            output.push_back(ch);
+            continue;
+        }
+        if (i + 1 >= raw.size()) {
+            break;
+        }
+        char next = raw[++i];
+        switch (next) {
+        case 'n':
+            output.push_back('\n');
+            break;
+        case 'r':
+            output.push_back('\n');
+            break;
+        case 't':
+            output.push_back('\t');
+            break;
+        case 'b':
+        case 'f':
+            output.push_back(' ');
+            break;
+        case '(':
+        case ')':
+        case '\\':
+            output.push_back(next);
+            break;
+        default:
+            if (next >= '0' && next <= '7') {
+                int value = next - '0';
+                int count = 1;
+                while (count < 3 && i + 1 < raw.size() && raw[i + 1] >= '0' && raw[i + 1] <= '7') {
+                    value = value * 8 + (raw[++i] - '0');
+                    ++count;
+                }
+                output.push_back(static_cast<char>(value));
+            } else {
+                output.push_back(next);
+            }
+            break;
+        }
+    }
+    return output;
+}
+
+bool LooksLikeUsefulPdfText(const std::string& text) {
+    const std::string trimmed = Trim(text);
+    if (trimmed.size() < 3) {
+        return false;
+    }
+    size_t useful = 0;
+    size_t controls = 0;
+    for (unsigned char ch : trimmed) {
+        if (std::isalnum(ch) || std::isspace(ch) || std::ispunct(ch)) {
+            ++useful;
+        }
+        if (ch < 9 || (ch > 13 && ch < 32)) {
+            ++controls;
+        }
+    }
+    return controls < trimmed.size() / 20 && useful > trimmed.size() * 3 / 4;
+}
+
+std::string ExtractPdfTextNaive(const std::filesystem::path& path) {
+    const std::string data = ReadWholeFile(path);
+    std::ostringstream output;
+    output << "# " << WideToUtf8(path.filename().wstring()) << "\n\n";
+    size_t extracted = 0;
+    for (size_t i = 0; i < data.size(); ++i) {
+        if (data[i] != '(') {
+            continue;
+        }
+        std::string literal;
+        int depth = 1;
+        for (++i; i < data.size() && depth > 0; ++i) {
+            const char ch = data[i];
+            if (ch == '\\') {
+                literal.push_back(ch);
+                if (i + 1 < data.size()) {
+                    literal.push_back(data[++i]);
+                }
+                continue;
+            }
+            if (ch == '(') {
+                ++depth;
+                literal.push_back(ch);
+            } else if (ch == ')') {
+                --depth;
+                if (depth > 0) {
+                    literal.push_back(ch);
+                }
+            } else {
+                literal.push_back(ch);
+            }
+        }
+        const std::string decoded = NormalizeMarkdownWhitespace(DecodePdfLiteralString(literal));
+        if (LooksLikeUsefulPdfText(decoded)) {
+            output << decoded << "\n";
+            ++extracted;
+        }
+    }
+    if (extracted == 0) {
+        throw std::runtime_error("No PDF text extractor was found and the built-in fallback could not find readable text. Install Poppler pdftotext or MuPDF mutool for reliable PDF extraction.");
+    }
+    return NormalizeMarkdownWhitespace(output.str());
+}
+
+std::optional<std::string> ExtractPdfWithExternalTool(const std::filesystem::path& path, std::string* extractor_id) {
+    const std::filesystem::path temp = CreateTempDirectory("rag_pdf");
+    const std::filesystem::path output = temp / "pdf.txt";
+    try {
+        std::string error;
+        if (const auto pdftotext = FindExecutableOnPath(L"pdftotext.exe")) {
+            const std::wstring command = QuoteCommandArgument(*pdftotext) + L" -layout -enc UTF-8 " + QuoteCommandArgument(path.wstring()) + L" " + QuoteCommandArgument(output.wstring());
+            if (RunProcessAndWait(command, 180000, &error) && std::filesystem::exists(output)) {
+                const std::string text = NormalizeMarkdownWhitespace(ReadWholeFile(output));
+                if (!text.empty()) {
+                    if (extractor_id) {
+                        *extractor_id = "pdftotext";
+                    }
+                    std::error_code ec;
+                    std::filesystem::remove_all(temp, ec);
+                    return "# " + WideToUtf8(path.filename().wstring()) + "\n\n" + text;
+                }
+            }
+        }
+        if (const auto mutool = FindExecutableOnPath(L"mutool.exe")) {
+            const std::wstring command = QuoteCommandArgument(*mutool) + L" draw -F text -o " + QuoteCommandArgument(output.wstring()) + L" " + QuoteCommandArgument(path.wstring());
+            if (RunProcessAndWait(command, 180000, &error) && std::filesystem::exists(output)) {
+                const std::string text = NormalizeMarkdownWhitespace(ReadWholeFile(output));
+                if (!text.empty()) {
+                    if (extractor_id) {
+                        *extractor_id = "mutool_text";
+                    }
+                    std::error_code ec;
+                    std::filesystem::remove_all(temp, ec);
+                    return "# " + WideToUtf8(path.filename().wstring()) + "\n\n" + text;
+                }
+            }
+        }
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        return std::nullopt;
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        throw;
+    }
+}
+
+std::optional<std::string> ExtractPdfWithPythonPypdf(const std::filesystem::path& path, std::string* extractor_id) {
+    const auto python = FindExecutableOnPath(L"python.exe");
+    if (!python) {
+        return std::nullopt;
+    }
+
+    const std::filesystem::path temp = CreateTempDirectory("rag_pdf_pypdf");
+    const std::filesystem::path script = temp / "extract_pdf.py";
+    const std::filesystem::path output = temp / "pdf.txt";
+    const std::filesystem::path error_output = temp / "pdf.err";
+    try {
+        {
+            std::ofstream script_file(script, std::ios::binary | std::ios::trunc);
+            if (!script_file.is_open()) {
+                throw std::runtime_error("Could not write temporary Python PDF extractor.");
+            }
+            script_file <<
+                "import sys\n"
+                "from pathlib import Path\n"
+                "try:\n"
+                "    from pypdf import PdfReader\n"
+                "except Exception as exc:\n"
+                "    Path(sys.argv[3]).write_text('pypdf import failed: ' + str(exc), encoding='utf-8', errors='replace')\n"
+                "    sys.exit(3)\n"
+                "pdf_path = Path(sys.argv[1])\n"
+                "out_path = Path(sys.argv[2])\n"
+                "err_path = Path(sys.argv[3])\n"
+                "try:\n"
+                "    reader = PdfReader(str(pdf_path))\n"
+                "    if getattr(reader, 'is_encrypted', False):\n"
+                "        try:\n"
+                "            reader.decrypt('')\n"
+                "        except Exception:\n"
+                "            pass\n"
+                "    parts = []\n"
+                "    for index, page in enumerate(reader.pages):\n"
+                "        try:\n"
+                "            text = page.extract_text() or ''\n"
+                "        except Exception as exc:\n"
+                "            text = ''\n"
+                "            parts.append('\\n\\n[Page %d extraction warning: %s]\\n' % (index + 1, exc))\n"
+                "        if text.strip():\n"
+                "            parts.append('\\n\\n## Page %d\\n\\n%s\\n' % (index + 1, text))\n"
+                "    out_path.write_text(''.join(parts), encoding='utf-8', errors='replace')\n"
+                "    sys.exit(0 if ''.join(parts).strip() else 4)\n"
+                "except Exception as exc:\n"
+                "    err_path.write_text('pypdf extraction failed: ' + str(exc), encoding='utf-8', errors='replace')\n"
+                "    sys.exit(2)\n";
+        }
+
+        std::string error;
+        const std::wstring command = QuoteCommandArgument(*python) + L" " +
+            QuoteCommandArgument(script.wstring()) + L" " +
+            QuoteCommandArgument(path.wstring()) + L" " +
+            QuoteCommandArgument(output.wstring()) + L" " +
+            QuoteCommandArgument(error_output.wstring());
+        if (RunProcessAndWait(command, 180000, &error) && std::filesystem::exists(output)) {
+            const std::string text = NormalizeMarkdownWhitespace(ReadWholeFile(output));
+            if (!text.empty()) {
+                if (extractor_id) {
+                    *extractor_id = "python_pypdf";
+                }
+                std::error_code ec;
+                std::filesystem::remove_all(temp, ec);
+                return "# " + WideToUtf8(path.filename().wstring()) + "\n\n" + text;
+            }
+        }
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        return std::nullopt;
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove_all(temp, ec);
+        throw;
+    }
+}
+
+std::string ExtractPdfToMarkdown(const std::filesystem::path& path, std::string* extractor_id) {
+    if (const auto external = ExtractPdfWithExternalTool(path, extractor_id)) {
+        return *external;
+    }
+    if (const auto pypdf = ExtractPdfWithPythonPypdf(path, extractor_id)) {
+        return *pypdf;
+    }
+    if (extractor_id) {
+        *extractor_id = "builtin_pdf_literal_fallback";
+    }
+    return ExtractPdfTextNaive(path);
+}
+
+std::string ExtractRichDocumentToMarkdown(const std::filesystem::path& path, std::string* extractor_id) {
+    if (IsHtmlExtension(path)) {
+        if (extractor_id) {
+            *extractor_id = "native_html_to_markdown";
+        }
+        return HtmlToMarkdownText(ReadWholeFile(path));
+    }
+    if (IsDocxExtension(path)) {
+        if (extractor_id) {
+            *extractor_id = "native_docx_ooxml";
+        }
+        return ExtractDocxToMarkdown(path);
+    }
+    if (IsXlsxExtension(path)) {
+        if (extractor_id) {
+            *extractor_id = "native_xlsx_ooxml";
+        }
+        return ExtractXlsxToMarkdown(path);
+    }
+    if (IsPdfExtension(path)) {
+        return ExtractPdfToMarkdown(path, extractor_id);
+    }
+    throw std::runtime_error("No rich document extractor is available for this file type.");
+}
+
+bool PythonModuleAvailable(const std::wstring& python_executable, const std::string& module_name) {
+    const std::wstring command = QuoteCommandArgument(python_executable) + L" -c " +
+        QuoteCommandArgument(L"import " + Utf8ToWide(module_name));
+    std::string error;
+    return RunProcessAndWait(command, 10000, &error);
+}
+
+std::vector<std::string> TokenizeForSearch(const std::string& text) {
+    std::vector<std::string> terms;
+    std::string current;
+    for (unsigned char ch : text) {
+        if (std::isalnum(ch) != 0 || ch == '_' || ch == '-' || ch == '\\' || ch == '/' || ch == '.') {
+            current.push_back(static_cast<char>(std::tolower(ch)));
+        } else if (!current.empty()) {
+            if (current.size() > 1) {
+                terms.push_back(current);
+            }
+            current.clear();
+        }
+    }
+    if (current.size() > 1) {
+        terms.push_back(current);
+    }
+    return terms;
+}
+
+double ScoreChunk(const std::vector<std::string>& query_terms, const RagChunkRecord& chunk, const RagDocumentRecord* document) {
+    if (query_terms.empty()) {
+        return 0.0;
+    }
+    std::string haystack = chunk.text;
+    if (document) {
+        haystack += "\n";
+        haystack += document->display_name;
+        haystack += "\n";
+        haystack += document->original_source_uri;
+    }
+    std::transform(haystack.begin(), haystack.end(), haystack.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    double score = 0.0;
+    std::set<std::string> unique_terms(query_terms.begin(), query_terms.end());
+    for (const auto& term : unique_terms) {
+        size_t pos = haystack.find(term);
+        if (pos == std::string::npos) {
+            continue;
+        }
+        score += 1.0;
+        while ((pos = haystack.find(term, pos + term.size())) != std::string::npos) {
+            score += 0.25;
+        }
+    }
+    return score / std::sqrt(static_cast<double>(std::max<size_t>(1, chunk.text.size() / 500)));
+}
+
+std::string ToGenericUtf8(const std::filesystem::path& path) {
+    return WideToUtf8(path.generic_wstring());
+}
+
+std::wstring SafeFolderName(const std::string& name) {
+    std::wstring value = Utf8ToWide(name);
+    for (wchar_t& ch : value) {
+        if (std::iswalnum(ch) == 0 && ch != L'-' && ch != L'_') {
+            ch = L'_';
+        }
+    }
+    value = TrimWide(value);
+    while (!value.empty() && value.back() == L'_') {
+        value.pop_back();
+    }
+    if (value.empty()) {
+        return L"rag_library";
+    }
+    if (value.size() > 48) {
+        value.resize(48);
+    }
+    return value;
+}
+
+struct RagFileIngestionSource {
+    std::filesystem::path source_path;
+    std::string original_source_uri;
+    std::string display_name;
+    std::string metadata_json;
+};
+
+std::string SourcePathForError(const RagFileIngestionSource& source) {
+    if (!source.display_name.empty()) {
+        return source.display_name;
+    }
+    if (!source.source_path.empty()) {
+        return source.source_path.string();
+    }
+    return "document";
+}
+
+std::string DirectFileMetadata(const std::filesystem::path& file) {
+    const std::filesystem::path absolute = std::filesystem::absolute(file);
+    return json{
+        {"ingest_source", "files"},
+        {"source_absolute_path", WideToUtf8(absolute.wstring())},
+    }.dump();
+}
+
+std::string FolderFileMetadata(const std::filesystem::path& root, const std::filesystem::path& file, bool recursive) {
+    const std::filesystem::path absolute_root = std::filesystem::absolute(root);
+    const std::filesystem::path absolute_file = std::filesystem::absolute(file);
+    std::error_code ec;
+    std::filesystem::path relative = std::filesystem::relative(absolute_file, absolute_root, ec);
+    if (ec || relative.empty()) {
+        relative = absolute_file.filename();
+    }
+    return json{
+        {"ingest_source", "folder"},
+        {"ingest_root", WideToUtf8(absolute_root.wstring())},
+        {"relative_path", ToGenericUtf8(relative)},
+        {"source_absolute_path", WideToUtf8(absolute_file.wstring())},
+        {"recursive", recursive},
+    }.dump();
+}
+
+std::string AddExtractionMetadata(const std::string& metadata_json, const std::string& extractor, const std::string& extracted_content_type) {
+    json metadata = json::object();
+    try {
+        metadata = json::parse(metadata_json);
+        if (!metadata.is_object()) {
+            metadata = json::object();
+        }
+    } catch (...) {
+        metadata = json::object();
+    }
+    metadata["extractor"] = extractor;
+    metadata["extracted_content_type"] = extracted_content_type;
+    return metadata.dump();
+}
+
+void RemoveManagedExtractedArtifact(const std::filesystem::path& library_path, const std::string& relative_path) {
+    if (relative_path.empty()) {
+        return;
+    }
+    const std::filesystem::path target = library_path / std::filesystem::path(Utf8ToWide(relative_path));
+    std::error_code ec;
+    if (target.filename() == L"manifest.json" && std::filesystem::exists(target.parent_path(), ec)) {
+        std::filesystem::remove_all(target.parent_path(), ec);
+    } else if (std::filesystem::is_directory(target, ec)) {
+        std::filesystem::remove_all(target, ec);
+    } else {
+        std::filesystem::remove(target, ec);
+    }
+}
+
+RagImportPreviewItem BuildImportPreviewItem(const RagLibraryConfig& library, const RagImageIngestSettings& image_settings, const std::filesystem::path& file, std::string metadata_json) {
+    RagImportPreviewItem item;
+    item.source_path = WideToUtf8(std::filesystem::absolute(file).wstring());
+    item.display_name = WideToUtf8(file.filename().wstring());
+    item.metadata_json = std::move(metadata_json);
+
+    try {
+        if (!std::filesystem::exists(file) || !std::filesystem::is_regular_file(file)) {
+            item.reason = "Not a regular file.";
+            return item;
+        }
+
+        item.file_size = std::filesystem::file_size(file);
+        if (!IsSupportedTextExtension(file)) {
+            item.reason = "Unsupported file type in this RAG build.";
+            return item;
+        }
+
+        const uintmax_t max_file_size = static_cast<uintmax_t>(std::max(1, library.max_file_size_mb)) * 1024ull * 1024ull;
+        if (item.file_size > max_file_size) {
+            item.reason = "File is larger than this RAG library's configured max file size.";
+            return item;
+        }
+
+        const bool image_document = IsImageExtension(file);
+        const bool rich_document = IsRichExtractionExtension(file);
+        if (image_document) {
+            if (!image_settings.enabled) {
+                item.reason = "Image file detected, but system-wide image ingestion is disabled.";
+                return item;
+            }
+            const std::string mode = NormalizeImageIngestMode(image_settings.mode);
+            const bool tesseract_available = FindExecutableOnPath(L"tesseract.exe").has_value();
+            const bool python_available = FindExecutableOnPath(L"python.exe").has_value();
+            const bool vision_endpoint_available =
+                NormalizeImageVisionProvider(image_settings.vision_provider) == "ollama" &&
+                AnyOllamaVisionEndpointAvailable(image_settings);
+            const bool remote_agent_configured =
+                mode == "remote_agent" &&
+                !Trim(image_settings.remote_agent_base_url).empty() &&
+                !Trim(image_settings.remote_agent_shared_secret).empty();
+            const bool local_vision_start_available =
+                ImageSettingsNeedOllamaVisionRuntime(image_settings) &&
+                image_settings.ollama_start_locally &&
+                FindExecutableOnPath(L"ollama.exe").has_value();
+            if (mode == "tesseract_cpu") {
+                if (!tesseract_available) {
+                    item.reason = "Image ingestion is enabled, but tesseract.exe is missing.";
+                    return item;
+                }
+                item.supported = true;
+                item.reason = "Ready to ingest as image Markdown with CPU Tesseract OCR.";
+            } else if (mode == "paddle_ocr_gpu") {
+                if (!python_available && !tesseract_available) {
+                    item.reason = "PaddleOCR mode needs python.exe for PaddleOCR or tesseract.exe for fallback.";
+                    return item;
+                }
+                item.supported = true;
+                item.reason = "Ready to ingest as image Markdown with PaddleOCR when available, falling back to Tesseract OCR.";
+            } else if (mode == "remote_agent") {
+                if (!remote_agent_configured && !tesseract_available) {
+                    item.reason = "Remote Agent mode needs a loaded remote worker JSON file or Tesseract OCR fallback.";
+                    return item;
+                }
+                item.supported = true;
+                item.reason = remote_agent_configured
+                    ? "Ready to ingest as image Markdown with the configured Remote Agent vision worker."
+                    : "Ready to ingest as image Markdown with Tesseract OCR fallback; Remote Agent JSON is not loaded.";
+            } else {
+                if (!vision_endpoint_available && !local_vision_start_available && !python_available && !tesseract_available) {
+                    item.reason = "Full vision mode needs a running Ollama vision endpoint, python.exe for PaddleOCR, or tesseract.exe fallback.";
+                    return item;
+                }
+                item.supported = true;
+                item.reason = local_vision_start_available && !vision_endpoint_available
+                    ? "Ready to ingest as image Markdown; the app can start the configured local Ollama vision endpoint when needed."
+                    : "Ready to ingest as image Markdown with OCR plus configured vision-language description when available.";
+            }
+            return item;
+        }
+
+        if (!rich_document && !FileLooksLikeText(file)) {
+            item.reason = "File appears to be binary.";
+            return item;
+        }
+
+        item.supported = true;
+        if (rich_document) {
+            if (IsPdfExtension(file) && !FindExecutableOnPath(L"pdftotext.exe") && !FindExecutableOnPath(L"mutool.exe")) {
+                item.reason = FindExecutableOnPath(L"python.exe")
+                    ? "Ready to ingest with Python pypdf or built-in PDF fallback. Install pdftotext or mutool for best PDF extraction."
+                    : "Ready to ingest with built-in PDF fallback. Install pdftotext, mutool, or Python+pypdf for reliable PDF extraction.";
+            } else {
+                item.reason = "Ready to ingest with rich document to Markdown extraction.";
+            }
+        } else {
+            item.reason = "Ready to ingest.";
+        }
+    } catch (const std::exception& ex) {
+        item.reason = ex.what();
+    } catch (...) {
+        item.reason = "Unexpected preview error.";
+    }
+    return item;
+}
+
+void AddPreviewItem(RagImportPreview& preview, RagImportPreviewItem item) {
+    ++preview.total_files;
+    if (item.supported) {
+        ++preview.supported_files;
+        preview.supported_bytes += item.file_size;
+    } else {
+        ++preview.skipped_files;
+    }
+    preview.items.push_back(std::move(item));
+}
+
+bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const std::filesystem::path& library_path, const RagFileIngestionSource& source, bool skip_unchanged, const RagImageIngestSettings& image_settings, IRagEmbeddingProvider* embedding_provider, RagIngestionResult& result) {
+    const std::filesystem::path file = source.source_path;
+    const std::string error_prefix = SourcePathForError(source);
+    try {
+        if (file.empty() || !std::filesystem::exists(file) || !std::filesystem::is_regular_file(file)) {
+            ++result.files_skipped;
+            result.errors.push_back(error_prefix + ": not a regular file.");
+            return false;
+        }
+        if (!IsSupportedTextExtension(file)) {
+            ++result.files_skipped;
+            result.errors.push_back(error_prefix + ": unsupported file type in this RAG build.");
+            return false;
+        }
+        const uintmax_t max_file_size = static_cast<uintmax_t>(std::max(1, library.max_file_size_mb)) * 1024ull * 1024ull;
+        const uintmax_t file_size = std::filesystem::file_size(file);
+        if (file_size > max_file_size) {
+            ++result.files_skipped;
+            result.errors.push_back(error_prefix + ": file is larger than this RAG library's configured max file size.");
+            return false;
+        }
+        const bool image_document = IsImageExtension(file);
+        const bool rich_document = IsRichExtractionExtension(file);
+        if (image_document && !image_settings.enabled) {
+            ++result.files_skipped;
+            result.errors.push_back(error_prefix + ": image ingestion is disabled.");
+            return false;
+        }
+        if (!image_document && !rich_document && !FileLooksLikeText(file)) {
+            ++result.files_skipped;
+            result.errors.push_back(error_prefix + ": file appears to be binary.");
+            return false;
+        }
+
+        const std::string original_source_uri = source.original_source_uri.empty()
+            ? WideToUtf8(std::filesystem::absolute(file).wstring())
+            : source.original_source_uri;
+        const std::string content_hash = HashFile(file);
+        std::optional<RagDocumentRecord> existing = FindDocumentBySource(db, original_source_uri);
+        if (skip_unchanged && existing && existing->content_hash == content_hash) {
+            ++result.files_skipped;
+            return false;
+        }
+
+        RagDocumentRecord document;
+        if (existing) {
+            document = *existing;
+        } else {
+            document.id = MakeId("doc");
+            document.rag_id = library.id;
+            document.imported_at = CurrentTimestampUtc();
+        }
+
+        document.display_name = source.display_name.empty() ? WideToUtf8(file.filename().wstring()) : source.display_name;
+        document.original_source_uri = original_source_uri;
+        document.original_source_type = "file";
+        document.content_hash = content_hash;
+        document.file_size = file_size;
+        document.mime_type = MimeTypeForPath(file);
+        std::string extractor_id;
+        std::string extracted_text;
+        if (image_document || rich_document) {
+            const MarkdownExtractionQueueResult extraction =
+                ExtractProcessedFileToMarkdownQueued(file, image_settings);
+            if (!extraction.success) {
+                throw std::runtime_error(extraction.error.empty()
+                    ? "Processed-document extraction failed."
+                    : extraction.error);
+            }
+            extractor_id = extraction.extractor_id;
+            extracted_text = extraction.markdown;
+        }
+        const bool extracted_markdown_document = rich_document || image_document;
+        const bool segmented_extraction = extracted_markdown_document && ShouldSegmentExtractedText(library, extracted_text);
+        document.metadata_json = extracted_markdown_document
+            ? AddExtractionMetadata(source.metadata_json, extractor_id, "text/markdown")
+            : AddExtractionMetadata(source.metadata_json, "plain_text_stream", "text/plain");
+        document.last_indexed_at = CurrentTimestampUtc();
+        const std::string previous_extracted_relative_path = document.extracted_relative_path;
+
+        ExecSql(db, "BEGIN IMMEDIATE;");
+        try {
+            if (library.storage_mode == RagDocumentStorageMode::ReferenceInPlace) {
+                document.stored_relative_path.clear();
+            } else {
+                const std::filesystem::path original_relative = std::filesystem::path("documents") / "original" / Utf8ToWide(document.id + "_" + WideToUtf8(file.filename().wstring()));
+                const std::filesystem::path original_target = library_path / original_relative;
+                std::filesystem::create_directories(original_target.parent_path());
+                std::error_code equivalent_error;
+                const bool same_file = std::filesystem::exists(original_target) && std::filesystem::equivalent(file, original_target, equivalent_error);
+                if (!same_file) {
+                    std::filesystem::copy_file(file, original_target, std::filesystem::copy_options::overwrite_existing);
+                }
+                document.stored_relative_path = ToGenericUtf8(original_relative);
+            }
+
+            const std::filesystem::path extracted_relative = segmented_extraction
+                ? std::filesystem::path("documents") / "extracted" / Utf8ToWide(document.id) / "manifest.json"
+                : std::filesystem::path("documents") / "extracted" / Utf8ToWide(document.id + (extracted_markdown_document ? ".md" : ".txt"));
+            const std::filesystem::path extracted_target = library_path / extracted_relative;
+            document.extracted_relative_path = ToGenericUtf8(extracted_relative);
+            if (!previous_extracted_relative_path.empty() && previous_extracted_relative_path != document.extracted_relative_path) {
+                RemoveManagedExtractedArtifact(library_path, previous_extracted_relative_path);
+            }
+
+            SaveDocument(db, document);
+            DeleteChunksForDocument(db, document.id);
+            const int chunks_added = extracted_markdown_document
+                ? InsertChunksFromExtractedText(db, library, document, extracted_text, library_path, extracted_relative, embedding_provider, result)
+                : InsertChunksFromTextStream(db, library, document, file, extracted_target, embedding_provider, result);
+            ExecSql(db, "COMMIT;");
+
+            ++result.files_ingested;
+            result.chunks_added += chunks_added;
+            return true;
+        } catch (...) {
+            try {
+                ExecSql(db, "ROLLBACK;");
+            } catch (...) {
+            }
+            throw;
+        }
+    } catch (const std::exception& ex) {
+        ++result.files_skipped;
+        result.errors.push_back(error_prefix + ": " + ex.what());
+        return false;
+    } catch (...) {
+        ++result.files_skipped;
+        result.errors.push_back(error_prefix + ": unexpected ingestion error.");
+        return false;
+    }
+}
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// HNSW handle — one per RAG library, cached in hnsw_cache_.
+// ---------------------------------------------------------------------------
+struct HnswHandle {
+    std::unique_ptr<hnswlib::InnerProductSpace>      space;
+    std::unique_ptr<hnswlib::HierarchicalNSW<float>> index;
+    // label (hnswlib integer) <-> chunk_id (string) maps.
+    std::unordered_map<hnswlib::labeltype, std::string> label_to_chunk;
+    std::unordered_map<std::string, hnswlib::labeltype> chunk_to_label;
+    hnswlib::labeltype next_label = 0;
+    size_t             dims       = 0;
+};
+
+// ---------------------------------------------------------------------------
+
+RagService::RagService(AppStorage* storage) : storage_(storage) {}
+
+RagService::~RagService() {
+    ShutdownManagedEmbeddingRuntimes();
+    ShutdownManagedImageIngestRuntimes();
+}
+
+void RagService::ShutdownManagedEmbeddingRuntimes() const {
+    if (started_ollama_process_) {
+        HANDLE process = static_cast<HANDLE>(started_ollama_process_);
+        DWORD exit_code = 0;
+        if (GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
+            AppendEmbeddingRuntimeLogNoLock("Stopping app-managed Ollama process.");
+            TerminateProcess(process, 0);
+            WaitForSingleObject(process, 3000);
+        }
+        CloseHandle(process);
+        started_ollama_process_ = nullptr;
+        started_ollama_process_id_ = 0;
+    }
+}
+
+void RagService::ShutdownManagedImageIngestRuntimes() const {
+    for (auto& [endpoint, process_handle] : started_image_ollama_processes_) {
+        if (!process_handle) {
+            continue;
+        }
+        HANDLE process = static_cast<HANDLE>(process_handle);
+        DWORD exit_code = 0;
+        if (GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
+            AppendImageIngestLogNoLock("Stopping app-managed image Ollama process for " + endpoint + ".");
+            TerminateProcess(process, 0);
+            WaitForSingleObject(process, 3000);
+        }
+        CloseHandle(process);
+    }
+    started_image_ollama_processes_.clear();
+    started_image_ollama_process_ids_.clear();
+}
+
+int RagService::ManagedImageOllamaProcessCountNoLock() const {
+    int count = 0;
+    for (auto it = started_image_ollama_processes_.begin(); it != started_image_ollama_processes_.end();) {
+        HANDLE process = static_cast<HANDLE>(it->second);
+        DWORD exit_code = 0;
+        if (process && GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
+            ++count;
+            ++it;
+            continue;
+        }
+        if (process) {
+            CloseHandle(process);
+        }
+        started_image_ollama_process_ids_.erase(it->first);
+        it = started_image_ollama_processes_.erase(it);
+    }
+    return count;
+}
+
+void RagService::EnsureImageVisionRuntimesNoLock(const RagImageIngestSettings& settings) const {
+    if (!ImageSettingsNeedOllamaVisionRuntime(settings) || !settings.ollama_start_locally) {
+        return;
+    }
+
+    const auto executable = FindExecutableOnPath(L"ollama.exe");
+    if (!executable) {
+        AppendImageIngestLogNoLock("Local Ollama start requested, but ollama.exe was not found on PATH.");
+        return;
+    }
+
+    std::filesystem::create_directories(ImageIngestLogPath().parent_path());
+    for (const auto& endpoint : BuildOllamaVisionBaseUrls(settings)) {
+        if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+            continue;
+        }
+
+        auto managed = started_image_ollama_processes_.find(endpoint);
+        if (managed != started_image_ollama_processes_.end()) {
+            HANDLE existing = static_cast<HANDLE>(managed->second);
+            DWORD exit_code = 0;
+            if (existing && GetExitCodeProcess(existing, &exit_code) && exit_code == STILL_ACTIVE) {
+                for (int attempt = 0; attempt < 5; ++attempt) {
+                    Sleep(400);
+                    if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+                        break;
+                    }
+                }
+                if (!IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+                    AppendImageIngestLogNoLock("App-managed Ollama process is running but not responding at " + endpoint + ".");
+                }
+                continue;
+            }
+            if (existing) {
+                CloseHandle(existing);
+            }
+            started_image_ollama_process_ids_.erase(endpoint);
+            started_image_ollama_processes_.erase(managed);
+        }
+
+        ParsedUrl parsed;
+        try {
+            parsed = CrackUrl(endpoint);
+        } catch (const std::exception& ex) {
+            AppendImageIngestLogNoLock("Could not start local Ollama for invalid endpoint " + endpoint + ": " + ex.what());
+            continue;
+        } catch (...) {
+            AppendImageIngestLogNoLock("Could not start local Ollama for invalid endpoint " + endpoint + ".");
+            continue;
+        }
+
+        const std::wstring ollama_host = parsed.host + L":" + std::to_wstring(parsed.port);
+        const std::vector<wchar_t> environment_block = BuildEnvironmentBlockWithOverride(L"OLLAMA_HOST", ollama_host);
+
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        SECURITY_ATTRIBUTES security{};
+        security.nLength = sizeof(security);
+        security.bInheritHandle = TRUE;
+        HANDLE log_handle = CreateFileW(
+            ImageIngestLogPath().wstring().c_str(),
+            FILE_APPEND_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &security,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        const BOOL inherit_handles = log_handle != INVALID_HANDLE_VALUE;
+        if (inherit_handles) {
+            startup.dwFlags |= STARTF_USESTDHANDLES;
+            startup.hStdOutput = log_handle;
+            startup.hStdError = log_handle;
+            startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        }
+
+        PROCESS_INFORMATION process_info{};
+        std::wstring command_line = QuoteCommandArgument(*executable) + L" serve";
+        std::vector<wchar_t> command_buffer(command_line.begin(), command_line.end());
+        command_buffer.push_back(L'\0');
+
+        AppendImageIngestLogNoLock("Starting local Ollama vision endpoint " + endpoint + " with OLLAMA_HOST=" + WideToUtf8(ollama_host) + ".");
+        const BOOL created = CreateProcessW(
+            nullptr,
+            command_buffer.data(),
+            nullptr,
+            nullptr,
+            inherit_handles,
+            CREATE_NO_WINDOW,
+            const_cast<wchar_t*>(environment_block.data()),
+            nullptr,
+            &startup,
+            &process_info);
+        if (log_handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(log_handle);
+        }
+        if (!created) {
+            AppendImageIngestLogNoLock("Failed to start local Ollama for " + endpoint + " (CreateProcess error " + std::to_string(GetLastError()) + ").");
+            continue;
+        }
+
+        CloseHandle(process_info.hThread);
+        started_image_ollama_processes_[endpoint] = process_info.hProcess;
+        started_image_ollama_process_ids_[endpoint] = process_info.dwProcessId;
+
+        bool ready = false;
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            Sleep(500);
+            if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+                ready = true;
+                break;
+            }
+        }
+        AppendImageIngestLogNoLock(ready
+            ? ("Local Ollama vision endpoint is responding at " + endpoint + ".")
+            : ("Local Ollama vision process started but did not become ready at " + endpoint + "."));
+    }
+}
+
+std::filesystem::path RagService::EmbeddingRuntimeLogPath() const {
+    return storage_->log_root() / "rag" / "rag_embedding_runtime.log";
+}
+
+std::filesystem::path RagService::ImageIngestSettingsPath() const {
+    return storage_->config_root() / "rag" / "rag_image_ingest_settings.json";
+}
+
+std::filesystem::path RagService::ImageIngestLogPath() const {
+    return storage_->log_root() / "rag" / "rag_image_ingest_runtime.log";
+}
+
+void RagService::AppendEmbeddingRuntimeLogNoLock(const std::string& message) const {
+    const std::filesystem::path path = EmbeddingRuntimeLogPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path, std::ios::binary | std::ios::app);
+    if (!output.is_open()) {
+        return;
+    }
+    output << "[" << CurrentTimestampUtc() << "] " << message << "\r\n";
+}
+
+std::string RagService::ReadEmbeddingRuntimeLogTailNoLock(size_t max_bytes) const {
+    const std::filesystem::path path = EmbeddingRuntimeLogPath();
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        return {};
+    }
+    input.seekg(0, std::ios::end);
+    const std::streamoff size = input.tellg();
+    const std::streamoff offset = size > static_cast<std::streamoff>(max_bytes) ? size - static_cast<std::streamoff>(max_bytes) : 0;
+    input.seekg(offset, std::ios::beg);
+    std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    if (offset > 0) {
+        text = "[log truncated]\r\n" + text;
+    }
+    return text;
+}
+
+void RagService::AppendImageIngestLogNoLock(const std::string& message) const {
+    const std::filesystem::path path = ImageIngestLogPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path, std::ios::binary | std::ios::app);
+    if (!output.is_open()) {
+        return;
+    }
+    output << "[" << CurrentTimestampUtc() << "] " << message << "\r\n";
+}
+
+std::string RagService::ReadImageIngestLogTailNoLock(size_t max_bytes) const {
+    const std::filesystem::path path = ImageIngestLogPath();
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        return {};
+    }
+    input.seekg(0, std::ios::end);
+    const std::streamoff size = input.tellg();
+    const std::streamoff offset = size > static_cast<std::streamoff>(max_bytes) ? size - static_cast<std::streamoff>(max_bytes) : 0;
+    input.seekg(offset, std::ios::beg);
+    std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    if (offset > 0) {
+        text = "[log truncated]\r\n" + text;
+    }
+    return text;
+}
+
+RagImageIngestSettings RagService::LoadImageIngestSettingsNoLock() const {
+    return RagImageIngestSettingsFromJson(LoadJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(RagImageIngestSettings{})));
+}
+
+RagImageIngestSettings RagService::LoadImageIngestSettings() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return LoadImageIngestSettingsNoLock();
+}
+
+void RagService::SaveImageIngestSettings(const RagImageIngestSettings& settings) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::filesystem::create_directories(ImageIngestSettingsPath().parent_path());
+    SaveJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(settings));
+    AppendImageIngestLogNoLock(
+        "Saved image ingest settings. Mode: " + NormalizeImageIngestMode(settings.mode) +
+        ". Ollama workers: " + std::to_string(ClampOllamaInstanceCount(settings.ollama_instance_count)) +
+        ", start port: " + std::to_string(ClampOllamaStartPort(settings.ollama_start_port)) +
+        ", start locally: " + std::string(settings.ollama_start_locally ? "yes" : "no") + ".");
+    EnsureImageVisionRuntimesNoLock(settings);
+}
+
+RagMarkdownExtractionResult RagService::ExtractFileToMarkdown(const std::filesystem::path& file) const {
+    RagMarkdownExtractionResult result;
+    result.mime_type = MimeTypeForPath(file);
+    try {
+        if (file.empty() || !std::filesystem::exists(file) ||
+            !std::filesystem::is_regular_file(file)) {
+            result.error = "File is not a regular file.";
+            return result;
+        }
+
+        const bool image_document = IsImageExtension(file);
+        const bool rich_document = IsRichExtractionExtension(file);
+        if (!image_document && !rich_document) {
+            if (!FileLooksLikeText(file)) {
+                result.error = "File appears to be binary and no Markdown extractor is available for this file type.";
+                return result;
+            }
+            result.markdown = ReadWholeFile(file);
+            result.extractor_id = "plain_text_stream";
+            result.success = true;
+            result.processed_document = false;
+            return result;
+        }
+
+        std::string extractor_id;
+        RagImageIngestSettings image_settings;
+        if (image_document || rich_document) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            image_settings = LoadImageIngestSettingsNoLock();
+            if (image_document) {
+                EnsureImageVisionRuntimesNoLock(image_settings);
+            }
+        }
+        const MarkdownExtractionQueueResult extraction =
+            ExtractProcessedFileToMarkdownQueued(file, image_settings);
+        if (!extraction.success) {
+            result.error = extraction.error.empty()
+                ? "Processed-document extraction failed."
+                : extraction.error;
+            return result;
+        }
+        result.markdown = extraction.markdown;
+        extractor_id = extraction.extractor_id;
+        result.extractor_id = extractor_id;
+        result.success = true;
+        result.processed_document = true;
+    } catch (const std::exception& ex) {
+        result.error = ex.what();
+    } catch (...) {
+        result.error = "Unexpected Markdown extraction error.";
+    }
+    return result;
+}
+
+RagImageIngestRuntimeStatus RagService::GetImageIngestRuntimeStatus(const RagImageIngestSettings& settings) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagImageIngestRuntimeStatus status;
+    status.enabled = settings.enabled;
+    status.mode = NormalizeImageIngestMode(settings.mode);
+    status.log_path = WideToUtf8(ImageIngestLogPath().wstring());
+    status.tesseract_installed = FindExecutableOnPath(L"tesseract.exe").has_value();
+    status.python_installed = FindExecutableOnPath(L"python.exe").has_value();
+    if (const auto python = FindExecutableOnPath(L"python.exe")) {
+    status.paddleocr_installed = PythonModuleAvailable(*python, "paddleocr");
+    }
+    status.ollama_installed = FindExecutableOnPath(L"ollama.exe").has_value();
+    const std::string provider = NormalizeImageVisionProvider(settings.vision_provider);
+    const bool remote_mode = status.mode == "remote_agent" || provider == "remote_agent";
+    const auto endpoints = BuildOllamaVisionBaseUrls(settings);
+    status.vision_ollama_instance_count = ClampOllamaInstanceCount(settings.ollama_instance_count);
+    status.vision_ollama_start_locally = settings.ollama_start_locally;
+    status.remote_agent_configured = !Trim(settings.remote_agent_config_json).empty() ||
+        !Trim(settings.remote_agent_shared_secret).empty();
+    status.remote_agent_worker_name = settings.remote_agent_worker_name;
+    status.remote_agent_model = EffectiveRemoteAgentModel(settings);
+    status.remote_agent_https_port = ClampRemoteAgentHttpsPort(settings.remote_agent_https_port);
+    if (!remote_mode && provider == "ollama" && settings.ollama_start_locally) {
+        EnsureImageVisionRuntimesNoLock(settings);
+    }
+    status.vision_ollama_managed_count = ManagedImageOllamaProcessCountNoLock();
+    status.vision_endpoint_summary = remote_mode ? BuildRemoteAgentBaseUrl(settings) : JoinStrings(endpoints, ", ");
+    if (!remote_mode && provider == "ollama") {
+        for (const auto& endpoint : endpoints) {
+            if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
+                ++status.vision_ollama_running_count;
+            }
+        }
+    } else if (remote_mode) {
+        std::string remote_error;
+        if (const auto health = FetchRemoteAgentHealth(settings, &remote_error)) {
+            status.vision_endpoint_running = true;
+            status.remote_agent_worker_name = health->value("worker_name", settings.remote_agent_worker_name);
+            status.remote_agent_model = health->value("model", EffectiveRemoteAgentModel(settings));
+            status.remote_agent_https_port = health->value("agent_https_port", status.remote_agent_https_port);
+            status.vision_ollama_instance_count = health->value("ollama_instance_count", status.vision_ollama_instance_count);
+            status.vision_ollama_running_count = status.vision_ollama_instance_count;
+            if (health->contains("queue") && (*health)["queue"].is_object()) {
+                const auto& queue = (*health)["queue"];
+                status.vision_queue_pending = queue.value("queued", 0);
+                status.vision_queue_active = queue.value("processing", 0);
+                status.vision_queue_workers = queue.value("workers", status.vision_ollama_instance_count);
+            }
+        } else {
+            status.message = remote_error.empty()
+                ? "Remote Agent is not responding."
+                : ("Remote Agent is not responding: " + remote_error);
+        }
+    }
+    if (!remote_mode) {
+        status.vision_endpoint_running = status.vision_ollama_running_count > 0;
+        const ImageVisionQueueStats queue_stats = GetImageVisionWorkerQueue().ConfigureAndSnapshot(settings);
+        status.vision_queue_pending = queue_stats.pending;
+        status.vision_queue_active = queue_stats.active;
+        status.vision_queue_workers = queue_stats.desired_workers;
+    }
+    const MarkdownExtractionQueueStats document_queue_stats =
+        GetMarkdownExtractionWorkerQueue().ConfigureAndSnapshot(settings);
+    status.document_queue_pending = document_queue_stats.pending;
+    status.document_queue_active = document_queue_stats.active;
+    status.document_queue_workers = document_queue_stats.desired_workers;
+
+    if (!settings.enabled) {
+        status.message = "Image ingestion is disabled.";
+    } else if (status.mode == "tesseract_cpu") {
+        status.message = status.tesseract_installed
+            ? "CPU image ingestion is ready with Tesseract OCR."
+            : "CPU image ingestion needs Tesseract OCR installed.";
+    } else if (status.mode == "paddle_ocr_gpu") {
+        if (status.paddleocr_installed) {
+            status.message = "GPU OCR mode is configured with PaddleOCR. Tesseract remains available as a fallback when installed.";
+        } else if (status.tesseract_installed) {
+            status.message = "PaddleOCR is missing, but Tesseract OCR fallback is available.";
+        } else {
+            status.message = "GPU OCR mode needs PaddleOCR or Tesseract fallback installed.";
+        }
+    } else if (status.mode == "remote_agent") {
+        if (status.vision_endpoint_running) {
+            status.message = "Remote Agent vision mode is connected to " +
+                (status.remote_agent_worker_name.empty() ? std::string("the configured worker") : status.remote_agent_worker_name) +
+                " with model " + (status.remote_agent_model.empty() ? std::string("(unknown)") : status.remote_agent_model) +
+                "; remote queue has " + std::to_string(status.vision_queue_active) + " active and " +
+                std::to_string(status.vision_queue_pending) + " queued.";
+        } else if (status.message.empty()) {
+            status.message = status.remote_agent_configured
+                ? "Remote Agent vision mode is configured, but the worker is not responding."
+                : "Remote Agent vision mode needs a loaded remote worker JSON file.";
+        }
+    } else {
+        if (status.vision_endpoint_running && !Trim(settings.vision_model).empty()) {
+            status.message = "Full vision mode can queue work across " +
+                std::to_string(status.vision_queue_workers) + " worker(s); " +
+                std::to_string(status.vision_ollama_running_count) + "/" +
+                std::to_string(status.vision_ollama_instance_count) +
+                " configured Ollama endpoint(s) are responding.";
+        } else if (settings.ollama_start_locally && status.ollama_installed) {
+            status.message = "Full vision mode is configured to start local Ollama endpoints, but no configured endpoint is responding yet.";
+        } else if (status.ollama_installed) {
+            status.message = "Full vision mode needs Ollama running and the configured vision model pulled.";
+        } else {
+            status.message = "Full vision mode needs Ollama and a vision-language model.";
+        }
+    }
+    status.recent_log = ReadImageIngestLogTailNoLock();
+    return status;
+}
+
+RagExtractionToolInstallResult RagService::LaunchImageIngestToolInstaller(const RagImageIngestSettings& settings, const std::string& tool_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagExtractionToolInstallResult result;
+    std::string command;
+    if (tool_id == "tesseract") {
+        command = "winget install --id tesseract-ocr.tesseract -e --accept-package-agreements --accept-source-agreements";
+    } else if (tool_id == "paddleocr") {
+        const std::string python = Trim(settings.paddle_python_command).empty() ? "python" : Trim(settings.paddle_python_command);
+        command = python + " -m pip install paddleocr paddlepaddle";
+    } else if (tool_id == "ollama") {
+        command = "winget install --id Ollama.Ollama -e --accept-package-agreements --accept-source-agreements";
+    }
+
+    if (command.empty()) {
+        result.message = "Unknown image ingest tool installer requested.";
+        return result;
+    }
+
+    result.command = command;
+    AppendImageIngestLogNoLock("Launching visible image ingest installer command: " + command);
+    const std::wstring shell_command = L"/k " + Utf8ToWide(command);
+    HINSTANCE launched = ShellExecuteW(nullptr, L"open", L"cmd.exe", shell_command.c_str(), nullptr, SW_SHOWNORMAL);
+    result.launched = reinterpret_cast<intptr_t>(launched) > 32;
+    result.message = result.launched ? "Installer command launched in a visible command window." : "Failed to launch installer command.";
+    return result;
+}
+
+RagExtractionToolInstallResult RagService::LaunchImageVisionModelInstaller(const RagImageIngestSettings& settings) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagExtractionToolInstallResult result;
+    if (NormalizeImageVisionProvider(settings.vision_provider) != "ollama") {
+        result.message = "Vision model pull is currently available for Ollama only.";
+        return result;
+    }
+    const std::string model = Trim(settings.vision_model).empty() ? "qwen2.5vl:7b" : Trim(settings.vision_model);
+    result.command = "ollama pull " + model;
+    const auto endpoints = BuildOllamaVisionBaseUrls(settings);
+    if (!endpoints.empty()) {
+        try {
+            const ParsedUrl parsed = CrackUrl(endpoints.front());
+            result.command = "set \"OLLAMA_HOST=" + WideToUtf8(parsed.host) + ":" + std::to_string(parsed.port) + "\" && ollama pull " + model;
+        } catch (...) {
+        }
+    }
+    AppendImageIngestLogNoLock("Launching visible Ollama vision model pull command: " + result.command);
+    const std::wstring shell_command = L"/k " + Utf8ToWide(result.command);
+    HINSTANCE launched = ShellExecuteW(nullptr, L"open", L"cmd.exe", shell_command.c_str(), nullptr, SW_SHOWNORMAL);
+    result.launched = reinterpret_cast<intptr_t>(launched) > 32;
+    result.message = result.launched ? "Vision model pull launched in a visible command window." : "Failed to launch vision model pull command.";
+    return result;
+}
+
+RagEmbeddingRuntimeStatus RagService::GetEmbeddingRuntimeStatusNoLock(const RagLibraryConfig& library) const {
+    RagEmbeddingRuntimeStatus status;
+    status.provider = NormalizeRuntimeProvider(library.embedding_provider);
+    status.base_url = library.embedding_base_url;
+    status.log_path = WideToUtf8(EmbeddingRuntimeLogPath().wstring());
+    status.recent_log = ReadEmbeddingRuntimeLogTailNoLock();
+
+    if (status.provider != "ollama") {
+        status.supported = false;
+        status.message = status.provider == "none"
+            ? "No embedding runtime selected."
+            : "Runtime lifecycle controls are currently available for Ollama only.";
+        return status;
+    }
+
+    status.supported = true;
+    status.base_url = library.embedding_base_url.empty() ? "http://localhost:11434" : library.embedding_base_url;
+    status.install_command = "winget install --id Ollama.Ollama -e";
+    status.installed = FindExecutableOnPath(L"ollama.exe").has_value();
+    status.running = IsHttpEndpointAvailable(JoinUrlPath(status.base_url, "/api/tags"));
+    if (started_ollama_process_) {
+        HANDLE process = static_cast<HANDLE>(started_ollama_process_);
+        DWORD exit_code = 0;
+        status.managed_by_app = GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE;
+    }
+    if (!status.installed) {
+        status.message = "Ollama is not installed or ollama.exe is not on PATH.";
+    } else if (status.running && status.managed_by_app) {
+        status.message = "Ollama is running and was started by this app.";
+    } else if (status.running) {
+        status.message = "Ollama is running externally.";
+    } else {
+        status.message = "Ollama is installed but not responding at the configured base URL.";
+    }
+    return status;
+}
+
+RagEmbeddingRuntimeStatus RagService::GetEmbeddingRuntimeStatus(const RagLibraryConfig& library) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return GetEmbeddingRuntimeStatusNoLock(library);
+}
+
+RagEmbeddingRuntimeStatus RagService::StartEmbeddingRuntime(const RagLibraryConfig& library) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagEmbeddingRuntimeStatus status;
+    const std::string provider = NormalizeRuntimeProvider(library.embedding_provider);
+    if (provider != "ollama") {
+        status.provider = provider;
+        status.log_path = WideToUtf8(EmbeddingRuntimeLogPath().wstring());
+        status.message = "Start is only supported for Ollama.";
+        status.recent_log = ReadEmbeddingRuntimeLogTailNoLock();
+        return status;
+    }
+    try {
+        AppendEmbeddingRuntimeLogNoLock("Start requested for Ollama at " + (library.embedding_base_url.empty() ? std::string("http://localhost:11434") : library.embedding_base_url) + ".");
+        EnsureEmbeddingRuntimeNoLock(library);
+        AppendEmbeddingRuntimeLogNoLock("Ollama start/status check completed.");
+    } catch (const std::exception& ex) {
+        AppendEmbeddingRuntimeLogNoLock(std::string("Ollama start failed: ") + ex.what());
+    } catch (...) {
+        AppendEmbeddingRuntimeLogNoLock("Ollama start failed unexpectedly.");
+    }
+    return GetEmbeddingRuntimeStatusNoLock(library);
+}
+
+RagEmbeddingRuntimeStatus RagService::StopEmbeddingRuntime(const RagLibraryConfig& library) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::string provider = NormalizeRuntimeProvider(library.embedding_provider);
+    if (provider == "ollama" && started_ollama_process_) {
+        ShutdownManagedEmbeddingRuntimes();
+    } else if (provider == "ollama") {
+        AppendEmbeddingRuntimeLogNoLock("Stop requested, but Ollama was not started by this app. Leaving external process alone.");
+    }
+    return GetEmbeddingRuntimeStatusNoLock(library);
+}
+
+RagEmbeddingRuntimeStatus RagService::LaunchEmbeddingRuntimeInstaller(const RagLibraryConfig& library) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::string provider = NormalizeRuntimeProvider(library.embedding_provider);
+    if (provider != "ollama") {
+        RagEmbeddingRuntimeStatus status;
+        status.provider = provider;
+        status.log_path = WideToUtf8(EmbeddingRuntimeLogPath().wstring());
+        status.message = "Install helper is only available for Ollama.";
+        status.recent_log = ReadEmbeddingRuntimeLogTailNoLock();
+        return status;
+    }
+
+    AppendEmbeddingRuntimeLogNoLock("Launching visible Ollama installer command: winget install --id Ollama.Ollama -e");
+    const std::wstring command = L"/k winget install --id Ollama.Ollama -e";
+    HINSTANCE result = ShellExecuteW(nullptr, L"open", L"cmd.exe", command.c_str(), nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<intptr_t>(result) <= 32) {
+        AppendEmbeddingRuntimeLogNoLock("Failed to launch winget installer command.");
+    }
+    return GetEmbeddingRuntimeStatusNoLock(library);
+}
+
+RagEmbeddingRuntimeStatus RagService::LaunchEmbeddingModelInstaller(const RagLibraryConfig& library) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::string provider = NormalizeRuntimeProvider(library.embedding_provider);
+    if (provider != "ollama") {
+        RagEmbeddingRuntimeStatus status;
+        status.provider = provider;
+        status.log_path = WideToUtf8(EmbeddingRuntimeLogPath().wstring());
+        status.message = "Model install helper is only available for Ollama.";
+        status.recent_log = ReadEmbeddingRuntimeLogTailNoLock();
+        return status;
+    }
+
+    const std::string model = library.embedding_model.empty() ? "nomic-embed-text" : library.embedding_model;
+    const std::wstring command = L"/k ollama pull " + Utf8ToWide(model);
+    AppendEmbeddingRuntimeLogNoLock("Launching visible Ollama model pull command: ollama pull " + model);
+    HINSTANCE result = ShellExecuteW(nullptr, L"open", L"cmd.exe", command.c_str(), nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<intptr_t>(result) <= 32) {
+        AppendEmbeddingRuntimeLogNoLock("Failed to launch Ollama model pull command.");
+    }
+    return GetEmbeddingRuntimeStatusNoLock(library);
+}
+
+RagEmbeddingTestResult RagService::TestEmbeddingProvider(const RagLibraryConfig& library) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagEmbeddingTestResult result;
+    result.provider = NormalizeRuntimeProvider(library.embedding_provider);
+    result.model = library.embedding_model;
+    if (result.provider == "none") {
+        result.message = "No embedding provider is selected.";
+        result.runtime_status = GetEmbeddingRuntimeStatusNoLock(library);
+        return result;
+    }
+
+    try {
+        AppendEmbeddingRuntimeLogNoLock("Embedding test requested for provider " + result.provider + " model " + result.model + ".");
+        EnsureEmbeddingRuntimeNoLock(library);
+        std::unique_ptr<IRagEmbeddingProvider> embedding_provider = CreateEmbeddingProvider(library);
+        if (!embedding_provider) {
+            result.message = "No embedding provider is selected.";
+            result.runtime_status = GetEmbeddingRuntimeStatusNoLock(library);
+            return result;
+        }
+
+        const auto start = std::chrono::steady_clock::now();
+        const auto embeddings = embedding_provider->Embed({"RAG embedding diagnostic sample text."});
+        const auto end = std::chrono::steady_clock::now();
+        result.elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
+        if (embeddings.empty() || embeddings.front().empty()) {
+            throw std::runtime_error("Embedding provider returned an empty vector.");
+        }
+
+        result.success = true;
+        result.provider = embedding_provider->ProviderId();
+        result.model = embedding_provider->ModelId();
+        result.dimensions = static_cast<int>(embeddings.front().size());
+        std::ostringstream message;
+        message << "Embedding test succeeded: " << result.provider << " / " << result.model
+                << " returned " << result.dimensions << " dimensions in "
+                << std::fixed << std::setprecision(1) << result.elapsed_ms << " ms.";
+        result.message = message.str();
+        AppendEmbeddingRuntimeLogNoLock(result.message);
+    } catch (const std::exception& ex) {
+        result.message = std::string("Embedding test failed: ") + ex.what();
+        AppendEmbeddingRuntimeLogNoLock(result.message);
+    } catch (...) {
+        result.message = "Embedding test failed unexpectedly.";
+        AppendEmbeddingRuntimeLogNoLock(result.message);
+    }
+    result.runtime_status = GetEmbeddingRuntimeStatusNoLock(library);
+    return result;
+}
+
+std::vector<RagExtractionToolStatus> RagService::GetExtractionToolStatus() const {
+    std::vector<RagExtractionToolStatus> tools;
+
+    auto add_executable_tool = [&](std::string id, std::string name, std::wstring executable, std::string purpose, std::string install_command, bool recommended, std::string notes) {
+        RagExtractionToolStatus tool;
+        tool.id = std::move(id);
+        tool.name = std::move(name);
+        tool.executable = WideToUtf8(executable);
+        tool.purpose = std::move(purpose);
+        tool.install_command = std::move(install_command);
+        tool.notes = std::move(notes);
+        tool.installed = FindExecutableOnPath(executable).has_value();
+        tool.installable = !tool.install_command.empty();
+        tool.recommended = recommended;
+        tools.push_back(std::move(tool));
+    };
+
+    add_executable_tool(
+        "poppler_pdftotext",
+        "Poppler pdftotext",
+        L"pdftotext.exe",
+        "Best current PDF text extraction path for normal text PDFs.",
+        "winget install --id oschwartz10612.Poppler -e --accept-package-agreements --accept-source-agreements",
+        true,
+        "Provides pdftotext.exe. Recommended because the built-in PDF fallback is intentionally limited.");
+
+    add_executable_tool(
+        "mupdf_mutool",
+        "MuPDF mutool",
+        L"mutool.exe",
+        "Alternative PDF text extraction path.",
+        "",
+        false,
+        "Optional. If installed manually and available on PATH, the app will use mutool after pdftotext.");
+
+    {
+        RagExtractionToolStatus tool;
+        tool.id = "python_pypdf";
+        tool.name = "Python pypdf";
+        tool.executable = "python.exe + pypdf";
+        tool.purpose = "Fallback PDF text extraction when pdftotext/mutool are not installed.";
+        tool.recommended = false;
+        const auto python = FindExecutableOnPath(L"python.exe");
+        if (python) {
+            tool.installed = PythonModuleAvailable(*python, "pypdf");
+            tool.install_command = tool.installed ? "" : "python -m pip install pypdf";
+            tool.installable = !tool.installed;
+            tool.notes = tool.installed
+                ? "Available. The app can use pypdf as a fallback PDF extractor."
+                : "Python is installed, but pypdf is missing.";
+        } else {
+            tool.installed = false;
+            tool.install_command = "";
+            tool.installable = false;
+            tool.notes = "Python was not found on PATH. Install Python and pypdf manually if this fallback is needed.";
+        }
+        tools.push_back(std::move(tool));
+    }
+
+    add_executable_tool(
+        "tesseract_ocr",
+        "Tesseract OCR",
+        L"tesseract.exe",
+        "CPU-friendly OCR for image ingestion.",
+        "winget install --id tesseract-ocr.tesseract -e --accept-package-agreements --accept-source-agreements",
+        true,
+        "Recommended for the default image ingestion pipeline. The app converts supported image files into Markdown OCR text while preserving the original image.");
+
+    add_executable_tool(
+        "pandoc",
+        "Pandoc",
+        L"pandoc.exe",
+        "Optional high-quality document conversion helper for future import workflows.",
+        "winget install --id JohnMacFarlane.Pandoc -e --accept-package-agreements --accept-source-agreements",
+        false,
+        "Optional future tool. Current DOCX/XLSX extraction uses native OOXML parsing.");
+
+    add_executable_tool(
+        "libreoffice",
+        "LibreOffice",
+        L"soffice.exe",
+        "Optional Office conversion helper for unusual Word/Excel files.",
+        "winget install --id TheDocumentFoundation.LibreOffice -e --accept-package-agreements --accept-source-agreements",
+        false,
+        "Optional future tool. Useful if we add external Office conversion fallback.");
+
+    return tools;
+}
+
+RagExtractionToolInstallResult RagService::LaunchExtractionToolInstaller(bool recommended_only) const {
+    RagExtractionToolInstallResult result;
+    const auto winget = FindExecutableOnPath(L"winget.exe");
+    const auto tools = GetExtractionToolStatus();
+    std::vector<std::string> commands;
+    for (const auto& tool : tools) {
+        if (tool.installed || !tool.installable || tool.install_command.empty()) {
+            continue;
+        }
+        if (recommended_only && !tool.recommended) {
+            continue;
+        }
+        if (tool.install_command.rfind("winget ", 0) == 0 && !winget) {
+            continue;
+        }
+        commands.push_back(tool.install_command);
+    }
+
+    if (commands.empty()) {
+        result.message = recommended_only
+            ? "No missing recommended tools with an available installer were found."
+            : "No missing installable tools were found.";
+        return result;
+    }
+
+    std::ostringstream command_stream;
+    for (size_t i = 0; i < commands.size(); ++i) {
+        if (i > 0) {
+            command_stream << " && ";
+        }
+        command_stream << commands[i];
+    }
+    result.command = command_stream.str();
+    const std::wstring command = L"/k " + Utf8ToWide(result.command);
+    HINSTANCE launched = ShellExecuteW(nullptr, L"open", L"cmd.exe", command.c_str(), nullptr, SW_SHOWNORMAL);
+    result.launched = reinterpret_cast<intptr_t>(launched) > 32;
+    result.message = result.launched
+        ? "Installer command launched in a visible command window."
+        : "Failed to launch installer command.";
+    return result;
+}
+
+void RagService::EnsureEmbeddingRuntimeNoLock(const RagLibraryConfig& library) const {
+    std::string provider = NormalizeRuntimeProvider(library.embedding_provider);
+    if (provider != "ollama") {
+        return;
+    }
+
+    const std::string base_url = library.embedding_base_url.empty() ? "http://localhost:11434" : library.embedding_base_url;
+    if (IsHttpEndpointAvailable(JoinUrlPath(base_url, "/api/tags"))) {
+        return;
+    }
+
+    if (started_ollama_process_) {
+        HANDLE process = static_cast<HANDLE>(started_ollama_process_);
+        DWORD exit_code = 0;
+        if (GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
+            Sleep(1200);
+            if (IsHttpEndpointAvailable(JoinUrlPath(base_url, "/api/tags"))) {
+                return;
+            }
+        } else {
+            CloseHandle(process);
+            started_ollama_process_ = nullptr;
+            started_ollama_process_id_ = 0;
+        }
+    }
+
+    const auto executable = FindExecutableOnPath(L"ollama.exe");
+    if (!executable) {
+        AppendEmbeddingRuntimeLogNoLock("Ollama executable was not found on PATH.");
+        throw std::runtime_error("Ollama is selected but ollama.exe was not found on PATH. Install it first, for example with: winget install Ollama.Ollama");
+    }
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    SECURITY_ATTRIBUTES security{};
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+    std::filesystem::create_directories(EmbeddingRuntimeLogPath().parent_path());
+    HANDLE log_handle = CreateFileW(
+        EmbeddingRuntimeLogPath().wstring().c_str(),
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &security,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (log_handle != INVALID_HANDLE_VALUE) {
+        startup.dwFlags |= STARTF_USESTDHANDLES;
+        startup.hStdOutput = log_handle;
+        startup.hStdError = log_handle;
+        startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    }
+    PROCESS_INFORMATION process_info{};
+    std::wstring command_line = QuoteCommandArgument(*executable) + L" serve";
+    std::vector<wchar_t> command_buffer(command_line.begin(), command_line.end());
+    command_buffer.push_back(L'\0');
+    std::wstring previous_ollama_host;
+    DWORD previous_size = GetEnvironmentVariableW(L"OLLAMA_HOST", nullptr, 0);
+    const bool had_previous_ollama_host = previous_size > 0;
+    if (had_previous_ollama_host) {
+        previous_ollama_host.resize(previous_size, L'\0');
+        DWORD written = GetEnvironmentVariableW(L"OLLAMA_HOST", previous_ollama_host.data(), previous_size);
+        previous_ollama_host.resize(written);
+    }
+    try {
+        const ParsedUrl parsed = CrackUrl(base_url);
+        std::wstring ollama_host = parsed.host + L":" + std::to_wstring(parsed.port);
+        SetEnvironmentVariableW(L"OLLAMA_HOST", ollama_host.c_str());
+    } catch (...) {
+    }
+    AppendEmbeddingRuntimeLogNoLock("Starting Ollama with command: " + WideToUtf8(command_line));
+    if (!CreateProcessW(nullptr, command_buffer.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process_info)) {
+        if (log_handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(log_handle);
+        }
+        if (had_previous_ollama_host) {
+            SetEnvironmentVariableW(L"OLLAMA_HOST", previous_ollama_host.c_str());
+        } else {
+            SetEnvironmentVariableW(L"OLLAMA_HOST", nullptr);
+        }
+        throw std::runtime_error("Could not start Ollama. Try starting it manually with: ollama serve");
+    }
+    if (log_handle != INVALID_HANDLE_VALUE) {
+        CloseHandle(log_handle);
+    }
+    if (had_previous_ollama_host) {
+        SetEnvironmentVariableW(L"OLLAMA_HOST", previous_ollama_host.c_str());
+    } else {
+        SetEnvironmentVariableW(L"OLLAMA_HOST", nullptr);
+    }
+
+    CloseHandle(process_info.hThread);
+    started_ollama_process_ = process_info.hProcess;
+    started_ollama_process_id_ = process_info.dwProcessId;
+
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        Sleep(500);
+        if (IsHttpEndpointAvailable(JoinUrlPath(base_url, "/api/tags"))) {
+            AppendEmbeddingRuntimeLogNoLock("Ollama is responding at " + base_url + ".");
+            return;
+        }
+    }
+    AppendEmbeddingRuntimeLogNoLock("Ollama process started but did not become ready at " + base_url + ".");
+    throw std::runtime_error("Started Ollama, but it did not become ready at " + base_url + ". Try running: ollama serve");
+}
+
+void RagService::EnsureInitialized() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::filesystem::create_directories(RagRoot());
+    if (!std::filesystem::exists(RegistryPath())) {
+        SaveJsonFile(RegistryPath(), json{{"libraries", json::array()}});
+    }
+    if (!std::filesystem::exists(ImageIngestSettingsPath())) {
+        std::filesystem::create_directories(ImageIngestSettingsPath().parent_path());
+        SaveJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(RagImageIngestSettings{}));
+    }
+    try {
+        EnsureImageVisionRuntimesNoLock(LoadImageIngestSettingsNoLock());
+    } catch (...) {
+        // Startup should remain usable even if optional image vision runtimes cannot be started.
+    }
+    for (const auto& [rag_id, library_path] : LoadRegistryNoLock()) {
+        const json data = LoadJsonFile(library_path / "rag.json", json::object());
+        if (!data.is_object() || data.empty()) {
+            continue;
+        }
+        const RagLibraryConfig library = RagLibraryFromJson(data, rag_id);
+        try {
+            EnsureEmbeddingRuntimeNoLock(library);
+        } catch (...) {
+            // Startup should remain usable even if an optional embedding runtime cannot be started.
+        }
+    }
+}
+
+std::filesystem::path RagService::RagRoot() const {
+    return storage_->data_root() / "rag_libraries";
+}
+
+std::filesystem::path RagService::LibraryPath(const std::string& rag_id) const {
+    for (const auto& [id, path] : LoadRegistryNoLock()) {
+        if (id == rag_id && !path.empty()) {
+            return path;
+        }
+    }
+    return RagRoot() / Utf8ToWide(rag_id);
+}
+
+std::filesystem::path RagService::LibraryConfigPath(const std::string& rag_id) const {
+    return LibraryPath(rag_id) / "rag.json";
+}
+
+std::filesystem::path RagService::LibraryCatalogPath(const std::string& rag_id) const {
+    return LibraryPath(rag_id) / "rag_catalog.json";
+}
+
+std::filesystem::path RagService::RegistryPath() const {
+    return RagRoot() / "rag_libraries.json";
+}
+
+std::filesystem::path RagService::ProjectRagBindingsPath(const std::string& project_id) const {
+    return storage_->config_root() / "projects" / Utf8ToWide(project_id) / "project_rag.json";
+}
+
+std::vector<std::pair<std::string, std::filesystem::path>> RagService::LoadRegistryNoLock() const {
+    std::vector<std::pair<std::string, std::filesystem::path>> entries;
+    const json data = LoadJsonFile(RegistryPath(), json{{"libraries", json::array()}});
+    if (!data.contains("libraries") || !data["libraries"].is_array()) {
+        return entries;
+    }
+    for (const auto& item : data["libraries"]) {
+        const std::string id = item.value("id", "");
+        const std::string path = item.value("storage_path", "");
+        if (!id.empty() && !path.empty()) {
+            entries.emplace_back(id, std::filesystem::path(Utf8ToWide(path)));
+        }
+    }
+    return entries;
+}
+
+void RagService::SaveRegistryNoLock(const std::vector<std::pair<std::string, std::filesystem::path>>& entries) const {
+    json data;
+    data["libraries"] = json::array();
+    for (const auto& [id, path] : entries) {
+        if (!id.empty() && !path.empty()) {
+            data["libraries"].push_back({
+                {"id", id},
+                {"storage_path", WideToUtf8(std::filesystem::absolute(path).wstring())},
+            });
+        }
+    }
+    SaveJsonFile(RegistryPath(), data);
+}
+
+void RagService::UpsertRegistryNoLock(const std::string& rag_id, const std::filesystem::path& path) const {
+    auto entries = LoadRegistryNoLock();
+    const auto absolute_path = std::filesystem::absolute(path);
+    auto it = std::find_if(entries.begin(), entries.end(), [&](const auto& entry) {
+        return entry.first == rag_id;
+    });
+    if (it == entries.end()) {
+        entries.emplace_back(rag_id, absolute_path);
+    } else {
+        it->second = absolute_path;
+    }
+    SaveRegistryNoLock(entries);
+}
+
+void RagService::RemoveRegistryNoLock(const std::string& rag_id) const {
+    auto entries = LoadRegistryNoLock();
+    entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const auto& entry) {
+                      return entry.first == rag_id;
+                  }),
+                  entries.end());
+    SaveRegistryNoLock(entries);
+}
+
+std::vector<RagLibraryConfig> RagService::ListLibraries() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::filesystem::create_directories(RagRoot());
+    std::vector<RagLibraryConfig> libraries;
+    std::set<std::string> seen_ids;
+    for (const auto& [rag_id, library_path] : LoadRegistryNoLock()) {
+        const json data = LoadJsonFile(library_path / "rag.json", json::object());
+        if (!data.is_object() || data.empty()) {
+            continue;
+        }
+        RagLibraryConfig config = RagLibraryFromJson(data, rag_id);
+        if (!config.id.empty()) {
+            config.storage_path = WideToUtf8(std::filesystem::absolute(library_path).wstring());
+            libraries.push_back(std::move(config));
+            seen_ids.insert(rag_id);
+        }
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(RagRoot())) {
+        if (!entry.is_directory()) {
+            continue;
+        }
+        const std::string rag_id = WideToUtf8(entry.path().filename().wstring());
+        if (seen_ids.find(rag_id) != seen_ids.end()) {
+            continue;
+        }
+        const json data = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+        if (!data.is_object() || data.empty()) {
+            continue;
+        }
+        RagLibraryConfig config = RagLibraryFromJson(data, rag_id);
+        if (!config.id.empty()) {
+            config.storage_path = WideToUtf8(std::filesystem::absolute(entry.path()).wstring());
+            libraries.push_back(std::move(config));
+        }
+    }
+    std::sort(libraries.begin(), libraries.end(), [](const RagLibraryConfig& left, const RagLibraryConfig& right) {
+        return left.name < right.name;
+    });
+    return libraries;
+}
+
+std::optional<RagLibraryConfig> RagService::GetLibrary(const std::string& rag_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const json data = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!data.is_object() || data.empty()) {
+        return std::nullopt;
+    }
+    RagLibraryConfig config = RagLibraryFromJson(data, rag_id);
+    config.storage_path = WideToUtf8(std::filesystem::absolute(LibraryPath(rag_id)).wstring());
+    return config;
+}
+
+RagLibraryConfig RagService::CreateLibrary(const RagLibraryConfig& config) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagLibraryConfig created = config;
+    created.id = MakeId("rag");
+    created.created_at = CurrentTimestampUtc();
+    created.updated_at = created.created_at;
+    if (created.name.empty()) {
+        created.name = "New RAG Library";
+    }
+
+    const std::filesystem::path storage_parent = created.storage_path.empty()
+        ? RagRoot()
+        : std::filesystem::path(Utf8ToWide(created.storage_path));
+    const std::filesystem::path library_path = std::filesystem::absolute(storage_parent / (SafeFolderName(created.name) + L"_" + Utf8ToWide(created.id)));
+    created.storage_path = WideToUtf8(library_path.wstring());
+
+    UpsertRegistryNoLock(created.id, library_path);
+    std::filesystem::create_directories(library_path / "documents" / "original");
+    std::filesystem::create_directories(library_path / "documents" / "extracted");
+    std::filesystem::create_directories(library_path / "indexes");
+    SaveJsonFile(library_path / "rag.json", RagLibraryToJson(created));
+    {
+        auto db = OpenDatabase(library_path / "rag.sqlite");
+        EnsureRagDatabase(db.get());
+    }
+    SaveCatalogNoLock(created.id, RagCatalog{});
+    return created;
+}
+
+bool RagService::UpdateLibrary(const RagLibraryConfig& config, std::string* error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (config.id.empty() || !std::filesystem::exists(LibraryPath(config.id))) {
+        if (error) {
+            *error = "RAG library not found.";
+        }
+        return false;
+    }
+    const std::filesystem::path library_path = LibraryPath(config.id);
+    const RagLibraryConfig previous = RagLibraryFromJson(LoadJsonFile(library_path / "rag.json", json::object()), config.id);
+    RagLibraryConfig updated = config;
+    updated.storage_path = WideToUtf8(std::filesystem::absolute(library_path).wstring());
+    updated.updated_at = CurrentTimestampUtc();
+    const bool embedding_changed = previous.embedding_provider != updated.embedding_provider ||
+        previous.embedding_base_url != updated.embedding_base_url ||
+        previous.embedding_model != updated.embedding_model ||
+        previous.embedding_dimensions != updated.embedding_dimensions ||
+        previous.vector_backend != updated.vector_backend;
+    const bool chunking_changed = previous.chunk_size_chars != updated.chunk_size_chars ||
+        previous.chunk_overlap_chars != updated.chunk_overlap_chars;
+    const bool segmentation_changed = previous.split_large_extracted_documents != updated.split_large_extracted_documents ||
+        previous.extracted_segment_threshold_mb != updated.extracted_segment_threshold_mb ||
+        previous.extracted_segment_size_mb != updated.extracted_segment_size_mb ||
+        previous.extracted_segment_overlap_chars != updated.extracted_segment_overlap_chars;
+    if (embedding_changed || chunking_changed || segmentation_changed) {
+        updated.rebuild_required = true;
+        updated.rebuild_reason = embedding_changed && chunking_changed
+            ? "Embedding/vector and chunking settings changed. Rebuild DB to refresh chunks and vectors."
+            : embedding_changed
+                ? "Embedding/vector settings changed. Rebuild DB to refresh vectors."
+                : chunking_changed
+                    ? "Chunking settings changed. Rebuild DB to refresh chunks."
+                    : "Extracted document segmentation settings changed. Rebuild DB to refresh extracted segment files and chunk metadata.";
+    }
+    UpsertRegistryNoLock(updated.id, library_path);
+    SaveJsonFile(library_path / "rag.json", RagLibraryToJson(updated));
+    {
+        auto db = OpenDatabase(library_path / "rag.sqlite");
+        EnsureRagDatabase(db.get());
+    }
+    return true;
+}
+
+bool RagService::DeleteLibrary(const std::string& rag_id, std::string* error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (rag_id.empty() || !std::filesystem::exists(LibraryPath(rag_id))) {
+        if (error) {
+            *error = "RAG library not found.";
+        }
+        return false;
+    }
+    const std::filesystem::path library_path = LibraryPath(rag_id);
+    std::filesystem::remove_all(library_path);
+    RemoveRegistryNoLock(rag_id);
+    return true;
+}
+
+RagLibraryStats RagService::GetStats(const std::string& rag_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagLibraryStats stats;
+    try {
+        auto db = OpenDatabase(LibraryPath(rag_id) / "rag.sqlite");
+        EnsureRagDatabase(db.get());
+        {
+            auto statement = PrepareSql(db.get(), "SELECT COUNT(*), COALESCE(SUM(file_size), 0) FROM documents WHERE deleted = 0;");
+            if (sqlite3_step(statement.get()) == SQLITE_ROW) {
+                stats.document_count = static_cast<size_t>(sqlite3_column_int64(statement.get(), 0));
+                stats.original_bytes = static_cast<uintmax_t>(sqlite3_column_int64(statement.get(), 1));
+            }
+        }
+        {
+            auto statement = PrepareSql(db.get(), "SELECT COUNT(*) FROM chunks;");
+            if (sqlite3_step(statement.get()) == SQLITE_ROW) {
+                stats.chunk_count = static_cast<size_t>(sqlite3_column_int64(statement.get(), 0));
+            }
+        }
+        {
+            auto statement = PrepareSql(db.get(), "SELECT COUNT(*) FROM embeddings;");
+            if (sqlite3_step(statement.get()) == SQLITE_ROW) {
+                stats.embedding_count = static_cast<size_t>(sqlite3_column_int64(statement.get(), 0));
+            }
+        }
+    } catch (...) {
+        const RagCatalog catalog = LoadCatalogNoLock(rag_id);
+        stats.document_count = catalog.documents.size();
+        stats.chunk_count = catalog.chunks.size();
+        for (const auto& document : catalog.documents) {
+            stats.original_bytes += document.file_size;
+        }
+    }
+    return stats;
+}
+
+std::vector<RagDocumentSummary> RagService::ListDocuments(const std::string& rag_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<RagDocumentSummary> summaries;
+    try {
+        auto db = OpenDatabase(LibraryPath(rag_id) / "rag.sqlite");
+        EnsureRagDatabase(db.get());
+        const std::vector<RagDocumentRecord> documents = LoadActiveDocuments(db.get());
+        summaries.reserve(documents.size());
+        for (const auto& document : documents) {
+            RagDocumentSummary summary;
+            summary.document = document;
+            {
+                auto statement = PrepareSql(db.get(), "SELECT COUNT(*) FROM chunks WHERE document_id = ?;");
+                BindText(statement.get(), 1, document.id);
+                if (sqlite3_step(statement.get()) == SQLITE_ROW) {
+                    summary.chunk_count = sqlite3_column_int(statement.get(), 0);
+                }
+            }
+            {
+                auto statement = PrepareSql(db.get(),
+                    "SELECT COUNT(*) "
+                    "FROM embeddings e "
+                    "JOIN chunks c ON c.id = e.chunk_id "
+                    "WHERE c.document_id = ?;");
+                BindText(statement.get(), 1, document.id);
+                if (sqlite3_step(statement.get()) == SQLITE_ROW) {
+                    summary.embedding_count = sqlite3_column_int(statement.get(), 0);
+                }
+            }
+            summaries.push_back(std::move(summary));
+        }
+    } catch (...) {
+        const RagCatalog catalog = LoadCatalogNoLock(rag_id);
+        summaries.reserve(catalog.documents.size());
+        for (const auto& document : catalog.documents) {
+            RagDocumentSummary summary;
+            summary.document = document;
+            summary.chunk_count = static_cast<int>(std::count_if(catalog.chunks.begin(), catalog.chunks.end(), [&](const RagChunkRecord& chunk) {
+                return chunk.document_id == document.id;
+            }));
+            summaries.push_back(std::move(summary));
+        }
+    }
+    return summaries;
+}
+
+std::optional<RagDocumentRecord> RagService::GetDocument(const std::string& rag_id, const std::string& document_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+        const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+        if (!library_json.is_object() || library_json.empty()) {
+            return std::nullopt;
+        }
+
+        auto db = OpenDatabase(LibraryPath(rag_id) / "rag.sqlite");
+        EnsureRagDatabase(db.get());
+        auto document = FindDocumentById(db.get(), document_id);
+        if (!document || document->rag_id != rag_id) {
+            return std::nullopt;
+        }
+        return document;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::string RagService::LoadDocumentText(const std::string& rag_id, const std::string& document_id, size_t max_chars, bool* truncated, std::string* error) const {
+    if (truncated) {
+        *truncated = false;
+    }
+    if (error) {
+        error->clear();
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+        const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+        if (!library_json.is_object() || library_json.empty()) {
+            if (error) {
+                *error = "RAG library not found.";
+            }
+            return {};
+        }
+
+        const std::filesystem::path library_path = LibraryPath(rag_id);
+        auto db = OpenDatabase(library_path / "rag.sqlite");
+        EnsureRagDatabase(db.get());
+        const auto document = FindDocumentById(db.get(), document_id);
+        if (!document || document->rag_id != rag_id) {
+            if (error) {
+                *error = "Document not found.";
+            }
+            return {};
+        }
+        if (document->extracted_relative_path.empty()) {
+            if (error) {
+                *error = "Document does not have extracted text.";
+            }
+            return {};
+        }
+
+        const size_t limit = max_chars == 0 ? std::numeric_limits<size_t>::max() : max_chars;
+        std::string combined;
+        auto append_text = [&](const std::string& value) {
+            if (combined.size() >= limit) {
+                if (truncated) {
+                    *truncated = true;
+                }
+                return;
+            }
+            const size_t remaining = limit - combined.size();
+            if (value.size() > remaining) {
+                combined.append(value.data(), static_cast<std::string::size_type>(remaining));
+                if (truncated) {
+                    *truncated = true;
+                }
+            } else {
+                combined += value;
+            }
+        };
+
+        const std::filesystem::path extracted_path = library_path / std::filesystem::path(Utf8ToWide(document->extracted_relative_path));
+        if (!std::filesystem::exists(extracted_path)) {
+            if (error) {
+                *error = "Extracted text file was not found.";
+            }
+            return {};
+        }
+
+        if (extracted_path.filename() == L"manifest.json") {
+            const json manifest = LoadJsonFile(extracted_path, json::object());
+            if (!manifest.contains("segments") || !manifest["segments"].is_array()) {
+                if (error) {
+                    *error = "Extracted segment manifest is invalid.";
+                }
+                return {};
+            }
+
+            for (const auto& segment : manifest["segments"]) {
+                const std::string relative_path = segment.value("relative_path", "");
+                if (relative_path.empty()) {
+                    continue;
+                }
+                const std::filesystem::path segment_path = library_path / std::filesystem::path(Utf8ToWide(relative_path));
+                if (!std::filesystem::exists(segment_path)) {
+                    continue;
+                }
+                if (!combined.empty()) {
+                    append_text("\n\n");
+                }
+                append_text(ReadWholeFile(segment_path));
+                if (truncated && *truncated) {
+                    break;
+                }
+            }
+        } else {
+            append_text(ReadWholeFile(extracted_path));
+        }
+
+        return combined;
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    } catch (...) {
+        if (error) {
+            *error = "Unexpected error while reading document text.";
+        }
+    }
+    return {};
+}
+
+RagImportPreview RagService::PreviewFiles(const std::string& rag_id, const std::vector<std::filesystem::path>& files) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagImportPreview preview;
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        preview.errors.push_back("RAG library not found.");
+        return preview;
+    }
+
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
+    for (const auto& file : files) {
+        AddPreviewItem(preview, BuildImportPreviewItem(library, image_settings, file, DirectFileMetadata(file)));
+    }
+    preview.success = preview.errors.empty();
+    return preview;
+}
+
+RagImportPreview RagService::PreviewFolder(const std::string& rag_id, const std::filesystem::path& folder, bool recursive) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagImportPreview preview;
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        preview.errors.push_back("RAG library not found.");
+        return preview;
+    }
+    if (!std::filesystem::exists(folder) || !std::filesystem::is_directory(folder)) {
+        preview.errors.push_back(folder.string() + ": folder does not exist.");
+        return preview;
+    }
+
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
+    try {
+        if (recursive) {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(folder, std::filesystem::directory_options::skip_permission_denied)) {
+                if (entry.is_regular_file()) {
+                    AddPreviewItem(preview, BuildImportPreviewItem(library, image_settings, entry.path(), FolderFileMetadata(folder, entry.path(), recursive)));
+                }
+            }
+        } else {
+            for (const auto& entry : std::filesystem::directory_iterator(folder, std::filesystem::directory_options::skip_permission_denied)) {
+                if (entry.is_regular_file()) {
+                    AddPreviewItem(preview, BuildImportPreviewItem(library, image_settings, entry.path(), FolderFileMetadata(folder, entry.path(), recursive)));
+                }
+            }
+        }
+    } catch (const std::exception& ex) {
+        preview.errors.push_back(folder.string() + ": " + ex.what());
+    } catch (...) {
+        preview.errors.push_back(folder.string() + ": unexpected preview error.");
+    }
+    preview.success = preview.errors.empty();
+    return preview;
+}
+
+RagIngestionResult RagService::ReindexDocument(const std::string& rag_id, const std::string& document_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagIngestionResult result;
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        result.errors.push_back("RAG library not found.");
+        return result;
+    }
+
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const std::filesystem::path library_path = LibraryPath(rag_id);
+    auto db = OpenDatabase(library_path / "rag.sqlite");
+    EnsureRagDatabase(db.get());
+    const auto document = FindDocumentById(db.get(), document_id);
+    if (!document) {
+        result.errors.push_back("Document not found.");
+        return result;
+    }
+
+    std::unique_ptr<IRagEmbeddingProvider> embedding_provider;
+    try {
+        EnsureEmbeddingRuntimeNoLock(library);
+        embedding_provider = CreateEmbeddingProvider(library);
+    } catch (const std::exception& ex) {
+        result.errors.push_back(ex.what());
+        return result;
+    }
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
+
+    RagFileIngestionSource source;
+    source.source_path = ResolveRebuildSourcePath(library_path, *document);
+    source.original_source_uri = document->original_source_uri;
+    source.display_name = document->display_name;
+    source.metadata_json = document->metadata_json;
+    if (IsImageExtension(source.source_path)) {
+        EnsureImageVisionRuntimesNoLock(image_settings);
+    }
+    IngestOneSourceNoLock(db.get(), library, library_path, source, false, image_settings, embedding_provider.get(), result);
+    if (library.vector_backend == "hnswlib") {
+        SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
+    }
+    result.success = result.errors.empty();
+    return result;
+}
+
+bool RagService::DeleteDocument(const std::string& rag_id, const std::string& document_id, bool delete_managed_files, std::string* error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        if (error) {
+            *error = "RAG library not found.";
+        }
+        return false;
+    }
+
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const std::filesystem::path library_path = LibraryPath(rag_id);
+    auto db = OpenDatabase(library_path / "rag.sqlite");
+    EnsureRagDatabase(db.get());
+    const auto document = FindDocumentById(db.get(), document_id);
+    if (!document) {
+        if (error) {
+            *error = "Document not found.";
+        }
+        return false;
+    }
+
+    // Collect chunk IDs before deletion so we can update the HNSW index.
+    std::vector<std::string> deleted_chunk_ids;
+    if (library.vector_backend == "hnswlib" && hnsw_cache_.count(rag_id)) {
+        try {
+            auto stmt = PrepareSql(db.get(), "SELECT id FROM chunks WHERE document_id = ?;");
+            BindText(stmt.get(), 1, document_id);
+            while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+                deleted_chunk_ids.emplace_back(reinterpret_cast<const char*>(sqlite3_column_text(stmt.get(), 0)));
+            }
+        } catch (...) {
+            // Non-fatal — HNSW will self-correct on next SyncHnswIndex.
+        }
+    }
+
+    try {
+        ExecSql(db.get(), "BEGIN IMMEDIATE;");
+        DeleteChunksForDocument(db.get(), document_id);
+        auto statement = PrepareSql(db.get(), "DELETE FROM documents WHERE id = ?;");
+        BindText(statement.get(), 1, document_id);
+        if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+            ThrowSqlite(db.get(), "Could not delete RAG document");
+        }
+        ExecSql(db.get(), "COMMIT;");
+    } catch (const std::exception& ex) {
+        try {
+            ExecSql(db.get(), "ROLLBACK;");
+        } catch (...) {
+        }
+        if (error) {
+            *error = ex.what();
+        }
+        return false;
+    } catch (...) {
+        try {
+            ExecSql(db.get(), "ROLLBACK;");
+        } catch (...) {
+        }
+        if (error) {
+            *error = "Unexpected document delete error.";
+        }
+        return false;
+    }
+
+    // Update the cached HNSW index to mark deleted chunks.
+    if (!deleted_chunk_ids.empty()) {
+        auto it = hnsw_cache_.find(rag_id);
+        if (it != hnsw_cache_.end() && it->second) {
+            HnswHandle* handle = it->second.get();
+            bool modified = false;
+            for (const auto& cid : deleted_chunk_ids) {
+                auto label_it = handle->chunk_to_label.find(cid);
+                if (label_it != handle->chunk_to_label.end()) {
+                    try {
+                        handle->index->markDelete(label_it->second);
+                    } catch (...) {
+                    }
+                    handle->label_to_chunk.erase(label_it->second);
+                    handle->chunk_to_label.erase(label_it);
+                    modified = true;
+                }
+            }
+            if (modified) {
+                try {
+                    SaveHnswHandle(rag_id);
+                } catch (...) {
+                }
+            }
+        }
+    }
+
+    if (delete_managed_files) {
+        std::error_code ec;
+        if (!document->stored_relative_path.empty()) {
+            std::filesystem::remove(library_path / std::filesystem::path(Utf8ToWide(document->stored_relative_path)), ec);
+        }
+        RemoveManagedExtractedArtifact(library_path, document->extracted_relative_path);
+    }
+    return true;
+}
+
+std::vector<ProjectRagBinding> RagService::LoadProjectBindings(const std::string& project_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<ProjectRagBinding> bindings;
+    const json data = LoadJsonFile(ProjectRagBindingsPath(project_id), json{{"bindings", json::array()}});
+    if (data.contains("bindings") && data["bindings"].is_array()) {
+        for (const auto& item : data["bindings"]) {
+            ProjectRagBinding binding = ProjectRagBindingFromJson(item);
+            if (!binding.rag_id.empty()) {
+                bindings.push_back(std::move(binding));
+            }
+        }
+    }
+    return bindings;
+}
+
+void RagService::SaveProjectBindings(const std::string& project_id, const std::vector<ProjectRagBinding>& bindings) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    json data;
+    data["bindings"] = json::array();
+    for (const auto& binding : bindings) {
+        if (!binding.rag_id.empty()) {
+            data["bindings"].push_back(ProjectRagBindingToJson(binding));
+        }
+    }
+    SaveJsonFile(ProjectRagBindingsPath(project_id), data);
+}
+
+bool RagService::UpsertProjectBinding(const std::string& project_id, const ProjectRagBinding& binding, std::string* error) {
+    if (project_id.empty()) {
+        if (error) {
+            *error = "Select a project first.";
+        }
+        return false;
+    }
+    auto bindings = LoadProjectBindings(project_id);
+    auto it = std::find_if(bindings.begin(), bindings.end(), [&](const ProjectRagBinding& item) { return item.rag_id == binding.rag_id; });
+    if (it == bindings.end()) {
+        bindings.push_back(binding);
+    } else {
+        *it = binding;
+    }
+    SaveProjectBindings(project_id, bindings);
+    return true;
+}
+
+bool RagService::RemoveProjectBinding(const std::string& project_id, const std::string& rag_id, std::string* error) {
+    if (project_id.empty()) {
+        if (error) {
+            *error = "Select a project first.";
+        }
+        return false;
+    }
+    auto bindings = LoadProjectBindings(project_id);
+    const auto old_size = bindings.size();
+    bindings.erase(std::remove_if(bindings.begin(), bindings.end(), [&](const ProjectRagBinding& binding) { return binding.rag_id == rag_id; }), bindings.end());
+    if (bindings.size() == old_size) {
+        if (error) {
+            *error = "This RAG is not attached to the active project.";
+        }
+        return false;
+    }
+    SaveProjectBindings(project_id, bindings);
+    return true;
+}
+
+RagService::RagCatalog RagService::LoadCatalogNoLock(const std::string& rag_id) const {
+    RagCatalog catalog;
+    const json data = LoadJsonFile(LibraryCatalogPath(rag_id), json{{"documents", json::array()}, {"chunks", json::array()}});
+    if (data.contains("documents") && data["documents"].is_array()) {
+        for (const auto& item : data["documents"]) {
+            RagDocumentRecord document = RagDocumentFromJson(item);
+            if (!document.id.empty()) {
+                catalog.documents.push_back(std::move(document));
+            }
+        }
+    }
+    if (data.contains("chunks") && data["chunks"].is_array()) {
+        for (const auto& item : data["chunks"]) {
+            RagChunkRecord chunk = RagChunkFromJson(item);
+            if (!chunk.id.empty()) {
+                catalog.chunks.push_back(std::move(chunk));
+            }
+        }
+    }
+    return catalog;
+}
+
+void RagService::SaveCatalogNoLock(const std::string& rag_id, const RagCatalog& catalog) const {
+    json data;
+    data["documents"] = json::array();
+    data["chunks"] = json::array();
+    for (const auto& document : catalog.documents) {
+        data["documents"].push_back(RagDocumentToJson(document));
+    }
+    for (const auto& chunk : catalog.chunks) {
+        data["chunks"].push_back(RagChunkToJson(chunk));
+    }
+    SaveJsonFile(LibraryCatalogPath(rag_id), data);
+}
+
+RagIngestionResult RagService::IngestFiles(const std::string& rag_id, const std::vector<std::filesystem::path>& files) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagIngestionResult result;
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        result.errors.push_back("RAG library not found.");
+        return result;
+    }
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const std::filesystem::path library_path = LibraryPath(rag_id);
+    auto db = OpenDatabase(library_path / "rag.sqlite");
+    EnsureRagDatabase(db.get());
+    std::unique_ptr<IRagEmbeddingProvider> embedding_provider;
+    try {
+        EnsureEmbeddingRuntimeNoLock(library);
+        embedding_provider = CreateEmbeddingProvider(library);
+    } catch (const std::exception& ex) {
+        result.errors.push_back(ex.what());
+        return result;
+    }
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
+    if (AnyPathNeedsOllamaVisionRuntime(files, image_settings)) {
+        EnsureImageVisionRuntimesNoLock(image_settings);
+    }
+
+    for (const auto& file : files) {
+        RagFileIngestionSource source;
+        source.source_path = file;
+        source.original_source_uri = WideToUtf8(std::filesystem::absolute(file).wstring());
+        source.display_name = WideToUtf8(file.filename().wstring());
+        source.metadata_json = DirectFileMetadata(file);
+        IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, embedding_provider.get(), result);
+    }
+
+    SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
+    result.success = result.errors.empty();
+    return result;
+}
+
+RagIngestionResult RagService::IngestFolder(const std::string& rag_id, const std::filesystem::path& folder, bool recursive) {
+    RagIngestionResult result;
+    if (!std::filesystem::exists(folder) || !std::filesystem::is_directory(folder)) {
+        result.errors.push_back(folder.string() + ": folder does not exist.");
+        return result;
+    }
+
+    std::vector<RagFileIngestionSource> sources;
+    try {
+        if (recursive) {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(folder)) {
+                if (entry.is_regular_file()) {
+                    if (IsSupportedTextExtension(entry.path())) {
+                        RagFileIngestionSource source;
+                        source.source_path = entry.path();
+                        source.original_source_uri = WideToUtf8(std::filesystem::absolute(entry.path()).wstring());
+                        source.display_name = WideToUtf8(entry.path().filename().wstring());
+                        source.metadata_json = FolderFileMetadata(folder, entry.path(), recursive);
+                        sources.push_back(std::move(source));
+                    } else {
+                        ++result.files_skipped;
+                    }
+                }
+            }
+        } else {
+            for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+                if (entry.is_regular_file()) {
+                    if (IsSupportedTextExtension(entry.path())) {
+                        RagFileIngestionSource source;
+                        source.source_path = entry.path();
+                        source.original_source_uri = WideToUtf8(std::filesystem::absolute(entry.path()).wstring());
+                        source.display_name = WideToUtf8(entry.path().filename().wstring());
+                        source.metadata_json = FolderFileMetadata(folder, entry.path(), recursive);
+                        sources.push_back(std::move(source));
+                    } else {
+                        ++result.files_skipped;
+                    }
+                }
+            }
+        }
+    } catch (const std::exception& ex) {
+        result.errors.push_back(folder.string() + ": " + ex.what());
+        return result;
+    }
+
+    if (sources.empty()) {
+        result.success = true;
+        return result;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        result.errors.push_back("RAG library not found.");
+        return result;
+    }
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const std::filesystem::path library_path = LibraryPath(rag_id);
+    auto db = OpenDatabase(library_path / "rag.sqlite");
+    EnsureRagDatabase(db.get());
+    std::unique_ptr<IRagEmbeddingProvider> embedding_provider;
+    try {
+        EnsureEmbeddingRuntimeNoLock(library);
+        embedding_provider = CreateEmbeddingProvider(library);
+    } catch (const std::exception& ex) {
+        result.errors.push_back(ex.what());
+        return result;
+    }
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
+    if (std::any_of(sources.begin(), sources.end(), [](const RagFileIngestionSource& source) {
+        return IsImageExtension(source.source_path);
+    })) {
+        EnsureImageVisionRuntimesNoLock(image_settings);
+    }
+
+    for (const auto& source : sources) {
+        IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, embedding_provider.get(), result);
+    }
+    SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
+    result.success = result.errors.empty();
+    return result;
+}
+
+RagIngestionResult RagService::IngestGeneratedDocument(const std::string& rag_id, const std::string& title, const std::string& content, const std::string& metadata_json, const std::string& source_uri) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagIngestionResult result;
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        result.errors.push_back("RAG library not found.");
+        return result;
+    }
+    if (Trim(content).empty()) {
+        result.errors.push_back("Generated document content is empty.");
+        return result;
+    }
+
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const std::filesystem::path library_path = LibraryPath(rag_id);
+    auto db = OpenDatabase(library_path / "rag.sqlite");
+    EnsureRagDatabase(db.get());
+
+    std::unique_ptr<IRagEmbeddingProvider> embedding_provider;
+    try {
+        EnsureEmbeddingRuntimeNoLock(library);
+        embedding_provider = CreateEmbeddingProvider(library);
+    } catch (const std::exception& ex) {
+        result.errors.push_back(ex.what());
+        return result;
+    }
+
+    const std::string generated_id = MakeId("generated");
+    const std::string display_name = Trim(title).empty() ? "Generated document" : Trim(title);
+    const std::filesystem::path generated_dir = library_path / "documents" / "generated_sources";
+    const std::filesystem::path generated_path = generated_dir / (SafeFolderName(display_name) + L"_" + Utf8ToWide(generated_id) + L".md");
+    try {
+        std::filesystem::create_directories(generated_dir);
+        std::ofstream output(generated_path, std::ios::binary | std::ios::trunc);
+        if (!output.is_open()) {
+            result.errors.push_back("Could not write generated document into the RAG store.");
+            return result;
+        }
+        output << content;
+    } catch (const std::exception& ex) {
+        result.errors.push_back(std::string("Could not save generated document: ") + ex.what());
+        return result;
+    } catch (...) {
+        result.errors.push_back("Could not save generated document: unexpected error.");
+        return result;
+    }
+
+    json metadata = json::object();
+    try {
+        if (!Trim(metadata_json).empty()) {
+            metadata = json::parse(metadata_json);
+            if (!metadata.is_object()) {
+                metadata = json::object();
+            }
+        }
+    } catch (...) {
+        metadata = json::object();
+    }
+    metadata["ingest_source"] = "rag_tool_generated_document";
+    metadata["generated_at"] = CurrentTimestampUtc();
+    metadata["source_absolute_path"] = WideToUtf8(std::filesystem::absolute(generated_path).wstring());
+    metadata["generated_document_id"] = generated_id;
+
+    RagFileIngestionSource source;
+    source.source_path = generated_path;
+    source.original_source_uri = Trim(source_uri).empty() ? ("generated://rag-tool/" + generated_id) : Trim(source_uri);
+    source.display_name = display_name;
+    source.metadata_json = metadata.dump();
+    IngestOneSourceNoLock(db.get(), library, library_path, source, false, LoadImageIngestSettingsNoLock(), embedding_provider.get(), result);
+    if (library.vector_backend == "hnswlib") {
+        SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
+    }
+    result.success = result.errors.empty();
+    return result;
+}
+
+RagIngestionResult RagService::RebuildLibrary(const std::string& rag_id, std::function<void(const RagProgressUpdate&)> progress) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagIngestionResult result;
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        result.errors.push_back("RAG library not found.");
+        return result;
+    }
+
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const std::filesystem::path library_path = LibraryPath(rag_id);
+    auto db = OpenDatabase(library_path / "rag.sqlite");
+    EnsureRagDatabase(db.get());
+    std::unique_ptr<IRagEmbeddingProvider> embedding_provider;
+    try {
+        EnsureEmbeddingRuntimeNoLock(library);
+        embedding_provider = CreateEmbeddingProvider(library);
+    } catch (const std::exception& ex) {
+        result.errors.push_back(ex.what());
+        return result;
+    }
+    const RagImageIngestSettings image_settings = LoadImageIngestSettingsNoLock();
+
+    const std::vector<RagDocumentRecord> documents = LoadActiveDocuments(db.get());
+    std::vector<RagFileIngestionSource> sources;
+    sources.reserve(documents.size());
+    for (const auto& document : documents) {
+        RagFileIngestionSource source;
+        source.source_path = ResolveRebuildSourcePath(library_path, document);
+        source.original_source_uri = document.original_source_uri;
+        source.display_name = document.display_name;
+        source.metadata_json = document.metadata_json;
+        sources.push_back(std::move(source));
+    }
+    if (std::any_of(sources.begin(), sources.end(), [](const RagFileIngestionSource& source) {
+        return IsImageExtension(source.source_path);
+    })) {
+        EnsureImageVisionRuntimesNoLock(image_settings);
+    }
+
+    auto publish = [&](int processed, const std::string& stage, const std::string& current_item) {
+        if (!progress) {
+            return;
+        }
+        RagProgressUpdate update;
+        update.total_items = static_cast<int>(sources.size());
+        update.processed_items = processed;
+        update.stage = stage;
+        update.current_item = current_item;
+        progress(update);
+    };
+
+    // Invalidate the HNSW cache so a full rebuild starts fresh.
+    if (library.vector_backend == "hnswlib") {
+        InvalidateHnswHandle(rag_id);
+    }
+
+    publish(0, "Clearing database", "");
+    try {
+        ClearRagDatabaseForRebuild(db.get());
+    } catch (const std::exception& ex) {
+        result.errors.push_back(std::string("Could not clear RAG database: ") + ex.what());
+        return result;
+    } catch (...) {
+        result.errors.push_back("Could not clear RAG database: unexpected error.");
+        return result;
+    }
+
+    int processed = 0;
+    for (const auto& source : sources) {
+        publish(processed, "Re-ingesting", source.display_name);
+        IngestOneSourceNoLock(db.get(), library, library_path, source, false, image_settings, embedding_provider.get(), result);
+        ++processed;
+        publish(processed, "Re-ingested", source.display_name);
+    }
+
+    try {
+        ExecSql(db.get(), "INSERT INTO chunks_fts(chunks_fts) VALUES('optimize');");
+    } catch (...) {
+    }
+
+    if (result.errors.empty()) {
+        RagLibraryConfig rebuilt = library;
+        rebuilt.storage_path = WideToUtf8(std::filesystem::absolute(library_path).wstring());
+        rebuilt.rebuild_required = false;
+        rebuilt.rebuild_reason.clear();
+        rebuilt.updated_at = CurrentTimestampUtc();
+        SaveJsonFile(library_path / "rag.json", RagLibraryToJson(rebuilt));
+    }
+
+    if (library.vector_backend == "hnswlib") {
+        SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
+    }
+
+    publish(processed, "Rebuild complete", "");
+    result.success = result.errors.empty();
+    return result;
+}
+
+std::vector<RagQueryResult> RagService::QueryRag(const std::string& rag_id, const std::string& query, int max_results) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        return {};
+    }
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    if (!library.enabled) {
+        return {};
+    }
+
+    const int limit = std::max(1, max_results);
+    const std::string fts_query = BuildFtsQuery(query);
+    std::map<std::string, RagQueryResult> merged;
+
+    auto add_result = [&](RagQueryResult result) {
+        const auto it = merged.find(result.chunk_id);
+        if (it == merged.end()) {
+            merged.emplace(result.chunk_id, std::move(result));
+            return;
+        }
+        it->second.score += result.score;
+        if (it->second.retrieval_method != result.retrieval_method) {
+            it->second.retrieval_method = "hybrid_vector_fts";
+        }
+    };
+
+    try {
+        auto db = OpenDatabase(LibraryPath(rag_id) / "rag.sqlite");
+        EnsureRagDatabase(db.get());
+
+        bool vector_available = false;
+        try {
+            EnsureEmbeddingRuntimeNoLock(library);
+            std::unique_ptr<IRagEmbeddingProvider> embedding_provider = CreateEmbeddingProvider(library);
+            if (embedding_provider) {
+                const auto query_embeddings = embedding_provider->Embed({query});
+                if (!query_embeddings.empty() && !query_embeddings.front().empty()) {
+                    const std::vector<float>& query_vector = query_embeddings.front();
+                    const int dimensions = static_cast<int>(query_vector.size());
+                    std::vector<RagQueryResult> vector_results;
+
+                    if (library.vector_backend == "hnswlib") {
+                        // ---- HNSW path ----
+                        HnswHandle* hnsw = GetOrCreateHnswHandle(rag_id, static_cast<size_t>(dimensions));
+                        if (hnsw && hnsw->index && hnsw->index->getCurrentElementCount() > 0) {
+                            const size_t k = static_cast<size_t>(limit * 3);
+                            hnsw->index->setEf(std::max(size_t(50), k));
+                            auto knn = hnsw->index->searchKnn(query_vector.data(), k);
+
+                            // Collect chunk_ids and distances from the knn result (max-heap).
+                            std::vector<std::pair<float, std::string>> hits;
+                            hits.reserve(knn.size());
+                            while (!knn.empty()) {
+                                const auto [dist, lbl] = knn.top(); knn.pop();
+                                const auto it = hnsw->label_to_chunk.find(lbl);
+                                if (it != hnsw->label_to_chunk.end()) {
+                                    hits.push_back({dist, it->second});
+                                }
+                            }
+                            // Sort ascending by distance (nearest first).
+                            std::sort(hits.begin(), hits.end());
+
+                            // Batch-fetch metadata from SQLite for each matched chunk.
+                            for (const auto& [dist, chunk_id] : hits) {
+                                auto stmt = PrepareSql(db.get(),
+                                    "SELECT c.id, c.document_id, c.text, "
+                                    "COALESCE(d.display_name, c.document_id), "
+                                    "COALESCE(d.original_source_uri, ''), "
+                                    "COALESCE(d.metadata_json, ''), "
+                                    "COALESCE(d.last_indexed_at, '') "
+                                    "FROM chunks c "
+                                    "LEFT JOIN documents d ON d.id = c.document_id AND d.deleted = 0 "
+                                    "WHERE c.id = ?;");
+                                BindText(stmt.get(), 1, chunk_id);
+                                if (sqlite3_step(stmt.get()) != SQLITE_ROW) continue;
+                                const float cosine = 1.0f - dist;  // InnerProduct dist = 1 - cosine
+                                if (cosine <= 0.0f) continue;
+                                RagQueryResult result;
+                                result.rag_id         = rag_id;
+                                result.rag_name       = library.name;
+                                result.chunk_id       = ColumnText(stmt.get(), 0);
+                                result.document_id    = ColumnText(stmt.get(), 1);
+                                result.text           = ColumnText(stmt.get(), 2);
+                                result.document_title = ColumnText(stmt.get(), 3);
+                                result.source_path    = ColumnText(stmt.get(), 4);
+                                result.metadata_json  = ColumnText(stmt.get(), 5);
+                                result.last_indexed_at = ColumnText(stmt.get(), 6);
+                                result.retrieval_method = "vector";
+                                result.score          = static_cast<double>(cosine) * 0.70;
+                                vector_results.push_back(std::move(result));
+                            }
+                        }
+                    } else {
+                        // ---- SQLite full-scan path (default: sqlite_vector_scan) ----
+                        auto statement = PrepareSql(db.get(),
+                            "SELECT c.id, c.document_id, c.text, "
+                            "COALESCE(d.display_name, c.document_id), COALESCE(d.original_source_uri, ''), "
+                            "COALESCE(d.metadata_json, ''), COALESCE(d.last_indexed_at, ''), "
+                            "e.vector_blob "
+                            "FROM embeddings e "
+                            "JOIN chunks c ON c.id = e.chunk_id "
+                            "LEFT JOIN documents d ON d.id = c.document_id AND d.deleted = 0 "
+                            "WHERE e.provider = ? AND e.model = ? AND e.dimensions = ?;");
+                        BindText(statement.get(), 1, embedding_provider->ProviderId());
+                        BindText(statement.get(), 2, embedding_provider->ModelId());
+                        sqlite3_bind_int(statement.get(), 3, dimensions);
+
+                        int rc = SQLITE_OK;
+                        while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+                            const void* blob       = sqlite3_column_blob(statement.get(), 7);
+                            const int   blob_bytes = sqlite3_column_bytes(statement.get(), 7);
+                            const std::vector<float> chunk_vector = DeserializeVector(blob, blob_bytes);
+                            const double similarity = CosineSimilarity(query_vector, chunk_vector);
+                            if (similarity <= 0.0) continue;
+                            RagQueryResult result;
+                            result.rag_id         = rag_id;
+                            result.rag_name       = library.name;
+                            result.chunk_id       = ColumnText(statement.get(), 0);
+                            result.document_id    = ColumnText(statement.get(), 1);
+                            result.text           = ColumnText(statement.get(), 2);
+                            result.document_title = ColumnText(statement.get(), 3);
+                            result.source_path    = ColumnText(statement.get(), 4);
+                            result.metadata_json  = ColumnText(statement.get(), 5);
+                            result.last_indexed_at = ColumnText(statement.get(), 6);
+                            result.retrieval_method = "vector";
+                            result.score          = similarity * 0.70;
+                            vector_results.push_back(std::move(result));
+                        }
+                        if (rc != SQLITE_DONE) {
+                            ThrowSqlite(db.get(), "Could not query RAG vectors");
+                        }
+                    }
+
+                    std::sort(vector_results.begin(), vector_results.end(),
+                        [](const RagQueryResult& l, const RagQueryResult& r) {
+                            return l.score > r.score;
+                        });
+                    if (vector_results.size() > static_cast<size_t>(limit * 3)) {
+                        vector_results.resize(static_cast<size_t>(limit * 3));
+                    }
+                    vector_available = !vector_results.empty();
+                    for (auto& result : vector_results) {
+                        add_result(std::move(result));
+                    }
+                }
+            }
+        } catch (...) {
+            vector_available = false;
+        }
+
+        if (!fts_query.empty()) {
+            auto statement = PrepareSql(db.get(),
+                "SELECT chunks_fts.chunk_id, chunks_fts.document_id, c.text, "
+                "COALESCE(d.display_name, c.document_id), COALESCE(d.original_source_uri, ''), "
+                "COALESCE(d.metadata_json, ''), COALESCE(d.last_indexed_at, ''), bm25(chunks_fts) "
+                "FROM chunks_fts "
+                "JOIN chunks c ON c.id = chunks_fts.chunk_id "
+                "LEFT JOIN documents d ON d.id = c.document_id AND d.deleted = 0 "
+                "WHERE chunks_fts MATCH ? "
+                "ORDER BY bm25(chunks_fts) "
+                "LIMIT ?;");
+            BindText(statement.get(), 1, fts_query);
+            sqlite3_bind_int(statement.get(), 2, vector_available ? limit * 3 : limit);
+
+            int row = 0;
+            while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+                RagQueryResult result;
+                result.rag_id = rag_id;
+                result.rag_name = library.name;
+                result.chunk_id = ColumnText(statement.get(), 0);
+                result.document_id = ColumnText(statement.get(), 1);
+                result.text = ColumnText(statement.get(), 2);
+                result.document_title = ColumnText(statement.get(), 3);
+                result.source_path = ColumnText(statement.get(), 4);
+                result.metadata_json = ColumnText(statement.get(), 5);
+                result.last_indexed_at = ColumnText(statement.get(), 6);
+                result.retrieval_method = "sqlite_fts";
+                const double rank_score = 1.0 / static_cast<double>(row + 1);
+                result.score = rank_score * (vector_available ? 0.30 : 1.0);
+                add_result(std::move(result));
+                ++row;
+            }
+        }
+
+        if (merged.empty()) {
+            const auto query_terms = TokenizeForSearch(query);
+            auto statement = PrepareSql(db.get(),
+                "SELECT c.id, c.document_id, c.text, c.content_hash, c.chunk_index, c.token_estimate, c.metadata_json, "
+                "COALESCE(d.display_name, c.document_id), COALESCE(d.original_source_uri, ''), "
+                "COALESCE(d.metadata_json, ''), COALESCE(d.last_indexed_at, '') "
+                "FROM chunks c "
+                "LEFT JOIN documents d ON d.id = c.document_id AND d.deleted = 0;");
+            while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+                RagChunkRecord chunk;
+                chunk.id = ColumnText(statement.get(), 0);
+                chunk.document_id = ColumnText(statement.get(), 1);
+                chunk.rag_id = rag_id;
+                chunk.text = ColumnText(statement.get(), 2);
+                chunk.content_hash = ColumnText(statement.get(), 3);
+                chunk.chunk_index = sqlite3_column_int(statement.get(), 4);
+                chunk.token_estimate = sqlite3_column_int(statement.get(), 5);
+                chunk.metadata_json = ColumnText(statement.get(), 6);
+
+                RagDocumentRecord document;
+                document.id = chunk.document_id;
+                document.display_name = ColumnText(statement.get(), 7);
+                document.original_source_uri = ColumnText(statement.get(), 8);
+                document.metadata_json = ColumnText(statement.get(), 9);
+                document.last_indexed_at = ColumnText(statement.get(), 10);
+                const double score = ScoreChunk(query_terms, chunk, &document);
+                if (score <= 0.0) {
+                    continue;
+                }
+
+                RagQueryResult result;
+                result.rag_id = rag_id;
+                result.rag_name = library.name;
+                result.document_id = chunk.document_id;
+                result.document_title = document.display_name.empty() ? chunk.document_id : document.display_name;
+                result.source_path = document.original_source_uri;
+                result.chunk_id = chunk.id;
+                result.text = chunk.text;
+                result.metadata_json = document.metadata_json;
+                result.last_indexed_at = document.last_indexed_at;
+                result.retrieval_method = "keyword_scan";
+                result.score = score;
+                add_result(std::move(result));
+            }
+        }
+    } catch (...) {
+        return {};
+    }
+
+    std::vector<RagQueryResult> results;
+    results.reserve(merged.size());
+    for (auto& item : merged) {
+        results.push_back(std::move(item.second));
+    }
+    std::sort(results.begin(), results.end(), [](const RagQueryResult& left, const RagQueryResult& right) {
+        return left.score > right.score;
+    });
+    if (results.size() > static_cast<size_t>(limit)) {
+        results.resize(static_cast<size_t>(limit));
+    }
+    return results;
+}
+
+std::vector<RagQueryResult> RagService::QueryProject(const std::string& project_id, const std::string& query, int global_max_results) const {
+    std::vector<ProjectRagBinding> bindings = LoadProjectBindings(project_id);
+    std::sort(bindings.begin(), bindings.end(), [](const ProjectRagBinding& left, const ProjectRagBinding& right) {
+        return left.retrieval_priority > right.retrieval_priority;
+    });
+
+    std::vector<RagQueryResult> all_results;
+    for (const auto& binding : bindings) {
+        if (!binding.enabled || !binding.can_read) {
+            continue;
+        }
+        // Skip bindings that are not configured for passive context injection
+        if (binding.retrieval_mode == RagRetrievalMode::ActiveToolOnly ||
+            binding.retrieval_mode == RagRetrievalMode::Disabled) {
+            continue;
+        }
+        double min_confidence = std::clamp(binding.default_min_confidence, 0.0, 1.0);
+        double max_confidence = std::clamp(binding.default_max_confidence, 0.0, 1.0);
+        if (min_confidence > max_confidence) {
+            std::swap(min_confidence, max_confidence);
+        }
+        auto results = QueryRag(binding.rag_id, query, binding.max_chunks);
+        for (auto& result : results) {
+            const double confidence = std::clamp(result.score, 0.0, 1.0);
+            if (confidence >= min_confidence && confidence <= max_confidence) {
+                all_results.push_back(std::move(result));
+            }
+        }
+    }
+
+    std::sort(all_results.begin(), all_results.end(), [](const RagQueryResult& left, const RagQueryResult& right) {
+        return left.score > right.score;
+    });
+    if (global_max_results > 0 && all_results.size() > static_cast<size_t>(global_max_results)) {
+        all_results.resize(static_cast<size_t>(global_max_results));
+    }
+    return all_results;
+}
+
+// Rough token estimator: ~4 chars per token for English text.
+static size_t EstimateTokensRag(const std::string& text) {
+    return text.size() / 4 + 1;
+}
+
+std::string RagService::BuildContextBlock(const std::string& project_id, const std::string& query, int global_max_results, int max_token_budget) const {
+    if (project_id.empty() || Trim(query).empty()) {
+        return {};
+    }
+
+    const auto results = QueryProject(project_id, query, global_max_results);
+    if (results.empty()) {
+        return {};
+    }
+
+    // Header tokens (~30 tokens)
+    constexpr size_t kHeaderTokens = 30;
+    // Per-chunk header (~20 tokens)
+    constexpr size_t kChunkHeaderTokens = 20;
+
+    size_t tokens_used = kHeaderTokens;
+    const size_t budget = max_token_budget > 0 ? static_cast<size_t>(max_token_budget) : SIZE_MAX;
+
+    std::ostringstream stream;
+    stream << "Retrieved Project Knowledge:\n";
+    stream << "The following excerpts were retrieved from RAG libraries attached to this project. Use them when relevant and preserve their source labels when helpful.\n";
+
+    bool any_chunks = false;
+    for (const auto& result : results) {
+        const size_t chunk_tokens = kChunkHeaderTokens + EstimateTokensRag(result.text);
+        if (tokens_used + chunk_tokens > budget) {
+            break;
+        }
+        tokens_used += chunk_tokens;
+        any_chunks = true;
+        stream << "\n[RAG: " << result.rag_name
+               << " | Source: " << result.document_title
+               << " | Chunk: " << result.chunk_id
+               << " | Method: " << result.retrieval_method
+               << " | Score: " << result.score << "]\n";
+        if (!result.source_path.empty()) {
+            stream << "Source path: " << result.source_path << "\n";
+        }
+        if (!result.metadata_json.empty()) {
+            stream << "Source metadata: " << result.metadata_json << "\n";
+        }
+        stream << result.text << "\n";
+    }
+    return any_chunks ? stream.str() : std::string{};
+}
+
+// ===== Ingestion Job Persistence =====
+
+std::filesystem::path RagService::IngestionJobsPath() const {
+    return RagRoot() / "ingestion_jobs.json";
+}
+
+static std::string IngestionJobStatusToString(IngestionJobStatus status) {
+    switch (status) {
+        case IngestionJobStatus::Completed: return "completed";
+        case IngestionJobStatus::Failed:    return "failed";
+        default:                            return "running";
+    }
+}
+
+static IngestionJobStatus IngestionJobStatusFromString(const std::string& s) {
+    if (s == "completed") return IngestionJobStatus::Completed;
+    if (s == "failed")    return IngestionJobStatus::Failed;
+    return IngestionJobStatus::Running;
+}
+
+static json IngestionJobToJson(const IngestionJobRecord& job) {
+    json errors = json::array();
+    for (const auto& e : job.errors) { errors.push_back(e); }
+    return json{
+        {"id", job.id},
+        {"rag_id", job.rag_id},
+        {"rag_name", job.rag_name},
+        {"kind", job.kind},
+        {"source_description", job.source_description},
+        {"status", IngestionJobStatusToString(job.status)},
+        {"files_ingested", job.files_ingested},
+        {"files_skipped", job.files_skipped},
+        {"chunks_added", job.chunks_added},
+        {"errors", std::move(errors)},
+        {"started_at", job.started_at},
+        {"finished_at", job.finished_at},
+    };
+}
+
+static IngestionJobRecord IngestionJobFromJson(const json& item) {
+    IngestionJobRecord job;
+    job.id = item.value("id", "");
+    job.rag_id = item.value("rag_id", "");
+    job.rag_name = item.value("rag_name", "");
+    job.kind = item.value("kind", "");
+    job.source_description = item.value("source_description", "");
+    job.status = IngestionJobStatusFromString(item.value("status", "running"));
+    job.files_ingested = item.value("files_ingested", 0);
+    job.files_skipped = item.value("files_skipped", 0);
+    job.chunks_added = item.value("chunks_added", 0);
+    job.started_at = item.value("started_at", "");
+    job.finished_at = item.value("finished_at", "");
+    if (item.contains("errors") && item["errors"].is_array()) {
+        for (const auto& e : item["errors"]) {
+            if (e.is_string()) job.errors.push_back(e.get<std::string>());
+        }
+    }
+    return job;
+}
+
+IngestionJobRecord RagService::CreateIngestionJob(const std::string& rag_id, const std::string& kind, const std::string& source_description) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Resolve library name
+    std::string rag_name = rag_id;
+    try {
+        const auto registry = LoadRegistryNoLock();
+        for (const auto& [rid, path] : registry) {
+            if (rid == rag_id) {
+                // Attempt to get name from config
+                const auto config_path = path / "config.json";
+                std::ifstream f(config_path);
+                if (f.is_open()) {
+                    json cfg;
+                    f >> cfg;
+                    if (cfg.contains("name")) {
+                        rag_name = cfg["name"].get<std::string>();
+                    }
+                }
+                break;
+            }
+        }
+    } catch (...) {}
+
+    IngestionJobRecord job;
+    job.id = "job_" + rag_id.substr(0, 8) + "_" + std::to_string(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    job.rag_id = rag_id;
+    job.rag_name = rag_name;
+    job.kind = kind;
+    job.source_description = source_description;
+    job.status = IngestionJobStatus::Running;
+    job.started_at = [] {
+        std::time_t t = std::time(nullptr);
+        char buf[32]{};
+        std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", std::gmtime(&t));
+        return std::string(buf);
+    }();
+
+    // Append to jobs file
+    const auto path = IngestionJobsPath();
+    json data;
+    try {
+        std::ifstream f(path);
+        if (f.is_open()) f >> data;
+    } catch (...) {}
+    if (!data.contains("jobs") || !data["jobs"].is_array()) {
+        data["jobs"] = json::array();
+    }
+    data["jobs"].push_back(IngestionJobToJson(job));
+    std::filesystem::create_directories(RagRoot());
+    std::ofstream out(path);
+    out << data.dump(2);
+
+    return job;
+}
+
+void RagService::CompleteIngestionJob(const std::string& job_id, const RagIngestionResult& result) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const auto path = IngestionJobsPath();
+    json data;
+    try {
+        std::ifstream f(path);
+        if (f.is_open()) f >> data;
+    } catch (...) { return; }
+
+    if (!data.contains("jobs") || !data["jobs"].is_array()) return;
+
+    const std::string now = [] {
+        std::time_t t = std::time(nullptr);
+        char buf[32]{};
+        std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", std::gmtime(&t));
+        return std::string(buf);
+    }();
+
+    for (auto& item : data["jobs"]) {
+        if (item.value("id", "") == job_id) {
+            item["status"] = result.success ? "completed" : "failed";
+            item["files_ingested"] = result.files_ingested;
+            item["files_skipped"] = result.files_skipped;
+            item["chunks_added"] = result.chunks_added;
+            item["finished_at"] = now;
+            json errors = json::array();
+            for (const auto& e : result.errors) { errors.push_back(e); }
+            item["errors"] = std::move(errors);
+            break;
+        }
+    }
+
+    // Keep only the most recent 500 jobs
+    constexpr size_t kMaxJobs = 500;
+    if (data["jobs"].size() > kMaxJobs) {
+        data["jobs"].erase(data["jobs"].begin(), data["jobs"].begin() + (data["jobs"].size() - kMaxJobs));
+    }
+
+    std::ofstream out(path);
+    out << data.dump(2);
+}
+
+std::vector<IngestionJobRecord> RagService::ListIngestionJobs(int max_jobs) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto path = IngestionJobsPath();
+    json data;
+    try {
+        std::ifstream f(path);
+        if (!f.is_open()) return {};
+        f >> data;
+    } catch (...) { return {}; }
+
+    std::vector<IngestionJobRecord> jobs;
+    if (!data.contains("jobs") || !data["jobs"].is_array()) return {};
+    for (const auto& item : data["jobs"]) {
+        jobs.push_back(IngestionJobFromJson(item));
+    }
+    // Return most-recent first
+    std::reverse(jobs.begin(), jobs.end());
+    if (max_jobs > 0 && static_cast<int>(jobs.size()) > max_jobs) {
+        jobs.resize(static_cast<size_t>(max_jobs));
+    }
+    return jobs;
+}
+
+// ===========================================================================
+// HNSW backend — path helpers, cache management, sync, and chunk lookup
+// ===========================================================================
+
+std::filesystem::path RagService::HnswIndexPath(const std::string& rag_id) const {
+    return LibraryPath(rag_id) / "hnsw.bin";
+}
+
+std::filesystem::path RagService::HnswLabelsPath(const std::string& rag_id) const {
+    return LibraryPath(rag_id) / "hnsw_labels.bin";
+}
+
+// Load or create the HNSW handle for a library.  Must be called under mutex_.
+HnswHandle* RagService::GetOrCreateHnswHandle(const std::string& rag_id, size_t dims) const {
+    auto it = hnsw_cache_.find(rag_id);
+    if (it != hnsw_cache_.end()) {
+        return it->second.get();
+    }
+
+    auto state        = std::make_unique<HnswHandle>();
+    state->dims       = dims;
+    state->space      = std::make_unique<hnswlib::InnerProductSpace>(dims);
+    const auto idx_p  = HnswIndexPath(rag_id);
+    const auto lbl_p  = HnswLabelsPath(rag_id);
+
+    if (std::filesystem::exists(idx_p)) {
+        try {
+            state->index = std::make_unique<hnswlib::HierarchicalNSW<float>>(
+                state->space.get(), idx_p.string());
+        } catch (...) {
+            // Corrupted — start fresh.
+            state->index = std::make_unique<hnswlib::HierarchicalNSW<float>>(
+                state->space.get(), /*max_elements=*/50000u);
+        }
+        // Load label map from binary file.
+        if (std::filesystem::exists(lbl_p)) {
+            try {
+                std::ifstream lf(lbl_p, std::ios::binary);
+                if (lf.is_open()) {
+                    auto r32 = [&]() -> uint32_t {
+                        uint32_t v = 0; lf.read(reinterpret_cast<char*>(&v), 4); return v;
+                    };
+                    auto r64 = [&]() -> uint64_t {
+                        uint64_t v = 0; lf.read(reinterpret_cast<char*>(&v), 8); return v;
+                    };
+                    constexpr uint32_t kLblMagic = 0x484C424Cu;
+                    if (r32() == kLblMagic) {
+                        state->next_label = static_cast<hnswlib::labeltype>(r64());
+                        const uint64_t cnt = r64();
+                        for (uint64_t i = 0; i < cnt; ++i) {
+                            const hnswlib::labeltype lbl = static_cast<hnswlib::labeltype>(r64());
+                            const uint32_t len = r32();
+                            std::string chunk_id(len, '\0');
+                            lf.read(chunk_id.data(), static_cast<std::streamsize>(len));
+                            state->label_to_chunk[lbl]      = chunk_id;
+                            state->chunk_to_label[chunk_id] = lbl;
+                        }
+                    }
+                }
+            } catch (...) {}
+        }
+    } else {
+        state->index = std::make_unique<hnswlib::HierarchicalNSW<float>>(
+            state->space.get(), /*max_elements=*/50000u);
+    }
+
+    HnswHandle* ptr   = state.get();
+    hnsw_cache_[rag_id] = std::move(state);
+    return ptr;
+}
+
+// Save the HNSW index and label map to disk.  Must be called under mutex_.
+void RagService::SaveHnswHandle(const std::string& rag_id) const {
+    auto it = hnsw_cache_.find(rag_id);
+    if (it == hnsw_cache_.end()) return;
+    const HnswHandle* state = it->second.get();
+    if (!state || !state->index) return;
+
+    try {
+        state->index->saveIndex(HnswIndexPath(rag_id).string());
+    } catch (...) {}
+
+    try {
+        constexpr uint32_t kLblMagic = 0x484C424Cu;
+        std::ofstream lf(HnswLabelsPath(rag_id), std::ios::binary | std::ios::trunc);
+        if (!lf.is_open()) return;
+        auto w32 = [&](uint32_t v){ lf.write(reinterpret_cast<const char*>(&v), 4); };
+        auto w64 = [&](uint64_t v){ lf.write(reinterpret_cast<const char*>(&v), 8); };
+        w32(kLblMagic);
+        w64(static_cast<uint64_t>(state->next_label));
+        w64(static_cast<uint64_t>(state->label_to_chunk.size()));
+        for (const auto& [lbl, cid] : state->label_to_chunk) {
+            w64(static_cast<uint64_t>(lbl));
+            w32(static_cast<uint32_t>(cid.size()));
+            lf.write(cid.data(), static_cast<std::streamsize>(cid.size()));
+        }
+    } catch (...) {}
+}
+
+// Remove the cached handle and delete the on-disk files.  Must be called under mutex_.
+void RagService::InvalidateHnswHandle(const std::string& rag_id) const {
+    hnsw_cache_.erase(rag_id);
+    std::error_code ec;
+    std::filesystem::remove(HnswIndexPath(rag_id), ec);
+    std::filesystem::remove(HnswLabelsPath(rag_id), ec);
+}
+
+// Incrementally sync the HNSW index from SQLite: add new chunks and mark deleted
+// chunks.  Called after every ingest operation and after rebuild.
+// db must be a valid sqlite3* cast through void*.
+void RagService::SyncHnswIndex(const std::string& rag_id, void* raw_db,
+                                const RagLibraryConfig& library,
+                                void* raw_provider) const {
+    if (library.vector_backend != "hnswlib") return;
+    if (!raw_provider) return;
+    const IRagEmbeddingProvider* provider = static_cast<const IRagEmbeddingProvider*>(raw_provider);
+    const int dims_int = library.embedding_dimensions;
+    if (dims_int <= 0) return;
+    const size_t dims = static_cast<size_t>(dims_int);
+    sqlite3* db = static_cast<sqlite3*>(raw_db);
+
+    HnswHandle* state = GetOrCreateHnswHandle(rag_id, dims);
+    if (!state || !state->index) return;
+
+    // Collect all chunk IDs currently in SQLite for this library.
+    std::unordered_set<std::string> live_chunk_ids;
+    {
+        auto stmt = PrepareSql(db, "SELECT id FROM chunks WHERE rag_id = ?;");
+        BindText(stmt.get(), 1, rag_id);
+        while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+            live_chunk_ids.insert(ColumnText(stmt.get(), 0));
+        }
+    }
+
+    // Mark deleted: chunks in label map that are no longer in SQLite.
+    for (const auto& [cid, lbl] : state->chunk_to_label) {
+        if (!live_chunk_ids.count(cid)) {
+            state->index->markDelete(lbl);
+        }
+    }
+
+    // Add new chunks: embeddings in SQLite not yet in the label map.
+    try {
+        auto stmt = PrepareSql(db,
+            "SELECT e.chunk_id, e.vector_blob FROM embeddings e "
+            "WHERE e.provider = ? AND e.model = ? AND e.dimensions = ?;");
+        BindText(stmt.get(), 1, provider->ProviderId());
+        BindText(stmt.get(), 2, provider->ModelId());
+        sqlite3_bind_int(stmt.get(), 3, dims_int);
+
+        while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+            const std::string chunk_id = ColumnText(stmt.get(), 0);
+            if (state->chunk_to_label.count(chunk_id)) continue;  // already indexed
+
+            const void* blob      = sqlite3_column_blob(stmt.get(), 1);
+            const int   blob_bytes = sqlite3_column_bytes(stmt.get(), 1);
+            if (!blob || blob_bytes <= 0) continue;
+            const std::vector<float> vec = DeserializeVector(blob, blob_bytes);
+            if (vec.size() != dims) continue;
+
+            // Auto-resize index if needed.
+            if (state->index->getCurrentElementCount() + 1 >
+                state->index->getMaxElements()) {
+                state->index->resizeIndex(state->index->getMaxElements() * 2 + 1024);
+            }
+
+            const hnswlib::labeltype lbl = state->next_label++;
+            state->chunk_to_label[chunk_id] = lbl;
+            state->label_to_chunk[lbl]      = chunk_id;
+            state->index->addPoint(vec.data(), lbl);
+        }
+    } catch (...) {}
+
+    SaveHnswHandle(rag_id);
+}
+
+// ============================================================================
+// .rag archive format  (version 2)
+//
+// Series files are named  <base>-001.rag, <base>-002.rag, ...
+// All integers are little-endian.
+//
+// Per-series file header:
+//   char[4]   magic = {'R','A','G',0x02}
+//   uint32_t  series_index   (1-based)
+//   uint32_t  series_total   (written as 0, back-patched after all series done)
+//   uint32_t  rag_id_len
+//   char[N]   rag_id
+//   uint32_t  rag_name_len
+//   char[M]   rag_name
+//   uint32_t  total_files    (total source files across ALL series)
+//   uint64_t  total_uncomp   (total source bytes across ALL series)
+//
+// Per-entry:
+//   uint8_t   entry_flag     (0x01 = entry, 0x00 = end-of-series)
+//   uint32_t  path_len
+//   char[N]   rel_path       (relative path, forward slashes)
+//   uint64_t  uncomp_size
+//   uint8_t   comp_flag      (0x01 = LZMS compressed, 0x00 = stored verbatim)
+//   uint64_t  stored_size
+//   uint8_t[] data           (stored_size bytes)
+// ============================================================================
+
+namespace {
+
+static const char kRagMagic[4] = {'R', 'A', 'G', '\x02'};
+static constexpr uint64_t kMaxSeriesBytes = 500ULL * 1024 * 1024;  // 500 MB
+// Byte offset of series_total field inside the per-series header.
+static constexpr std::streamoff kSeriesTotalOffset = 8;
+
+void RagWriteU8(std::ostream& o, uint8_t v)  { o.write(reinterpret_cast<const char*>(&v), 1); }
+void RagWriteU32(std::ostream& o, uint32_t v) { o.write(reinterpret_cast<const char*>(&v), 4); }
+void RagWriteU64(std::ostream& o, uint64_t v) { o.write(reinterpret_cast<const char*>(&v), 8); }
+void RagWriteStr(std::ostream& o, const std::string& s) {
+    RagWriteU32(o, static_cast<uint32_t>(s.size()));
+    o.write(s.data(), static_cast<std::streamsize>(s.size()));
+}
+
+bool RagReadU8(std::istream& i, uint8_t& v)  { return static_cast<bool>(i.read(reinterpret_cast<char*>(&v), 1)); }
+bool RagReadU32(std::istream& i, uint32_t& v) { return static_cast<bool>(i.read(reinterpret_cast<char*>(&v), 4)); }
+bool RagReadU64(std::istream& i, uint64_t& v) { return static_cast<bool>(i.read(reinterpret_cast<char*>(&v), 8)); }
+bool RagReadStr(std::istream& i, std::string& s) {
+    uint32_t len = 0;
+    if (!RagReadU32(i, len)) return false;
+    if (len > 65535) return false;
+    s.resize(len);
+    return static_cast<bool>(i.read(s.data(), static_cast<std::streamsize>(len)));
+}
+
+// Compress data with Windows LZMS.  Returns {compressed_bytes, true} on success,
+// or {original_data, false} if compression fails or expands the data.
+std::pair<std::vector<uint8_t>, bool> RagCompress(const uint8_t* data, size_t size) {
+    if (size == 0) return {{}, true};
+    COMPRESSOR_HANDLE h = nullptr;
+    if (!CreateCompressor(COMPRESS_ALGORITHM_LZMS | COMPRESS_RAW, nullptr, &h)) {
+        return {std::vector<uint8_t>(data, data + size), false};
+    }
+    // First call with null output to determine required buffer size.
+    SIZE_T needed = 0;
+    Compress(h, data, size, nullptr, 0, &needed);
+    if (needed == 0) {
+        CloseCompressor(h);
+        return {std::vector<uint8_t>(data, data + size), false};
+    }
+    std::vector<uint8_t> out(needed);
+    SIZE_T written = 0;
+    const BOOL ok = Compress(h, data, size, out.data(), needed, &written);
+    CloseCompressor(h);
+    if (!ok || written == 0 || written >= size) {
+        return {std::vector<uint8_t>(data, data + size), false};
+    }
+    out.resize(written);
+    return {std::move(out), true};
+}
+
+// Decompress LZMS data.  orig_size must match the original uncompressed size.
+std::vector<uint8_t> RagDecompress(const uint8_t* data, size_t size, uint64_t orig_size) {
+    DECOMPRESSOR_HANDLE h = nullptr;
+    if (!CreateDecompressor(COMPRESS_ALGORITHM_LZMS | COMPRESS_RAW, nullptr, &h)) return {};
+    std::vector<uint8_t> out(static_cast<size_t>(orig_size));
+    SIZE_T written = 0;
+    const BOOL ok = Decompress(h, data, size, out.data(), out.size(), &written);
+    CloseDecompressor(h);
+    if (!ok || written != static_cast<SIZE_T>(orig_size)) return {};
+    return out;
+}
+
+// Enumerate all regular files under root, returning paths relative to root
+// using forward slashes. rag.json is first, rag.sqlite second, then the rest.
+std::vector<std::filesystem::path> EnumerateLibraryFiles(const std::filesystem::path& root) {
+    std::vector<std::filesystem::path> all;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root, ec)) {
+        if (entry.is_regular_file(ec)) {
+            all.push_back(entry.path());
+        }
+    }
+    // Sort with rag.json first, rag.sqlite second, rest alphabetically.
+    std::sort(all.begin(), all.end(), [&](const auto& a, const auto& b) {
+        const std::string an = a.filename().string();
+        const std::string bn = b.filename().string();
+        const int pa = (an == "rag.json") ? 0 : (an == "rag.sqlite") ? 1 : 2;
+        const int pb = (bn == "rag.json") ? 0 : (bn == "rag.sqlite") ? 1 : 2;
+        if (pa != pb) return pa < pb;
+        return a.wstring() < b.wstring();
+    });
+    return all;
+}
+
+// Convert a filesystem path to a forward-slash relative path string.
+std::string RelativePath(const std::filesystem::path& root, const std::filesystem::path& file) {
+    const std::wstring rel = std::filesystem::relative(file, root).wstring();
+    std::string out;
+    out.reserve(rel.size());
+    for (const wchar_t c : rel) {
+        out += (c == L'\\') ? '/' : static_cast<char>(c);
+    }
+    return out;
+}
+
+// Derive the Nth series file path from the first file's path.
+std::filesystem::path SeriesFilePath(const std::filesystem::path& first, uint32_t index) {
+    const std::string stem = first.stem().string();  // e.g. "mylib-001"
+    const auto dash = stem.rfind('-');
+    const std::string base = (dash != std::string::npos) ? stem.substr(0, dash) : stem;
+    std::ostringstream name;
+    name << base << '-' << std::setw(3) << std::setfill('0') << index << ".rag";
+    return first.parent_path() / name.str();
+}
+
+void WriteSeriesHeader(std::fstream& f, uint32_t series_index, uint32_t series_total,
+                       const std::string& rag_id, const std::string& rag_name,
+                       uint32_t total_files, uint64_t total_uncomp) {
+    f.write(kRagMagic, 4);
+    RagWriteU32(f, series_index);
+    RagWriteU32(f, series_total);
+    RagWriteStr(f, rag_id);
+    RagWriteStr(f, rag_name);
+    RagWriteU32(f, total_files);
+    RagWriteU64(f, total_uncomp);
+}
+
+}  // namespace
+
+// -----------------------------------------------------------------------------
+// ReattachLibrary
+// -----------------------------------------------------------------------------
+bool RagService::ReattachLibrary(const std::filesystem::path& library_path,
+                                  std::string* error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::filesystem::path config_path = library_path / "rag.json";
+    std::error_code ec;
+    if (!std::filesystem::exists(config_path, ec)) {
+        if (error) *error = "No rag.json found in the selected folder.";
+        return false;
+    }
+    const json library_json = LoadJsonFile(config_path, json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        if (error) *error = "Could not read rag.json — file may be corrupt.";
+        return false;
+    }
+    const std::string rag_id = library_json.value("id", "");
+    if (rag_id.empty()) {
+        if (error) *error = "rag.json does not contain a valid library ID.";
+        return false;
+    }
+    // Check if already registered.
+    for (const auto& [id, path] : LoadRegistryNoLock()) {
+        if (id == rag_id) {
+            if (error) *error = "This RAG library is already registered in the system.";
+            return false;
+        }
+    }
+    UpsertRegistryNoLock(rag_id, std::filesystem::absolute(library_path));
+    return true;
+}
+
+// -----------------------------------------------------------------------------
+// ExportLibrary
+// -----------------------------------------------------------------------------
+RagExportResult RagService::ExportLibrary(
+        const std::string& rag_id,
+        const std::filesystem::path& output_dir,
+        const std::string& base_filename,
+        std::function<void(int, int, const std::string&)> progress) const {
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagExportResult result;
+
+    const json library_json = LoadJsonFile(LibraryConfigPath(rag_id), json::object());
+    if (!library_json.is_object() || library_json.empty()) {
+        result.error = "RAG library not found.";
+        return result;
+    }
+    const RagLibraryConfig library = RagLibraryFromJson(library_json, rag_id);
+    const std::filesystem::path library_path = LibraryPath(rag_id);
+
+    // Enumerate all files to export.
+    const std::vector<std::filesystem::path> files = EnumerateLibraryFiles(library_path);
+    if (files.empty()) {
+        result.error = "Library folder contains no files.";
+        return result;
+    }
+
+    // Compute total uncompressed size.
+    uint64_t total_uncomp = 0;
+    std::error_code ec;
+    for (const auto& f : files) {
+        total_uncomp += static_cast<uint64_t>(std::filesystem::file_size(f, ec));
+    }
+
+    const int total_files = static_cast<int>(files.size());
+    std::filesystem::create_directories(output_dir, ec);
+
+    uint32_t series_index = 1;
+    uint64_t current_series_bytes = 0;
+    std::vector<std::filesystem::path> series_paths;
+    std::unique_ptr<std::fstream> current_file;
+
+    auto open_series = [&]() {
+        std::ostringstream name;
+        name << base_filename << '-' << std::setw(3) << std::setfill('0') << series_index << ".rag";
+        const std::filesystem::path series_path = output_dir / name.str();
+        series_paths.push_back(series_path);
+        current_file = std::make_unique<std::fstream>(
+            series_path, std::ios::binary | std::ios::out | std::ios::trunc | std::ios::in);
+        WriteSeriesHeader(*current_file, series_index, 0 /*placeholder*/,
+                          rag_id, library.name,
+                          static_cast<uint32_t>(total_files), total_uncomp);
+        current_series_bytes = static_cast<uint64_t>(current_file->tellp());
+    };
+
+    auto close_series = [&]() {
+        if (!current_file) return;
+        RagWriteU8(*current_file, 0x00);  // end-of-series marker
+        result.total_compressed += static_cast<uint64_t>(current_file->tellp());
+        current_file->flush();
+        current_file.reset();
+    };
+
+    open_series();
+
+    for (int i = 0; i < total_files; ++i) {
+        const auto& src = files[i];
+        const std::string rel = RelativePath(library_path, src);
+        if (progress) progress(i, total_files, rel);
+
+        // Read source file.
+        const uint64_t uncomp_size = static_cast<uint64_t>(std::filesystem::file_size(src, ec));
+        std::ifstream fin(src, std::ios::binary);
+        if (!fin.is_open()) {
+            result.error = "Could not read: " + src.string();
+            return result;
+        }
+        std::vector<uint8_t> raw(static_cast<size_t>(uncomp_size));
+        fin.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(uncomp_size));
+        fin.close();
+
+        // Compress.
+        auto [data, is_compressed] = RagCompress(raw.data(), raw.size());
+        const uint64_t stored_size = static_cast<uint64_t>(data.size());
+
+        // Estimate entry overhead: 1 + 4 + rel.size() + 8 + 1 + 8 = 22 + rel.size()
+        const uint64_t entry_bytes = 22 + rel.size() + stored_size;
+
+        // If this would overflow the current series and it isn't empty, start a new one.
+        if (current_series_bytes > 0 && current_series_bytes + entry_bytes > kMaxSeriesBytes) {
+            close_series();
+            ++series_index;
+            current_series_bytes = 0;
+            open_series();
+        }
+
+        // Write entry.
+        RagWriteU8(*current_file, 0x01);
+        RagWriteStr(*current_file, rel);
+        RagWriteU64(*current_file, uncomp_size);
+        RagWriteU8(*current_file, is_compressed ? 0x01 : 0x00);
+        RagWriteU64(*current_file, stored_size);
+        current_file->write(reinterpret_cast<const char*>(data.data()),
+                             static_cast<std::streamsize>(stored_size));
+        current_series_bytes += entry_bytes;
+        result.total_uncompressed += uncomp_size;
+    }
+
+    close_series();
+
+    // Back-patch series_total in every series file.
+    const uint32_t series_total = static_cast<uint32_t>(series_paths.size());
+    for (const auto& sp : series_paths) {
+        std::fstream pf(sp, std::ios::binary | std::ios::in | std::ios::out);
+        if (pf.is_open()) {
+            pf.seekp(kSeriesTotalOffset);
+            RagWriteU32(pf, series_total);
+        }
+    }
+
+    result.series_count = static_cast<int>(series_paths.size());
+    for (const auto& sp : series_paths) {
+        result.output_files.push_back(sp.string());
+    }
+    if (progress) progress(total_files, total_files, "");
+    result.success = true;
+    return result;
+}
+
+// -----------------------------------------------------------------------------
+// ImportLibrary
+// -----------------------------------------------------------------------------
+RagImportResult RagService::ImportLibrary(
+        const std::filesystem::path& first_rag_file,
+        const std::filesystem::path& target_dir,
+        std::function<void(int, int, const std::string&)> progress) {
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    RagImportResult result;
+
+    // --- Read header from first series file ---
+    std::ifstream f0(first_rag_file, std::ios::binary);
+    if (!f0.is_open()) {
+        result.error = "Could not open: " + first_rag_file.string();
+        return result;
+    }
+    char magic[4]{};
+    f0.read(magic, 4);
+    if (std::memcmp(magic, kRagMagic, 4) != 0) {
+        result.error = "Not a valid .rag archive (bad magic).";
+        return result;
+    }
+    uint32_t series_index_check = 0, series_total = 0;
+    RagReadU32(f0, series_index_check);
+    RagReadU32(f0, series_total);
+    if (series_index_check != 1 || series_total == 0) {
+        result.error = "Invalid .rag header.";
+        return result;
+    }
+    std::string rag_id, rag_name;
+    uint32_t total_files_stored = 0;
+    uint64_t total_uncomp_stored = 0;
+    if (!RagReadStr(f0, rag_id) || !RagReadStr(f0, rag_name)) {
+        result.error = "Truncated .rag header.";
+        return result;
+    }
+    RagReadU32(f0, total_files_stored);
+    RagReadU64(f0, total_uncomp_stored);
+    f0.close();
+
+    if (rag_id.empty()) {
+        result.error = "Archive contains an invalid RAG ID.";
+        return result;
+    }
+
+    // Check not already registered.
+    for (const auto& [id, path] : LoadRegistryNoLock()) {
+        if (id == rag_id) {
+            result.error = "A RAG library with this ID is already registered.";
+            return result;
+        }
+    }
+
+    // Prepare destination directory: target_dir/<rag_id>/
+    std::error_code ec;
+    const std::filesystem::path dest = target_dir / rag_id;
+    std::filesystem::create_directories(dest, ec);
+    if (ec) {
+        result.error = "Could not create directory: " + dest.string();
+        return result;
+    }
+
+    // Collect all series file paths.
+    std::vector<std::filesystem::path> series_paths;
+    series_paths.push_back(first_rag_file);
+    for (uint32_t si = 2; si <= series_total; ++si) {
+        series_paths.push_back(SeriesFilePath(first_rag_file, si));
+    }
+
+    int files_done = 0;
+    const int total_files = static_cast<int>(total_files_stored);
+
+    // Process each series file.
+    for (uint32_t si = 0; si < static_cast<uint32_t>(series_paths.size()); ++si) {
+        std::ifstream fin(series_paths[si], std::ios::binary);
+        if (!fin.is_open()) {
+            result.error = "Could not open series file: " + series_paths[si].string();
+            return result;
+        }
+
+        // Skip header (re-read to advance stream position).
+        char hdr_magic[4]{};
+        fin.read(hdr_magic, 4);
+        uint32_t u32_skip = 0, u32_skip2 = 0;
+        RagReadU32(fin, u32_skip);  // series_index
+        RagReadU32(fin, u32_skip2); // series_total
+        std::string skip_str;
+        RagReadStr(fin, skip_str);  // rag_id
+        RagReadStr(fin, skip_str);  // rag_name
+        uint64_t u64_skip = 0;
+        RagReadU32(fin, u32_skip);  // total_files
+        RagReadU64(fin, u64_skip);  // total_uncomp
+
+        // Read entries.
+        while (fin.good()) {
+            uint8_t entry_flag = 0;
+            if (!RagReadU8(fin, entry_flag)) break;
+            if (entry_flag == 0x00) break;  // end-of-series
+            if (entry_flag != 0x01) {
+                result.error = "Corrupt archive: unexpected entry flag.";
+                return result;
+            }
+
+            std::string rel_path;
+            uint64_t uncomp_size = 0;
+            uint8_t comp_flag = 0;
+            uint64_t stored_size = 0;
+            if (!RagReadStr(fin, rel_path) || !RagReadU64(fin, uncomp_size) ||
+                !RagReadU8(fin, comp_flag) || !RagReadU64(fin, stored_size)) {
+                result.error = "Truncated archive entry.";
+                return result;
+            }
+
+            if (progress) progress(files_done, total_files, rel_path);
+
+            // Read stored data.
+            std::vector<uint8_t> stored(static_cast<size_t>(stored_size));
+            fin.read(reinterpret_cast<char*>(stored.data()),
+                     static_cast<std::streamsize>(stored_size));
+            if (!fin) {
+                result.error = "Unexpected end of archive while reading: " + rel_path;
+                return result;
+            }
+
+            // Decompress if needed.
+            std::vector<uint8_t> file_data;
+            if (comp_flag == 0x01) {
+                file_data = RagDecompress(stored.data(), stored.size(), uncomp_size);
+                if (file_data.empty() && uncomp_size > 0) {
+                    result.error = "Decompression failed for: " + rel_path;
+                    return result;
+                }
+            } else {
+                file_data = std::move(stored);
+            }
+
+            // Write file to destination.
+            // Convert forward-slash relative path to the OS path.
+            std::wstring wrel = Utf8ToWide(rel_path);
+            for (auto& c : wrel) {
+                if (c == L'/') c = std::filesystem::path::preferred_separator;
+            }
+            const std::filesystem::path dest_file = dest / wrel;
+            std::filesystem::create_directories(dest_file.parent_path(), ec);
+            std::ofstream fout(dest_file, std::ios::binary | std::ios::trunc);
+            if (!fout.is_open()) {
+                result.error = "Could not create: " + dest_file.string();
+                return result;
+            }
+            fout.write(reinterpret_cast<const char*>(file_data.data()),
+                       static_cast<std::streamsize>(file_data.size()));
+            fout.close();
+            ++files_done;
+        }
+    }
+
+    // Register the newly imported library.
+    UpsertRegistryNoLock(rag_id, dest);
+
+    if (progress) progress(files_done, total_files, "");
+    result.success = true;
+    result.rag_id = rag_id;
+    result.library_name = rag_name;
+    return result;
+}

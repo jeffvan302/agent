@@ -1,0 +1,97 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Default Light Theme — overrides CSS custom properties defined in base.css
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Backgrounds */
+  --color-bg-page:            #f5f7fa;
+  --color-bg-sidebar:         #1e2433;
+  --color-bg-sidebar-hover:   #2a3245;
+  --color-bg-sidebar-active:  #2563eb;
+  --color-bg-header:          #1e2433;
+  --color-bg-main:            #ffffff;
+  --color-bg-message-user:    #e8f0fe;
+  --color-bg-message-model:   #ffffff;
+  --color-bg-thinking:        #fffbeb;
+  --color-bg-tool-call:       #f3f4f6;
+  --color-bg-code:            #1e1e1e;
+  --color-bg-input:           #ffffff;
+  --color-bg-button-primary:  #2563eb;
+  --color-bg-button-hover:    #1d4ed8;
+  --color-bg-button-danger:   #dc2626;
+
+  /* Text */
+  --color-text-primary:       #111827;
+  --color-text-secondary:     #4b5563;
+  --color-text-muted:         #9ca3af;
+  --color-text-thinking:      #92400e;
+  --color-text-code:          #d4d4d4;
+  --color-text-sidebar:       #cbd5e1;
+  --color-text-sidebar-active:#ffffff;
+  --color-text-button:        #ffffff;
+  --color-text-error:         #dc2626;
+  --color-text-link:          #2563eb;
+
+  /* Accents */
+  --color-accent-primary:     #2563eb;
+  --color-accent-hover:       #1d4ed8;
+  --color-accent-thinking:    #d97706;
+  --color-accent-danger:      #dc2626;
+  --color-accent-success:     #16a34a;
+  --color-accent-warning:     #d97706;
+
+  /* Borders */
+  --color-border-main:        #e5e7eb;
+  --color-border-subtle:      #f3f4f6;
+  --color-border-input:       #d1d5db;
+  --color-border-focus:       #2563eb;
+
+  /* Typography */
+  --font-body:      "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono:      "Cascadia Code", "Consolas", "Courier New", monospace;
+  --font-size-base: 14px;
+  --font-size-small:12px;
+  --font-size-large:16px;
+
+  /* Shape */
+  --radius-message: 12px;
+  --radius-button:  6px;
+  --radius-input:   6px;
+  --radius-card:    8px;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

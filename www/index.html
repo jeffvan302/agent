@@ -1,0 +1,181 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Chat</title>
+  <link rel="stylesheet" href="/css/base.css">
+  <link rel="stylesheet" href="{{THEME_PATH}}/style.css">
+  <!-- Vendor libraries — served from local cache after first-start download.
+       The server 302-redirects to cdnjs until the background download
+       completes, so syntax highlighting works from day one. -->
+  <link rel="stylesheet" href="/css/vendor/vs2015.min.css">
+</head>
+<body>
+<div id="app">
+  <!-- Header -->
+  <header id="header">
+    <button id="mobile-menu-btn" class="mobile-header-btn" type="button" aria-label="Open projects and chats" aria-expanded="false">Menu</button>
+    <div id="header-center">
+      <span id="header-title">Agent Chat</span>
+      <button id="mobile-plan-btn" class="mobile-header-btn" type="button" aria-label="Show project plan" aria-expanded="false" hidden>Plan</button>
+    </div>
+    <div id="header-user">
+      <button id="header-account-btn" type="button">
+        <span id="header-username"></span>
+      </button>
+      <a id="logout-link" href="/logout">Sign out</a>
+    </div>
+  </header>
+
+  <!-- Body row -->
+  <div id="body-row">
+    <!-- Sidebar -->
+    <nav id="sidebar">
+      <div id="sidebar-header">Projects</div>
+      <div id="project-list">
+        <!-- Populated by app.js -->
+      </div>
+      <button id="new-chat-btn" disabled>+ New Chat</button>
+      <div id="automation-running-status" class="automation-running-status" style="display:none"></div>
+      <div id="planner-panel" class="planner-panel" hidden></div>
+    </nav>
+    <div id="sidebar-resizer" title="Resize sidebar" aria-hidden="true"></div>
+
+    <!-- Main chat area -->
+    <main id="main">
+      <div id="chat-title">Select or create a chat</div>
+      <div id="mobile-automation-running-status" class="automation-running-status mobile-automation-running-status" style="display:none"></div>
+      <div id="mobile-planner-panel" class="planner-panel mobile-planner-panel" hidden></div>
+      <div id="messages">
+        <div id="empty-state">
+          <div class="empty-icon">💬</div>
+          <p>Select a chat from the sidebar or create a new one to get started.</p>
+        </div>
+      </div>
+      <div id="attach-bar" style="display:none">
+        <div id="attach-list"></div>
+      </div>
+      <div id="compose">
+        <div id="compose-top">
+          <div id="compose-top-left">
+            <span id="agentic-mode-label" class="agentic-mode-none">Mode: None</span>
+            <span id="compress-btn" title="Compress context window" style="display:none; margin-left:8px; cursor:pointer; font-size:var(--font-size-small); color:var(--color-accent-primary); user-select:none;">Compress</span>
+          </div>
+          <div id="compose-top-actions">
+            <button id="cancel-agent-btn" type="button" style="display:none">Cancel Agent</button>
+            <button id="debug-btn" type="button" style="display:none">Enable debugging</button>
+            <button id="automate-btn" type="button" style="display:none">Automate</button>
+          </div>
+        </div>
+        <div id="compose-bottom">
+          <div id="automation-panel" style="display:none">
+            <div id="automation-toolbar">
+              <span id="automation-status">0 step(s)</span>
+              <label class="automation-field">Repeat:<input id="automation-repeat" type="number" min="1" max="50" value="1"></label>
+              <label class="automation-field"><input id="automation-compress" type="checkbox">Compress</label>
+              <div class="automation-toolbar-actions">
+                <button id="automation-add-step-btn" type="button">+ Step</button>
+                <button id="automation-clear-btn" type="button">Clear</button>
+                <button id="automation-send-btn" type="button" style="display:none">Send Sequence</button>
+              </div>
+            </div>
+            <div id="automation-steps"></div>
+          </div>
+          <div id="compose-bottom-row">
+            <button id="attach-btn" title="Attach file" disabled>&#128206;</button>
+            <input id="file-input" type="file" multiple style="display:none">
+            <textarea id="message-input" placeholder="Type a message…"
+                      rows="1" disabled></textarea>
+            <button id="send-btn" disabled>Send</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div id="mobile-panel-backdrop" hidden></div>
+
+<div id="account-modal" class="app-modal" hidden>
+  <div class="app-modal-backdrop" data-close-account-modal="true"></div>
+  <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+    <div class="app-modal-header">
+      <h2 id="account-modal-title">Account</h2>
+      <button type="button" class="app-modal-close" id="account-close-btn" aria-label="Close">×</button>
+    </div>
+    <form id="account-form" class="account-form">
+      <div class="form-group">
+        <label for="account-username">Username</label>
+        <input type="text" id="account-username" readonly>
+      </div>
+      <div class="form-group">
+        <label for="account-display-name">Display Name</label>
+        <input type="text" id="account-display-name" autocomplete="name">
+      </div>
+      <div class="form-group">
+        <label for="account-email">Email</label>
+        <input type="email" id="account-email" autocomplete="email">
+      </div>
+      <div class="account-form-divider">Change password</div>
+      <div class="form-group">
+        <label for="account-current-password">Current Password</label>
+        <input type="password" id="account-current-password" autocomplete="current-password">
+      </div>
+      <div class="form-group">
+        <label for="account-new-password">New Password</label>
+        <input type="password" id="account-new-password" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label for="account-confirm-password">Confirm New Password</label>
+        <input type="password" id="account-confirm-password" autocomplete="new-password">
+      </div>
+      <p class="account-form-help">Leave the password boxes blank if you only want to update your display name or email.</p>
+      <div id="account-error"></div>
+      <div class="app-modal-actions">
+        <button type="button" class="secondary-btn" id="account-cancel-btn">Cancel</button>
+        <button type="submit" class="login-btn" id="account-save-btn">Save Changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/js/vendor/highlight.min.js"></script>
+<script src="/js/vendor/marked.min.js"></script>
+<script src="/js/vendor/purify.min.js"></script>
+<script src="/js/vendor/mermaid.min.js"></script>
+<script src="/js/vendor/vega.min.js"></script>
+<script src="/js/vendor/vega-lite.min.js"></script>
+<script src="/js/vendor/vega-embed.min.js"></script>
+<script src="/js/vendor/cytoscape.min.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+

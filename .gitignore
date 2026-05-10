@@ -1,0 +1,11 @@
+providers.json
+.opencode/
+data/
+logs/
+.data/
+.config/
+.claude/
+.log/
+.opencode/
+*.json
+*.obj

@@ -1,0 +1,75 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In</title>
+  <link rel="stylesheet" href="/css/base.css">
+  <link rel="stylesheet" href="{{THEME_PATH}}/style.css">
+</head>
+<body>
+  <div id="login-page">
+    <div class="login-card">
+      <h1>Welcome back</h1>
+      <p class="login-subtitle">Sign in to continue</p>
+      <form id="login-form" autocomplete="on" method="POST" action="/login">
+        <div class="form-group">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username"
+                 autocomplete="username" autofocus required>
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password"
+                 autocomplete="current-password" required>
+        </div>
+        <label class="checkbox-row" for="remember-me">
+          <input type="checkbox" id="remember-me" name="remember_me" value="true">
+          <span>Remember me</span>
+        </label>
+        <button type="submit" class="login-btn" id="login-btn">Sign In</button>
+        <div id="login-error"></div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/js/login.js"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
