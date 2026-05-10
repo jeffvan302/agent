@@ -1,7 +1,0 @@
-We need to enable some client-side automation that allows you to put in:
-- which agent mode should be running
-- how many times with what prompt
-- how many times it should be compressing the context log
-There's also some bug with the context log where it doesn't do it when it's supposed to have done it. 
-
-We also need to have a look at the built-in file read and write capabilities. We should just do that because the current one is not the best one. 

@@ -2,5 +2,10 @@ providers.json
 .opencode/
 data/
 logs/
-.json
-.obj
+.data/
+.config/
+.claude/
+.log/
+.opencode/
+*.json
+*.obj

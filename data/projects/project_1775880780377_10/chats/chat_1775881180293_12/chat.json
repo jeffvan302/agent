@@ -1,9 +1,0 @@
-{
-  "id": "chat_1775881180293_12",
-  "max_tokens": 1024,
-  "model_id": "codex-MiniMax-M2.7",
-  "name": "LetsGo",
-  "provider_id": "provider_1775726633372_1",
-  "system_prompt": "",
-  "temperature": 0.2
-}

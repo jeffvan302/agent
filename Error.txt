@@ -1,3 +1,0 @@
-The model exceeded the MCP tool-call loop limit, and the final summary failed: WinHttpQueryDataAvailable failed (WinHTTP 12030)
-
-Ollama API error 400: invalid params, invalid role: error (ref: 4bd4f605-1014-48db-adbe-070a02718a21)
