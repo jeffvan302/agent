@@ -67,6 +67,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
+if not exist "%SCRIPT_DIR%.config.zip" (
+    echo ERROR: .config.zip was not found. Setup System embeds this file into agent.exe at build time.
+    popd
+    exit /b 1
+)
+
 set OUT_DIR=%SCRIPT_DIR%build
 if exist "%OUT_DIR%" rmdir /s /q "%OUT_DIR%"
 mkdir "%OUT_DIR%"

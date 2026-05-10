@@ -63,6 +63,8 @@ constexpr UINT kMcpChangedMessage = WM_APP + 4;
 constexpr UINT kWebContentChangedMessage = WM_APP + 5;
 constexpr UINT kStartupInitializeMessage = WM_APP + 6;
 constexpr UINT kStartupServicesFinishedMessage = WM_APP + 7;
+constexpr UINT kSetupSystemFinishedMessage = WM_APP + 8;
+constexpr int kDefaultConfigZipResourceId = 101;
 constexpr std::uintmax_t kDesktopTranscriptLoadLimitBytes = 8ull * 1024ull * 1024ull;
 
 enum ControlId : int {
@@ -168,6 +170,45 @@ std::filesystem::path ResolveWebUsersPath() {
         }
     }
     return users_path;
+}
+
+std::filesystem::path ResolveWebSettingsPath(const RuntimePaths& runtime_paths) {
+    return runtime_paths.config_root / "web_settings.json";
+}
+
+void MigrateLegacyWebSettings(const RuntimePaths& runtime_paths) {
+    const auto settings_path = ResolveWebSettingsPath(runtime_paths);
+    const auto legacy_path = runtime_paths.startup_root / "web_settings.json";
+
+    std::error_code ec;
+    std::filesystem::create_directories(settings_path.parent_path(), ec);
+    if (ec) {
+        Logger::Warn("WebSettings", "Could not create config directory for web_settings.json: " + ec.message());
+        return;
+    }
+
+    if (!std::filesystem::is_regular_file(legacy_path, ec)) {
+        return;
+    }
+
+    if (!std::filesystem::is_regular_file(settings_path, ec)) {
+        std::filesystem::copy_file(
+            legacy_path,
+            settings_path,
+            std::filesystem::copy_options::overwrite_existing,
+            ec);
+        if (ec) {
+            Logger::Warn("WebSettings", "Could not migrate legacy web_settings.json into .config: " + ec.message());
+            return;
+        }
+    }
+
+    std::filesystem::remove(legacy_path, ec);
+    if (ec) {
+        Logger::Warn("WebSettings", "Could not remove legacy root web_settings.json: " + ec.message());
+    } else {
+        Logger::Info("WebSettings", "Removed legacy root web_settings.json; using .config/web_settings.json.");
+    }
 }
 
 size_t EstimateTokenCount(const std::string& text) {
@@ -368,6 +409,178 @@ bool RunHeadlessCommandLine(std::wstring command_line, DWORD timeout_ms, DWORD* 
         *exit_code = process_exit_code;
     }
     return wait_result != WAIT_TIMEOUT && process_exit_code == 0;
+}
+
+std::wstring PowerShellSingleQuoted(const std::wstring& value) {
+    std::wstring quoted = L"'";
+    for (wchar_t ch : value) {
+        if (ch == L'\'') {
+            quoted += L"''";
+        } else {
+            quoted.push_back(ch);
+        }
+    }
+    quoted += L"'";
+    return quoted;
+}
+
+bool RunHiddenCommandLine(std::wstring command_line, DWORD timeout_ms, DWORD* exit_code, std::wstring* error) {
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+
+    std::vector<wchar_t> buffer(command_line.begin(), command_line.end());
+    buffer.push_back(L'\0');
+
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(nullptr, buffer.data(), nullptr, nullptr, FALSE,
+            CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr, &startup, &process)) {
+        if (error) {
+            *error = L"CreateProcess failed with error " + std::to_wstring(GetLastError()) + L".";
+        }
+        return false;
+    }
+
+    const DWORD wait_result = WaitForSingleObject(process.hProcess, timeout_ms);
+    DWORD process_exit_code = 1;
+    if (wait_result == WAIT_TIMEOUT) {
+        TerminateProcess(process.hProcess, 1);
+        WaitForSingleObject(process.hProcess, 5000);
+        process_exit_code = 1;
+        if (error) {
+            *error = L"Process timed out.";
+        }
+    } else {
+        GetExitCodeProcess(process.hProcess, &process_exit_code);
+    }
+
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    if (exit_code) {
+        *exit_code = process_exit_code;
+    }
+    if (wait_result != WAIT_TIMEOUT && process_exit_code != 0 && error) {
+        *error = L"Process exited with code " + std::to_wstring(process_exit_code) + L".";
+    }
+    return wait_result != WAIT_TIMEOUT && process_exit_code == 0;
+}
+
+bool WriteEmbeddedResourceToFile(int resource_id, const std::filesystem::path& output_path, std::wstring* error) {
+    HMODULE module = GetModuleHandleW(nullptr);
+    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(resource_id), RT_RCDATA);
+    if (!resource) {
+        if (error) {
+            *error = L"The embedded setup configuration resource was not found.";
+        }
+        return false;
+    }
+
+    const DWORD size = SizeofResource(module, resource);
+    HGLOBAL loaded = LoadResource(module, resource);
+    const void* data = loaded ? LockResource(loaded) : nullptr;
+    if (size == 0 || !data) {
+        if (error) {
+            *error = L"The embedded setup configuration resource could not be loaded.";
+        }
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(output_path.parent_path(), ec);
+    if (ec) {
+        if (error) {
+            *error = L"Could not create temp directory: " + Utf8ToWide(ec.message());
+        }
+        return false;
+    }
+
+    std::ofstream out(output_path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        if (error) {
+            *error = L"Could not write temporary setup configuration zip.";
+        }
+        return false;
+    }
+    out.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+    if (!out.good()) {
+        if (error) {
+            *error = L"Failed while writing temporary setup configuration zip.";
+        }
+        return false;
+    }
+    return true;
+}
+
+std::wstring ReadUtf8TextFileBestEffort(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+        return {};
+    }
+    std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    if (text.size() >= 3 &&
+        static_cast<unsigned char>(text[0]) == 0xEF &&
+        static_cast<unsigned char>(text[1]) == 0xBB &&
+        static_cast<unsigned char>(text[2]) == 0xBF) {
+        text.erase(0, 3);
+    }
+    return Utf8ToWide(text);
+}
+
+bool ExtractZipArchiveToDirectory(
+    const std::filesystem::path& zip_path,
+    const std::filesystem::path& destination,
+    std::wstring* error) {
+    std::error_code ec;
+    std::filesystem::create_directories(destination, ec);
+    if (ec) {
+        if (error) {
+            *error = L"Could not create destination directory: " + Utf8ToWide(ec.message());
+        }
+        return false;
+    }
+
+    const auto powershell = FindHeadlessExecutable(L"powershell.exe");
+    if (!powershell) {
+        if (error) {
+            *error = L"powershell.exe was not found, so the embedded configuration zip could not be extracted.";
+        }
+        return false;
+    }
+
+    const std::filesystem::path log_path(zip_path.wstring() + L".extract.log");
+    std::filesystem::remove(log_path, ec);
+
+    const std::wstring script =
+        L"$ErrorActionPreference='Stop'; "
+        L"$ProgressPreference='SilentlyContinue'; "
+        L"try { "
+        L"Expand-Archive -LiteralPath " + PowerShellSingleQuoted(zip_path.wstring()) +
+        L" -DestinationPath " + PowerShellSingleQuoted(destination.wstring()) + L" -Force"
+        L" } catch { "
+        L"$_ | Out-String | Set-Content -LiteralPath " + PowerShellSingleQuoted(log_path.wstring()) + L" -Encoding UTF8; "
+        L"exit 1"
+        L" }";
+    const std::wstring command_line =
+        QuoteProcessArgument(powershell->wstring()) +
+        L" -NoLogo -NoProfile -ExecutionPolicy Bypass -Command " +
+        QuoteProcessArgument(script);
+
+    DWORD exit_code = 1;
+    std::wstring run_error;
+    if (!RunHiddenCommandLine(command_line, 5 * 60 * 1000, &exit_code, &run_error)) {
+        const std::wstring details = ReadUtf8TextFileBestEffort(log_path);
+        std::filesystem::remove(log_path, ec);
+        if (error) {
+            *error = L"PowerShell Expand-Archive failed: " + run_error;
+            if (!details.empty()) {
+                *error += L"\n\n" + details;
+            }
+        }
+        return false;
+    }
+    std::filesystem::remove(log_path, ec);
+    return true;
 }
 
 std::optional<HeadlessImageIngestSettings> LoadHeadlessImageIngestSettings(
@@ -2824,6 +3037,8 @@ private:
     void OpenAgenticModes();
     void EditProjectSettings();
     void RunSetupSystem();
+    bool ApplyEmbeddedConfigPackage(std::wstring* error);
+    void OnSetupSystemFinished();
     void RestartApplication();
     void EnsureWebServer();   // lazily creates web_server_ if not yet constructed
     void OpenAdminConfig();
@@ -3015,6 +3230,9 @@ LRESULT CALLBACK MainWindow::WindowProc(HWND hwnd, UINT message, WPARAM w_param,
     case kStartupServicesFinishedMessage:
         self->OnStartupServicesFinished();
         return 0;
+    case kSetupSystemFinishedMessage:
+        self->OnSetupSystemFinished();
+        return 0;
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
@@ -3070,6 +3288,7 @@ void MainWindow::OnStartupInitialize() {
     try {
         Logger::Info("Startup initialization: storage begin");
         storage_.EnsureInitialized();
+        MigrateLegacyWebSettings(storage_.runtime_paths());
         user_store_.EnsureInitialized();
 
         Logger::Info("Startup initialization: MCP config load begin");
@@ -3085,8 +3304,7 @@ void MainWindow::OnStartupInitialize() {
         // Auto-start web server if configured. WebServer::Start launches its
         // listener thread and returns, so this should not block first paint.
         Logger::Info("Startup initialization: web server autostart check begin");
-        const auto app_root = storage_.root_path();
-        const auto settings_path = app_root / "web_settings.json";
+        const auto settings_path = ResolveWebSettingsPath(storage_.runtime_paths());
         if (std::filesystem::exists(settings_path)) {
             auto cfg = WebServerConfig::LoadFromFile(settings_path);
             if (cfg.auto_start) {
@@ -3722,16 +3940,17 @@ static bool DetectDedicatedGpu() {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 void MainWindow::EnsureWebServer() {
     if (web_server_) return;
-    const auto app_root = storage_.root_path();
-    const auto settings_path = app_root / "web_settings.json";
+    const auto settings_path = ResolveWebSettingsPath(storage_.runtime_paths());
     if (!std::filesystem::exists(settings_path)) {
+        std::error_code ec;
+        std::filesystem::create_directories(settings_path.parent_path(), ec);
         WebServerConfig default_cfg;
         default_cfg.SaveToFile(settings_path);
     }
     auto cfg = WebServerConfig::LoadFromFile(settings_path);
     web_server_ = std::make_unique<WebServer>(
-        &storage_, &user_store_, cfg, app_root, &mcp_manager_, &rag_service_);
-    web_server_->SetAuditLogPath(app_root / "web_audit.log");
+        &storage_, &user_store_, cfg, storage_.runtime_paths(), &mcp_manager_, &rag_service_);
+    web_server_->SetAuditLogPath(storage_.log_root() / "web_audit.log");
     web_server_->SetContentChangedCallback([hwnd = hwnd_]() {
         PostMessageW(hwnd, kWebContentChangedMessage, 0, 0);
     });
@@ -3742,8 +3961,7 @@ void MainWindow::EnsureWebServer() {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 void MainWindow::OpenWebConfig() {
     Logger::Info("WebConfig", "OpenWebConfig: starting");
-    const auto app_root = storage_.root_path();
-    const auto settings_path = app_root / "web_settings.json";
+    const auto settings_path = ResolveWebSettingsPath(storage_.runtime_paths());
 
     // Ensure settings file and WebServer instance exist
     Logger::Info("WebConfig", "OpenWebConfig: calling EnsureWebServer");
@@ -3755,7 +3973,7 @@ void MainWindow::OpenWebConfig() {
 
     // Show the dialog â€” it modifies cfg in place and handles Start/Stop
     Logger::Info("WebConfig", "OpenWebConfig: calling ShowWebConfigDialog");
-    const bool accepted = ShowWebConfigDialog(hwnd_, web_server_.get(), &cfg, app_root);
+    const bool accepted = ShowWebConfigDialog(hwnd_, web_server_.get(), &cfg, storage_.runtime_paths());
     Logger::Info("WebConfig", "OpenWebConfig: ShowWebConfigDialog returned");
 
     if (accepted) {
@@ -3844,17 +4062,69 @@ void MainWindow::SetupDefaultMcpServersIfEmpty() {
     storage_.SaveMcpConfiguration(servers, {pf});
 }
 
+bool MainWindow::ApplyEmbeddedConfigPackage(std::wstring* error) {
+    wchar_t temp_dir[MAX_PATH]{};
+    const DWORD temp_len = GetTempPathW(static_cast<DWORD>(std::size(temp_dir)), temp_dir);
+    if (temp_len == 0 || temp_len >= std::size(temp_dir)) {
+        if (error) {
+            *error = L"Could not resolve the Windows temporary directory.";
+        }
+        return false;
+    }
+
+    wchar_t temp_file[MAX_PATH]{};
+    if (GetTempFileNameW(temp_dir, L"agc", 0, temp_file) == 0) {
+        if (error) {
+            *error = L"Could not create a temporary filename for the embedded configuration zip.";
+        }
+        return false;
+    }
+
+    std::filesystem::path temp_seed(temp_file);
+    std::filesystem::path temp_zip = temp_seed;
+    temp_zip.replace_extension(L".zip");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove(temp_seed, cleanup_ec);
+    std::filesystem::remove(temp_zip, cleanup_ec);
+
+    auto cleanup = [&]() {
+        std::error_code ec;
+        std::filesystem::remove(temp_seed, ec);
+        std::filesystem::remove(temp_zip, ec);
+    };
+
+    std::wstring write_error;
+    if (!WriteEmbeddedResourceToFile(kDefaultConfigZipResourceId, temp_zip, &write_error)) {
+        cleanup();
+        if (error) {
+            *error = write_error;
+        }
+        return false;
+    }
+
+    std::wstring extract_error;
+    if (!ExtractZipArchiveToDirectory(temp_zip, storage_.config_root(), &extract_error)) {
+        cleanup();
+        if (error) {
+            *error = extract_error;
+        }
+        return false;
+    }
+
+    cleanup();
+    Logger::Info("Setup System restored embedded .config.zip into " + WideToUtf8(storage_.config_root().wstring()));
+    return true;
+}
+
 void MainWindow::RunSetupSystem() {
     // --- Overwrite confirmation ---
     std::wstring confirm_msg =
         L"Setup System will OVERWRITE your current configuration:\n\n"
-        L"- All existing projects will be deleted and replaced with:\n"
-        L"  \u2022 Creating Applications\n"
-        L"  \u2022 Gate Keeping Examples\n"
-        L"- All existing MCP servers will be replaced with the default set.\n"
-        L"- All existing agentic modes will be replaced with the default set.\n"
-        L"- Context compression configs will be reset to defaults.\n\n"
-        L"Providers, web config, admin config, and model tools will NOT be changed.\n\n"
+        L"- All existing projects and project chat data will be deleted.\n"
+        L"- The embedded .config.zip package will be extracted into the app .config folder.\n"
+        L"- Any config files inside that package will overwrite the current files.\n\n"
+        L"Config files that are not included in .config.zip will be left in place.\n\n"
         L"Then it will install required system tools (Node.js, uv, Poppler,\n"
         L"Tesseract, Pandoc, LibreOffice, Ollama) in a terminal window.\n\n"
         L"Are you sure you want to overwrite everything and proceed?";
@@ -3864,64 +4134,42 @@ void MainWindow::RunSetupSystem() {
         return;
     }
 
+    // Several default project templates and tool workflows assume C:\Temp exists.
+    // Create it before touching configuration so setup fails cleanly if Windows
+    // denies access or a non-directory already occupies that path.
+    const std::filesystem::path temp_root = LR"(C:\Temp)";
+    std::error_code temp_ec;
+    if (std::filesystem::exists(temp_root, temp_ec) &&
+        !std::filesystem::is_directory(temp_root, temp_ec)) {
+        MessageBoxW(hwnd_,
+            L"Setup System needs C:\\Temp, but that path already exists and is not a folder.",
+            L"Setup System", MB_OK | MB_ICONERROR);
+        return;
+    }
+    std::filesystem::create_directories(temp_root, temp_ec);
+    if (temp_ec) {
+        MessageBoxW(hwnd_,
+            (L"Setup System could not create C:\\Temp.\n\n" + Utf8ToWide(temp_ec.message())).c_str(),
+            L"Setup System", MB_OK | MB_ICONERROR);
+        return;
+    }
+    Logger::Info("Setup System verified C:\\Temp exists.");
+
     // --- Step 1: Delete all existing projects ---
     const auto existing_projects = storage_.LoadProjects();
     for (const auto& project : existing_projects) {
         storage_.DeleteProject(project.info.id);
     }
 
-    // --- Step 2: Write defaults from setup_defaults/ ---
-    const auto app_root = DetermineAppRoot();
-    const auto defaults_dir = app_root / "setup_defaults";
-
-    auto copy_default = [&](const std::filesystem::path& filename) {
-        const auto src = defaults_dir / filename;
-        const auto dst = storage_.config_root() / filename;
-        if (std::filesystem::exists(src)) {
-            std::filesystem::create_directories(dst.parent_path());
-            std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing);
-        }
-    };
-
-    copy_default("agentic_modes.json");
-    copy_default("mcp_servers.json");
-    copy_default("context_compression_configs.json");
-
-    // --- Step 3: Create projects from templates ---
-    auto create_project_from_template = [&](const std::string& template_name) {
-        const auto tmpl_dir = defaults_dir / template_name;
-        const auto project_json_path = tmpl_dir / "project.json";
-        if (!std::filesystem::exists(project_json_path)) return;
-
-        std::ifstream in(project_json_path);
-        if (!in) return;
-        nlohmann::json project_json;
-        try {
-            in >> project_json;
-        } catch (...) { return; }
-
-        std::string project_id = project_json.value("id", "");
-        std::string project_name = project_json.value("name", "Untitled");
-        if (project_id.empty()) return;
-
-        ProjectInfo project;
-        project.id = project_id;
-        project.name = project_name;
-        storage_.SaveProject(project);
-
-        // Copy all other template files into the project config directory
-        const auto project_config_dir = storage_.config_root() / "projects" / project_id;
-        for (const auto& entry : std::filesystem::directory_iterator(tmpl_dir)) {
-            if (entry.is_regular_file()) {
-                const auto dst = project_config_dir / entry.path().filename();
-                std::filesystem::copy_file(entry.path(), dst,
-                    std::filesystem::copy_options::overwrite_existing);
-            }
-        }
-    };
-
-    create_project_from_template("project1");
-    create_project_from_template("project2");
+    // --- Step 2: Restore config defaults embedded from .config.zip at build time ---
+    std::wstring config_error;
+    if (!ApplyEmbeddedConfigPackage(&config_error)) {
+        MessageBoxW(hwnd_,
+            (L"Setup System could not restore the embedded configuration package.\n\n" + config_error).c_str(),
+            L"Setup System", MB_OK | MB_ICONERROR);
+        return;
+    }
+    MigrateLegacyWebSettings(storage_.runtime_paths());
 
     // Reload the project list so the UI reflects the new state
     ReloadProjects("", "");
@@ -3990,20 +4238,16 @@ void MainWindow::RunSetupSystem() {
            << L"winget install --id Ollama.Ollama -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
-           // Pull embedding model (Ollama must be running after install)
-           << L"echo [8/8] Pulling nomic-embed-text embedding model...\r\n"
+           // Pull local models (Ollama must be running after install)
+           << L"echo [8/8] Pulling required Ollama models...\r\n"
            << L"echo (Ollama may need a moment to start after installation.)\r\n"
            << L"timeout /t 8 /nobreak >nul\r\n"
-           << L"ollama pull nomic-embed-text\r\n"
+           << L"for %%M in (qwen2.5vl:7b nomic-embed-text moondream:1.8b qwen3-embedding:0.6b qwen3-embedding:latest) do (\r\n"
+           << L"  echo Pulling %%M...\r\n"
+           << L"  ollama pull %%M\r\n"
+           << L"  if errorlevel 1 echo WARNING: Failed to pull %%M. You can retry manually later.\r\n"
+           << L")\r\n"
            << L"echo.\r\n";
-
-    // GPU-only: vision model for image-aware RAG
-    if (has_gpu) {
-        script
-           << L"echo [GPU] Pulling qwen2.5vl:7b vision model for image processing...\r\n"
-           << L"ollama pull qwen2.5vl:7b\r\n"
-           << L"echo.\r\n";
-    }
 
     script << L"echo ============================================================\r\n"
            << L"echo  Setup complete.\r\n"
@@ -4012,7 +4256,7 @@ void MainWindow::RunSetupSystem() {
     if (has_gpu) {
         script
            << L"echo  Select 'vision_language_gpu' image ingest mode in the RAG\r\n"
-           << L"echo  library settings to use the qwen2.5vl:7b vision model.\r\n";
+           << L"echo  library settings to use local vision models.\r\n";
     }
     script << L"echo ============================================================\r\n"
            << L"echo.\r\n"
@@ -4035,11 +4279,17 @@ void MainWindow::RunSetupSystem() {
         }
     }
 
-    const std::wstring cmd_args = L"/k \"" + script_path + L"\"";
-    const HINSTANCE launched = ShellExecuteW(
-        hwnd_, L"open", L"cmd.exe", cmd_args.c_str(), nullptr, SW_SHOWNORMAL);
+    const std::wstring cmd_args = L"/c \"" + script_path + L"\"";
+    SHELLEXECUTEINFOW setup_exec{};
+    setup_exec.cbSize = sizeof(setup_exec);
+    setup_exec.fMask = SEE_MASK_NOCLOSEPROCESS;
+    setup_exec.hwnd = hwnd_;
+    setup_exec.lpVerb = L"open";
+    setup_exec.lpFile = L"cmd.exe";
+    setup_exec.lpParameters = cmd_args.c_str();
+    setup_exec.nShow = SW_SHOWNORMAL;
 
-    if (reinterpret_cast<intptr_t>(launched) <= 32) {
+    if (!ShellExecuteExW(&setup_exec) || !setup_exec.hProcess) {
         MessageBoxW(hwnd_,
             L"Failed to open the setup terminal window.\n"
             L"Please run the following commands manually in a terminal:\n\n"
@@ -4048,31 +4298,45 @@ void MainWindow::RunSetupSystem() {
             L"  winget install --id oschwartz10612.Poppler -e\n"
             L"  winget install --id tesseract-ocr.tesseract -e\n"
             L"  winget install --id Ollama.Ollama -e\n"
+            L"  ollama pull qwen2.5vl:7b\n"
             L"  ollama pull nomic-embed-text\n"
-            L"  ollama pull qwen2.5vl:7b",
+            L"  ollama pull moondream:1.8b\n"
+            L"  ollama pull qwen3-embedding:0.6b\n"
+            L"  ollama pull qwen3-embedding:latest",
             L"Setup System", MB_OK | MB_ICONWARNING);
         return;
     }
 
+    HANDLE setup_process = setup_exec.hProcess;
+    HWND setup_hwnd = hwnd_;
+    std::thread([setup_process, setup_hwnd]() {
+        WaitForSingleObject(setup_process, INFINITE);
+        CloseHandle(setup_process);
+        PostMessageW(setup_hwnd, kSetupSystemFinishedMessage, 0, 0);
+    }).detach();
+
     std::wstring done_msg =
         L"Setup terminal launched.\n\n"
         L"Follow the progress in the terminal window.\n"
-        L"\nDefault projects, agentic modes, MCP servers, and compression\n"
-        L"configs have been restored from setup defaults.\n";
+        L"\nThe embedded .config.zip package has been restored into the app .config folder.\n"
+        L"The app will offer to restart after the setup terminal closes.\n";
 
     MessageBoxW(hwnd_, done_msg.c_str(), L"Setup System", MB_OK | MB_ICONINFORMATION);
-    UpdateStatus(L"System setup launched.");
+    UpdateStatus(L"System setup launched. Press any key in the setup terminal when complete to restart the app.");
+}
 
+void MainWindow::OnSetupSystemFinished() {
     const int restart = MessageBoxW(
         hwnd_,
-        L"The setup process can update PATH and installed command runtimes.\n\n"
-        L"Restarting the application is required before those command changes are reliably visible to MCP servers and RAG tooling.\n\n"
-        L"Restart the application now?\n\n"
-        L"Choose No if you want to let the setup terminal finish first and restart manually later.",
-        L"Restart Required",
+        L"Setup System has finished.\n\n"
+        L"Restarting the application is required before the restored configuration and command runtime changes are reliably visible.\n\n"
+        L"Restart the application now?",
+        L"Setup System Complete",
         MB_YESNO | MB_ICONQUESTION);
     if (restart == IDYES) {
         RestartApplication();
+    } else {
+        UpdateStatus(L"System setup completed. Restart the app to load the restored configuration.");
     }
 }
 
