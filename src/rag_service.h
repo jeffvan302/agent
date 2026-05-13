@@ -24,6 +24,14 @@ struct RagMarkdownExtractionResult {
     std::string error;
 };
 
+struct RagVisionModelOption {
+    std::string provider_id;
+    std::string provider_name;
+    std::string provider_type;
+    std::string model_id;
+    std::string model_display_name;
+};
+
 class RagService {
 public:
     explicit RagService(AppStorage* storage);
@@ -89,6 +97,7 @@ public:
     RagExtractionToolInstallResult LaunchExtractionToolInstaller(bool recommended_only) const;
     RagImageIngestSettings LoadImageIngestSettings() const;
     void SaveImageIngestSettings(const RagImageIngestSettings& settings) const;
+    std::vector<RagVisionModelOption> ListVisionModelOptions() const;
     RagMarkdownExtractionResult ExtractFileToMarkdown(const std::filesystem::path& file) const;
     RagImageIngestRuntimeStatus GetImageIngestRuntimeStatus(const RagImageIngestSettings& settings) const;
     RagExtractionToolInstallResult LaunchImageIngestToolInstaller(const RagImageIngestSettings& settings, const std::string& tool_id) const;

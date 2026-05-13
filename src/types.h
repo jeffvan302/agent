@@ -401,6 +401,11 @@ struct RagImageIngestSettings {
     std::string vision_provider = "ollama";
     std::string vision_base_url = "http://localhost";
     std::string vision_model = "qwen2.5vl:7b";
+    // Used when vision_provider == "provider".  These ids point at a
+    // vision-capable model from the normal Providers list, so image ingest can
+    // use the same local, cloud, or remote provider setup as chat.
+    std::string provider_vision_provider_id;
+    std::string provider_vision_model_id;
     std::string remote_agent_model;
     std::string vision_prompt;
     int ollama_instance_count = 1;
@@ -439,6 +444,9 @@ struct RagImageIngestRuntimeStatus {
     std::string remote_agent_worker_name;
     std::string remote_agent_model;
     int remote_agent_https_port = 8765;
+    bool provider_vision_configured = false;
+    std::string provider_vision_provider_name;
+    std::string provider_vision_model_name;
     std::string vision_endpoint_summary;
     std::string log_path;
     std::string recent_log;

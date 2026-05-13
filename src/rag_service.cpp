@@ -1,5 +1,8 @@
 #include "rag_service.h"
 
+#include "ollama_local_server.h"
+#include "openai_client.h"
+#include "provider_profiles.h"
 #include "util.h"
 
 // Suppress MSVC warnings inside the hnswlib header.
@@ -58,7 +61,7 @@ std::string HtmlToMarkdownText(const std::string& html);
 bool IsRichExtractionExtension(const std::filesystem::path& path);
 bool IsImageExtension(const std::filesystem::path& path);
 std::string ExtractRichDocumentToMarkdown(const std::filesystem::path& path, std::string* extractor_id);
-std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* extractor_id);
+std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagImageIngestSettings& settings, AppStorage* storage, std::string* extractor_id);
 std::optional<std::string> DescribeImageWithOllamaVisionDirect(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error);
 std::string SanitizeUtf8ForJson(const std::string& text);
 bool PythonModuleAvailable(const std::wstring& python_executable, const std::string& module_name);
@@ -117,6 +120,9 @@ std::string NormalizeImageVisionProvider(std::string provider) {
     std::transform(provider.begin(), provider.end(), provider.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     if (provider == "ollama") {
         return "ollama";
+    }
+    if (provider == "provider" || provider == "providers" || provider == "provider_model" || provider == "provider_list") {
+        return "provider";
     }
     if (provider == "remote" || provider == "remote_agent" || provider == "agent_remote" || provider == "agent_https") {
         return "remote_agent";
@@ -189,6 +195,8 @@ json RagImageIngestSettingsToJson(const RagImageIngestSettings& settings) {
         {"vision_provider", NormalizeImageVisionProvider(settings.vision_provider)},
         {"vision_base_url", settings.vision_base_url.empty() ? "http://localhost" : settings.vision_base_url},
         {"vision_model", settings.vision_model.empty() ? "qwen2.5vl:7b" : settings.vision_model},
+        {"provider_vision_provider_id", settings.provider_vision_provider_id},
+        {"provider_vision_model_id", settings.provider_vision_model_id},
         {"remote_agent_model", settings.remote_agent_model},
         {"vision_prompt", settings.vision_prompt.empty() ? DefaultImageVisionPrompt() : settings.vision_prompt},
         {"ollama_instance_count", ClampOllamaInstanceCount(settings.ollama_instance_count)},
@@ -230,6 +238,8 @@ RagImageIngestSettings RagImageIngestSettingsFromJson(const json& item) {
     if (Trim(settings.vision_model).empty()) {
         settings.vision_model = "qwen2.5vl:7b";
     }
+    settings.provider_vision_provider_id = item.value("provider_vision_provider_id", "");
+    settings.provider_vision_model_id = item.value("provider_vision_model_id", "");
     settings.remote_agent_model = item.value("remote_agent_model", "");
     settings.vision_prompt = item.value("vision_prompt", DefaultImageVisionPrompt());
     if (Trim(settings.vision_prompt).empty()) {
@@ -2904,6 +2914,323 @@ std::optional<std::string> DescribeImageWithRemoteAgent(const std::filesystem::p
     return std::nullopt;
 }
 
+struct ProviderVisionSelection {
+    ProviderConfig provider;
+    ModelConfig model;
+};
+
+std::string ProviderVisionDisplayName(const ProviderConfig& provider, const ModelConfig& model) {
+    const std::string model_name = Trim(model.display_name).empty() ? model.id : model.display_name;
+    return provider.name + " / " + model_name;
+}
+
+std::optional<ProviderVisionSelection> ResolveProviderVisionSelection(
+    AppStorage* storage,
+    const RagImageIngestSettings& settings,
+    std::vector<ProviderConfig>* loaded_providers,
+    std::string* error) {
+    if (!storage) {
+        if (error) {
+            *error = "Provider-backed image vision needs access to the provider settings store.";
+        }
+        return std::nullopt;
+    }
+    const std::string provider_id = Trim(settings.provider_vision_provider_id);
+    const std::string model_id = Trim(settings.provider_vision_model_id);
+    if (provider_id.empty() || model_id.empty()) {
+        if (error) {
+            *error = "No provider vision model is selected in Image Ingest Settings.";
+        }
+        return std::nullopt;
+    }
+
+    std::vector<ProviderConfig> providers = storage->LoadProviders();
+    OpenAIClient::SetProviderCache(providers);
+    if (loaded_providers) {
+        *loaded_providers = providers;
+    }
+
+    for (const auto& provider : providers) {
+        if (provider.id != provider_id) {
+            continue;
+        }
+        for (const auto& model : provider.models) {
+            if (model.id != model_id) {
+                continue;
+            }
+            if (!model.supports_vision) {
+                if (error) {
+                    *error = "The selected provider model is not marked as vision-capable.";
+                }
+                return std::nullopt;
+            }
+            return ProviderVisionSelection{provider, model};
+        }
+        if (error) {
+            *error = "The selected vision model no longer exists on provider " + provider.name + ".";
+        }
+        return std::nullopt;
+    }
+
+    if (error) {
+        *error = "The selected image ingest provider no longer exists.";
+    }
+    return std::nullopt;
+}
+
+std::string ProviderBaseUrlForRequests(const ProviderConfig& provider) {
+    const std::string provider_type = NormalizeProviderType(provider.provider_type);
+    std::string base = Trim(provider.base_url);
+    if (provider_type == "ollama_local") {
+        base = OllamaLocalServerManager::Instance().BaseUrlForProvider(provider);
+    }
+    if (base.empty()) {
+        return {};
+    }
+    if (base.find("://") == std::string::npos) {
+        base = "http://" + base;
+    }
+    while (!base.empty() && base.back() == '/') {
+        base.pop_back();
+    }
+    return base;
+}
+
+std::string OllamaGenerateUrlForProvider(const ProviderConfig& provider) {
+    const std::string base = ProviderBaseUrlForRequests(provider);
+    if (base.empty()) {
+        return {};
+    }
+    const std::string lower = LowerAscii(base);
+    if (lower.size() >= 4 && lower.compare(lower.size() - 4, 4, "/api") == 0) {
+        return JoinUrlPath(base, "/generate");
+    }
+    return JoinUrlPath(base, "/api/generate");
+}
+
+std::wstring ProviderAuthorizationHeader(const ProviderConfig& provider) {
+    if (Trim(provider.api_key).empty()) {
+        return {};
+    }
+    return L"Authorization: Bearer " + Utf8ToWide(provider.api_key) + L"\r\n";
+}
+
+std::string ExtractProviderResponseText(const json& content) {
+    if (content.is_string()) {
+        return content.get<std::string>();
+    }
+    if (content.is_array()) {
+        std::string joined;
+        for (const auto& part : content) {
+            std::string text;
+            if (part.is_string()) {
+                text = part.get<std::string>();
+            } else if (part.is_object()) {
+                if (part.contains("text") && part["text"].is_string()) {
+                    text = part["text"].get<std::string>();
+                } else if (part.contains("content")) {
+                    text = ExtractProviderResponseText(part["content"]);
+                }
+            }
+            if (!Trim(text).empty()) {
+                if (!joined.empty()) {
+                    joined += "\n";
+                }
+                joined += text;
+            }
+        }
+        return joined;
+    }
+    if (content.is_object()) {
+        if (content.contains("text")) {
+            return ExtractProviderResponseText(content["text"]);
+        }
+        if (content.contains("content")) {
+            return ExtractProviderResponseText(content["content"]);
+        }
+    }
+    return {};
+}
+
+std::string ExtractProviderChatResponseText(const json& response) {
+    if (response.contains("choices") && response["choices"].is_array() && !response["choices"].empty()) {
+        const auto& choice = response["choices"][0];
+        if (choice.contains("message") && choice["message"].is_object()) {
+            const auto& message = choice["message"];
+            if (message.contains("content")) {
+                return ExtractProviderResponseText(message["content"]);
+            }
+        }
+        if (choice.contains("text")) {
+            return ExtractProviderResponseText(choice["text"]);
+        }
+    }
+    if (response.contains("message") && response["message"].is_object() && response["message"].contains("content")) {
+        return ExtractProviderResponseText(response["message"]["content"]);
+    }
+    if (response.contains("response")) {
+        return ExtractProviderResponseText(response["response"]);
+    }
+    if (response.contains("content")) {
+        return ExtractProviderResponseText(response["content"]);
+    }
+    return {};
+}
+
+std::optional<std::string> DescribeImageWithProviderVisionConcrete(
+    const std::filesystem::path& path,
+    const ChatRequestOptions& request,
+    const std::vector<ProviderConfig>& providers,
+    const RagImageIngestSettings& settings,
+    std::string* error) {
+    if (request.model.is_binding_model && request.binding_depth < 8) {
+        ChatRequestOptions resolved = request;
+        if (ResolveBindingTarget(providers, request.model, request, &resolved, {})) {
+            return DescribeImageWithProviderVisionConcrete(path, resolved, providers, settings, error);
+        }
+        if (error) {
+            *error = "The selected binding vision model could not resolve to a concrete provider target.";
+        }
+        return std::nullopt;
+    }
+    if (!request.model.supports_vision) {
+        if (error) {
+            *error = "The resolved provider model is not marked as vision-capable.";
+        }
+        return std::nullopt;
+    }
+
+    GateSlot slot(request, GateDomain::Chat);
+    if (!slot.Acquire(request.provider.name, {}, {})) {
+        if (error) {
+            *error = "Provider queue is full for " + ProviderVisionDisplayName(request.provider, request.model) + ".";
+        }
+        return std::nullopt;
+    }
+
+    const std::string prompt = Trim(settings.vision_prompt).empty() ? DefaultImageVisionPrompt() : settings.vision_prompt;
+    const std::string image_base64 = Base64Encode(ReadWholeFile(path));
+    const std::string provider_type = NormalizeProviderType(request.provider.provider_type);
+
+    try {
+        if (provider_type == "ollama_local" || provider_type == "ollama_cloud") {
+            if (provider_type == "ollama_local") {
+                std::string server_error;
+                if (!OllamaLocalServerManager::Instance().EnsureRunning(request.provider, &server_error)) {
+                    if (error) {
+                        *error = "Could not start the selected Ollama provider: " + server_error;
+                    }
+                    return std::nullopt;
+                }
+                OllamaLocalServerManager::Instance().ReportActivity(request.provider, request.model);
+            }
+            const std::string url = OllamaGenerateUrlForProvider(request.provider);
+            if (url.empty()) {
+                if (error) {
+                    *error = "The selected Ollama provider does not have a usable endpoint.";
+                }
+                return std::nullopt;
+            }
+            json body;
+            body["model"] = request.model.id;
+            body["prompt"] = prompt;
+            body["stream"] = false;
+            body["images"] = json::array({image_base64});
+            const json response = json::parse(HttpRequestText(
+                "POST",
+                url,
+                body.dump(),
+                ProviderAuthorizationHeader(request.provider),
+                request.provider.tls_certificate_fingerprint,
+                600000));
+            std::string description = ExtractProviderChatResponseText(response);
+            description = NormalizeMarkdownWhitespace(description);
+            if (Trim(description).empty()) {
+                if (error) {
+                    *error = "The selected Ollama provider returned an empty image description.";
+                }
+                return std::nullopt;
+            }
+            return description;
+        }
+
+        const ProviderRequestProfile profile = ResolveProviderRequestProfile(request.provider, request.model);
+        const std::string base_url = ProviderBaseUrlForRequests(request.provider);
+        if (base_url.empty()) {
+            if (error) {
+                *error = "The selected provider does not have a usable base URL.";
+            }
+            return std::nullopt;
+        }
+
+        json body;
+        body["model"] = request.model.id;
+        body["temperature"] = request.temperature;
+        body["stream"] = false;
+        const int max_tokens = request.max_tokens > 0 ? request.max_tokens : 1024;
+        if (profile.output_tokens_mode == OutputTokensMode::MaxCompletionTokens) {
+            body["max_completion_tokens"] = max_tokens;
+        } else {
+            body["max_tokens"] = max_tokens;
+        }
+        body["messages"] = json::array({
+            {
+                {"role", "user"},
+                {"content", json::array({
+                    {{"type", "text"}, {"text", prompt}},
+                    {{"type", "image_url"}, {"image_url", {{"url", "data:" + MimeTypeForPath(path) + ";base64," + image_base64}}}},
+                })},
+            },
+        });
+
+        const std::string response_text = HttpRequestText(
+            "POST",
+            JoinUrlPath(base_url, profile.chat_completions_path),
+            body.dump(),
+            ProviderAuthorizationHeader(request.provider),
+            request.provider.tls_certificate_fingerprint,
+            600000);
+        const json response = json::parse(response_text);
+        std::string description = ExtractProviderChatResponseText(response);
+        description = NormalizeMarkdownWhitespace(description);
+        if (Trim(description).empty()) {
+            if (error) {
+                *error = "The selected provider returned an empty image description.";
+            }
+            return std::nullopt;
+        }
+        return description;
+    } catch (const std::exception& ex) {
+        if (error) {
+            *error = ex.what();
+        }
+    } catch (...) {
+        if (error) {
+            *error = "Unexpected provider vision-language error.";
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> DescribeImageWithProviderVision(
+    const std::filesystem::path& path,
+    const RagImageIngestSettings& settings,
+    AppStorage* storage,
+    std::string* error) {
+    std::vector<ProviderConfig> providers;
+    const auto selection = ResolveProviderVisionSelection(storage, settings, &providers, error);
+    if (!selection) {
+        return std::nullopt;
+    }
+
+    ChatRequestOptions request;
+    request.provider = selection->provider;
+    request.model = selection->model;
+    request.temperature = 0.1;
+    request.max_tokens = std::clamp(selection->model.max_output_tokens > 0 ? selection->model.max_output_tokens : 1024, 1, 4096);
+    return DescribeImageWithProviderVisionConcrete(path, request, providers, settings, error);
+}
+
 struct ImageVisionQueueStats {
     int pending = 0;
     int active = 0;
@@ -3054,10 +3381,13 @@ ImageVisionWorkerQueue& GetImageVisionWorkerQueue() {
     return queue;
 }
 
-std::optional<std::string> DescribeImageWithOllamaVision(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* error) {
+std::optional<std::string> DescribeImageWithOllamaVision(const std::filesystem::path& path, const RagImageIngestSettings& settings, AppStorage* storage, std::string* error) {
     if (NormalizeImageVisionProvider(settings.vision_provider) == "remote_agent" ||
         NormalizeImageIngestMode(settings.mode) == "remote_agent") {
         return DescribeImageWithRemoteAgent(path, settings, error);
+    }
+    if (NormalizeImageVisionProvider(settings.vision_provider) == "provider") {
+        return DescribeImageWithProviderVision(path, settings, storage, error);
     }
     if (NormalizeImageVisionProvider(settings.vision_provider) != "ollama") {
         return DescribeImageWithOllamaVisionDirect(path, settings, error);
@@ -3074,14 +3404,17 @@ std::optional<std::string> DescribeImageWithOllamaVision(const std::filesystem::
     return result.description;
 }
 
-std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagImageIngestSettings& settings, std::string* extractor_id) {
+std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagImageIngestSettings& settings, AppStorage* storage, std::string* extractor_id) {
     if (!settings.enabled) {
         throw std::runtime_error("System-wide image ingestion is disabled.");
     }
 
     const std::string mode = NormalizeImageIngestMode(settings.mode);
+    const std::string vision_provider = NormalizeImageVisionProvider(settings.vision_provider);
     const bool remote_agent_mode = mode == "remote_agent" ||
-        NormalizeImageVisionProvider(settings.vision_provider) == "remote_agent";
+        vision_provider == "remote_agent";
+    const bool provider_vision_mode = vision_provider == "provider";
+    const bool vision_description_requested = mode == "vision_language_gpu" || remote_agent_mode;
     std::vector<std::string> warnings;
     std::string ocr_text;
     std::string ocr_engine;
@@ -3107,10 +3440,10 @@ std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagI
     }
 
     std::string visual_description;
-    if ((mode == "vision_language_gpu" || remote_agent_mode) &&
-        (settings.include_visual_description || remote_agent_mode)) {
+    if (vision_description_requested &&
+        (settings.include_visual_description || remote_agent_mode || provider_vision_mode)) {
         std::string vision_error;
-        if (const auto description = DescribeImageWithOllamaVision(path, settings, &vision_error)) {
+        if (const auto description = DescribeImageWithOllamaVision(path, settings, storage, &vision_error)) {
             visual_description = *description;
         } else if (!vision_error.empty()) {
             warnings.push_back("Vision-language description was requested but did not produce output: " + vision_error);
@@ -3129,8 +3462,10 @@ std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagI
     if (extractor_id) {
         if (metadata_only_fallback) {
             *extractor_id = "image_ingest_metadata_only";
-        } else if ((mode == "vision_language_gpu" || remote_agent_mode) && !visual_description.empty()) {
-            const std::string vision_id = remote_agent_mode ? "remote_agent_vision" : "ollama_vision";
+        } else if (vision_description_requested && !visual_description.empty()) {
+            const std::string vision_id = remote_agent_mode
+                ? "remote_agent_vision"
+                : (provider_vision_mode ? "provider_vision" : "ollama_vision");
             *extractor_id = ocr_engine.empty() ? vision_id : (ocr_engine + "_plus_" + vision_id);
         } else if (!ocr_engine.empty()) {
             *extractor_id = ocr_engine;
@@ -3142,13 +3477,16 @@ std::string ExtractImageToMarkdown(const std::filesystem::path& path, const RagI
     std::ostringstream markdown;
     const std::string effective_vision_model = remote_agent_mode
         ? EffectiveRemoteAgentModel(settings)
-        : Trim(settings.vision_model);
+        : (provider_vision_mode ? Trim(settings.provider_vision_model_id) : Trim(settings.vision_model));
+    const std::string effective_vision_provider = remote_agent_mode
+        ? std::string("remote_agent")
+        : (provider_vision_mode ? Trim(settings.provider_vision_provider_id) : vision_provider);
     markdown << "# " << WideToUtf8(path.filename().wstring()) << "\n\n";
     markdown << "## Image Ingest Metadata\n\n";
     markdown << "- Pipeline mode: " << ImageModeLabel(mode) << "\n";
     markdown << "- OCR engine: " << (ocr_engine.empty() ? "none" : ocr_engine) << "\n";
-    markdown << "- Vision provider: " << ((mode == "vision_language_gpu" || remote_agent_mode) ? NormalizeImageVisionProvider(settings.vision_provider) : "none") << "\n";
-    markdown << "- Vision model: " << ((mode == "vision_language_gpu" || remote_agent_mode) ? effective_vision_model : "none") << "\n";
+    markdown << "- Vision provider: " << (vision_description_requested ? effective_vision_provider : "none") << "\n";
+    markdown << "- Vision model: " << (vision_description_requested ? effective_vision_model : "none") << "\n";
     markdown << "- Original image: preserved at the stored source location referenced by this record.\n\n";
 
     if (!warnings.empty()) {
@@ -3193,6 +3531,7 @@ struct MarkdownExtractionQueueTask {
     uint64_t id = 0;
     std::filesystem::path path;
     RagImageIngestSettings settings;
+    AppStorage* storage = nullptr;
     std::promise<MarkdownExtractionQueueResult> completion;
 };
 
@@ -3211,10 +3550,11 @@ public:
         }
     }
 
-    MarkdownExtractionQueueResult Enqueue(const std::filesystem::path& path, const RagImageIngestSettings& settings) {
+    MarkdownExtractionQueueResult Enqueue(const std::filesystem::path& path, const RagImageIngestSettings& settings, AppStorage* storage) {
         auto task = std::make_shared<MarkdownExtractionQueueTask>();
         task->path = path;
         task->settings = settings;
+        task->storage = storage;
         auto future = task->completion.get_future();
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -3283,7 +3623,7 @@ private:
                     result.error = "No processed Markdown extractor is available for this file type.";
                 } else {
                     result.markdown = image_document
-                        ? ExtractImageToMarkdown(task->path, task->settings, &result.extractor_id)
+                        ? ExtractImageToMarkdown(task->path, task->settings, task->storage, &result.extractor_id)
                         : ExtractRichDocumentToMarkdown(task->path, &result.extractor_id);
                     result.success = true;
                 }
@@ -3321,7 +3661,8 @@ MarkdownExtractionWorkerQueue& GetMarkdownExtractionWorkerQueue() {
 
 MarkdownExtractionQueueResult ExtractProcessedFileToMarkdownQueued(
     const std::filesystem::path& path,
-    const RagImageIngestSettings& settings) {
+    const RagImageIngestSettings& settings,
+    AppStorage* storage) {
     const bool remote_agent_image =
         IsImageExtension(path) &&
         (NormalizeImageIngestMode(settings.mode) == "remote_agent" ||
@@ -3329,7 +3670,7 @@ MarkdownExtractionQueueResult ExtractProcessedFileToMarkdownQueued(
     if (remote_agent_image) {
         MarkdownExtractionQueueResult result;
         try {
-            result.markdown = ExtractImageToMarkdown(path, settings, &result.extractor_id);
+            result.markdown = ExtractImageToMarkdown(path, settings, storage, &result.extractor_id);
             result.success = true;
         } catch (const std::exception& ex) {
             result.error = ex.what();
@@ -3338,7 +3679,7 @@ MarkdownExtractionQueueResult ExtractProcessedFileToMarkdownQueued(
         }
         return result;
     }
-    return GetMarkdownExtractionWorkerQueue().Enqueue(path, settings);
+    return GetMarkdownExtractionWorkerQueue().Enqueue(path, settings, storage);
 }
 
 bool ExtractZipWithTar(const std::filesystem::path& source, const std::filesystem::path& destination, std::string* error) {
@@ -4217,11 +4558,16 @@ RagImportPreviewItem BuildImportPreviewItem(const RagLibraryConfig& library, con
                 return item;
             }
             const std::string mode = NormalizeImageIngestMode(image_settings.mode);
+            const std::string vision_provider = NormalizeImageVisionProvider(image_settings.vision_provider);
             const bool tesseract_available = FindExecutableOnPath(L"tesseract.exe").has_value();
             const bool python_available = FindExecutableOnPath(L"python.exe").has_value();
             const bool vision_endpoint_available =
-                NormalizeImageVisionProvider(image_settings.vision_provider) == "ollama" &&
+                vision_provider == "ollama" &&
                 AnyOllamaVisionEndpointAvailable(image_settings);
+            const bool provider_vision_configured =
+                vision_provider == "provider" &&
+                !Trim(image_settings.provider_vision_provider_id).empty() &&
+                !Trim(image_settings.provider_vision_model_id).empty();
             const bool remote_agent_configured =
                 mode == "remote_agent" &&
                 !Trim(image_settings.remote_agent_base_url).empty() &&
@@ -4254,14 +4600,16 @@ RagImportPreviewItem BuildImportPreviewItem(const RagLibraryConfig& library, con
                     ? "Ready to ingest as image Markdown with the configured Remote Agent vision worker."
                     : "Ready to ingest as image Markdown with Tesseract OCR fallback; Remote Agent JSON is not loaded.";
             } else {
-                if (!vision_endpoint_available && !local_vision_start_available && !python_available && !tesseract_available) {
-                    item.reason = "Full vision mode needs a running Ollama vision endpoint, python.exe for PaddleOCR, or tesseract.exe fallback.";
+                if (!vision_endpoint_available && !provider_vision_configured && !local_vision_start_available && !python_available && !tesseract_available) {
+                    item.reason = "Full vision mode needs a configured provider vision model, a running Ollama vision endpoint, python.exe for PaddleOCR, or tesseract.exe fallback.";
                     return item;
                 }
                 item.supported = true;
-                item.reason = local_vision_start_available && !vision_endpoint_available
+                item.reason = provider_vision_configured
+                    ? "Ready to ingest as image Markdown with OCR plus the selected provider vision model."
+                    : (local_vision_start_available && !vision_endpoint_available
                     ? "Ready to ingest as image Markdown; the app can start the configured local Ollama vision endpoint when needed."
-                    : "Ready to ingest as image Markdown with OCR plus configured vision-language description when available.";
+                    : "Ready to ingest as image Markdown with OCR plus configured vision-language description when available.");
             }
             return item;
         }
@@ -4302,7 +4650,7 @@ void AddPreviewItem(RagImportPreview& preview, RagImportPreviewItem item) {
     preview.items.push_back(std::move(item));
 }
 
-bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const std::filesystem::path& library_path, const RagFileIngestionSource& source, bool skip_unchanged, const RagImageIngestSettings& image_settings, IRagEmbeddingProvider* embedding_provider, RagIngestionResult& result) {
+bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const std::filesystem::path& library_path, const RagFileIngestionSource& source, bool skip_unchanged, const RagImageIngestSettings& image_settings, AppStorage* storage, IRagEmbeddingProvider* embedding_provider, RagIngestionResult& result) {
     const std::filesystem::path file = source.source_path;
     const std::string error_prefix = SourcePathForError(source);
     try {
@@ -4365,7 +4713,7 @@ bool IngestOneSourceNoLock(sqlite3* db, const RagLibraryConfig& library, const s
         std::string extracted_text;
         if (image_document || rich_document) {
             const MarkdownExtractionQueueResult extraction =
-                ExtractProcessedFileToMarkdownQueued(file, image_settings);
+                ExtractProcessedFileToMarkdownQueued(file, image_settings, storage);
             if (!extraction.success) {
                 throw std::runtime_error(extraction.error.empty()
                     ? "Processed-document extraction failed."
@@ -4709,10 +5057,41 @@ void RagService::SaveImageIngestSettings(const RagImageIngestSettings& settings)
     SaveJsonFile(ImageIngestSettingsPath(), RagImageIngestSettingsToJson(settings));
     AppendImageIngestLogNoLock(
         "Saved image ingest settings. Mode: " + NormalizeImageIngestMode(settings.mode) +
+        ", vision provider: " + NormalizeImageVisionProvider(settings.vision_provider) +
         ". Ollama workers: " + std::to_string(ClampOllamaInstanceCount(settings.ollama_instance_count)) +
         ", start port: " + std::to_string(ClampOllamaStartPort(settings.ollama_start_port)) +
         ", start locally: " + std::string(settings.ollama_start_locally ? "yes" : "no") + ".");
     EnsureImageVisionRuntimesNoLock(settings);
+}
+
+std::vector<RagVisionModelOption> RagService::ListVisionModelOptions() const {
+    std::vector<RagVisionModelOption> options;
+    if (!storage_) {
+        return options;
+    }
+
+    const auto providers = storage_->LoadProviders();
+    for (const auto& provider : providers) {
+        for (const auto& model : provider.models) {
+            if (!model.supports_vision) {
+                continue;
+            }
+            RagVisionModelOption option;
+            option.provider_id = provider.id;
+            option.provider_name = provider.name;
+            option.provider_type = NormalizeProviderType(provider.provider_type);
+            option.model_id = model.id;
+            option.model_display_name = Trim(model.display_name).empty() ? model.id : model.display_name;
+            options.push_back(std::move(option));
+        }
+    }
+
+    std::sort(options.begin(), options.end(), [](const auto& a, const auto& b) {
+        const std::string left = LowerAscii(a.provider_name + "\n" + a.model_display_name);
+        const std::string right = LowerAscii(b.provider_name + "\n" + b.model_display_name);
+        return left < right;
+    });
+    return options;
 }
 
 RagMarkdownExtractionResult RagService::ExtractFileToMarkdown(const std::filesystem::path& file) const {
@@ -4749,7 +5128,7 @@ RagMarkdownExtractionResult RagService::ExtractFileToMarkdown(const std::filesys
             }
         }
         const MarkdownExtractionQueueResult extraction =
-            ExtractProcessedFileToMarkdownQueued(file, image_settings);
+            ExtractProcessedFileToMarkdownQueued(file, image_settings, storage_);
         if (!extraction.success) {
             result.error = extraction.error.empty()
                 ? "Processed-document extraction failed."
@@ -4791,11 +5170,40 @@ RagImageIngestRuntimeStatus RagService::GetImageIngestRuntimeStatus(const RagIma
     status.remote_agent_worker_name = settings.remote_agent_worker_name;
     status.remote_agent_model = EffectiveRemoteAgentModel(settings);
     status.remote_agent_https_port = ClampRemoteAgentHttpsPort(settings.remote_agent_https_port);
+    if (provider == "provider" && storage_) {
+        const auto providers = storage_->LoadProviders();
+        for (const auto& provider_config : providers) {
+            if (provider_config.id != settings.provider_vision_provider_id) {
+                continue;
+            }
+            status.provider_vision_provider_name = provider_config.name;
+            for (const auto& model : provider_config.models) {
+                if (model.id == settings.provider_vision_model_id) {
+                    status.provider_vision_model_name = Trim(model.display_name).empty() ? model.id : model.display_name;
+                    status.provider_vision_configured = model.supports_vision;
+                    break;
+                }
+            }
+            break;
+        }
+        if (status.provider_vision_provider_name.empty()) {
+            status.provider_vision_provider_name = settings.provider_vision_provider_id;
+        }
+        if (status.provider_vision_model_name.empty()) {
+            status.provider_vision_model_name = settings.provider_vision_model_id;
+        }
+    }
     if (!remote_mode && provider == "ollama" && settings.ollama_start_locally) {
         EnsureImageVisionRuntimesNoLock(settings);
     }
     status.vision_ollama_managed_count = ManagedImageOllamaProcessCountNoLock();
-    status.vision_endpoint_summary = remote_mode ? BuildRemoteAgentBaseUrl(settings) : JoinStrings(endpoints, ", ");
+    status.vision_endpoint_summary = remote_mode
+        ? BuildRemoteAgentBaseUrl(settings)
+        : (provider == "provider"
+            ? (status.provider_vision_provider_name.empty()
+                ? std::string("(provider not selected)")
+                : (status.provider_vision_provider_name + " / " + status.provider_vision_model_name))
+            : JoinStrings(endpoints, ", "));
     if (!remote_mode && provider == "ollama") {
         for (const auto& endpoint : endpoints) {
             if (IsHttpEndpointAvailable(JoinUrlPath(endpoint, "/api/tags"))) {
@@ -4823,12 +5231,17 @@ RagImageIngestRuntimeStatus RagService::GetImageIngestRuntimeStatus(const RagIma
                 : ("Remote Agent is not responding: " + remote_error);
         }
     }
-    if (!remote_mode) {
+    if (!remote_mode && provider == "ollama") {
         status.vision_endpoint_running = status.vision_ollama_running_count > 0;
         const ImageVisionQueueStats queue_stats = GetImageVisionWorkerQueue().ConfigureAndSnapshot(settings);
         status.vision_queue_pending = queue_stats.pending;
         status.vision_queue_active = queue_stats.active;
         status.vision_queue_workers = queue_stats.desired_workers;
+    } else if (!remote_mode && provider == "provider") {
+        status.vision_endpoint_running = status.provider_vision_configured;
+        status.vision_queue_pending = 0;
+        status.vision_queue_active = 0;
+        status.vision_queue_workers = 0;
     }
     const MarkdownExtractionQueueStats document_queue_stats =
         GetMarkdownExtractionWorkerQueue().ConfigureAndSnapshot(settings);
@@ -4861,6 +5274,18 @@ RagImageIngestRuntimeStatus RagService::GetImageIngestRuntimeStatus(const RagIma
             status.message = status.remote_agent_configured
                 ? "Remote Agent vision mode is configured, but the worker is not responding."
                 : "Remote Agent vision mode needs a loaded remote worker JSON file.";
+        }
+    } else if (provider == "provider") {
+        if (status.provider_vision_configured) {
+            status.message = "Full vision mode will use provider model " +
+                (status.provider_vision_provider_name.empty() ? std::string("(unknown provider)") : status.provider_vision_provider_name) +
+                " / " +
+                (status.provider_vision_model_name.empty() ? std::string("(unknown model)") : status.provider_vision_model_name) +
+                ".";
+        } else if (Trim(settings.provider_vision_provider_id).empty() || Trim(settings.provider_vision_model_id).empty()) {
+            status.message = "Full vision mode needs a vision-capable provider model selected.";
+        } else {
+            status.message = "The selected provider model was not found or is not marked as vision-capable.";
         }
     } else {
         if (status.vision_endpoint_running && !Trim(settings.vision_model).empty()) {
@@ -5889,7 +6314,7 @@ RagIngestionResult RagService::ReindexDocument(const std::string& rag_id, const 
     if (IsImageExtension(source.source_path)) {
         EnsureImageVisionRuntimesNoLock(image_settings);
     }
-    IngestOneSourceNoLock(db.get(), library, library_path, source, false, image_settings, embedding_provider.get(), result);
+    IngestOneSourceNoLock(db.get(), library, library_path, source, false, image_settings, storage_, embedding_provider.get(), result);
     if (library.vector_backend == "hnswlib") {
         SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
     }
@@ -6130,7 +6555,7 @@ RagIngestionResult RagService::IngestFiles(const std::string& rag_id, const std:
         source.original_source_uri = WideToUtf8(std::filesystem::absolute(file).wstring());
         source.display_name = WideToUtf8(file.filename().wstring());
         source.metadata_json = DirectFileMetadata(file);
-        IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, embedding_provider.get(), result);
+        IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, storage_, embedding_provider.get(), result);
     }
 
     SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
@@ -6214,7 +6639,7 @@ RagIngestionResult RagService::IngestFolder(const std::string& rag_id, const std
     }
 
     for (const auto& source : sources) {
-        IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, embedding_provider.get(), result);
+        IngestOneSourceNoLock(db.get(), library, library_path, source, true, image_settings, storage_, embedding_provider.get(), result);
     }
     SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
     result.success = result.errors.empty();
@@ -6289,7 +6714,7 @@ RagIngestionResult RagService::IngestGeneratedDocument(const std::string& rag_id
     source.original_source_uri = Trim(source_uri).empty() ? ("generated://rag-tool/" + generated_id) : Trim(source_uri);
     source.display_name = display_name;
     source.metadata_json = metadata.dump();
-    IngestOneSourceNoLock(db.get(), library, library_path, source, false, LoadImageIngestSettingsNoLock(), embedding_provider.get(), result);
+    IngestOneSourceNoLock(db.get(), library, library_path, source, false, LoadImageIngestSettingsNoLock(), storage_, embedding_provider.get(), result);
     if (library.vector_backend == "hnswlib") {
         SyncHnswIndex(rag_id, db.get(), library, embedding_provider.get());
     }
@@ -6368,7 +6793,7 @@ RagIngestionResult RagService::RebuildLibrary(const std::string& rag_id, std::fu
     int processed = 0;
     for (const auto& source : sources) {
         publish(processed, "Re-ingesting", source.display_name);
-        IngestOneSourceNoLock(db.get(), library, library_path, source, false, image_settings, embedding_provider.get(), result);
+        IngestOneSourceNoLock(db.get(), library, library_path, source, false, image_settings, storage_, embedding_provider.get(), result);
         ++processed;
         publish(processed, "Re-ingested", source.display_name);
     }
