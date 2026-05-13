@@ -48,6 +48,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1239,21 +1240,113 @@ void AppendToolResultMessage(std::vector<MessageRecord>& messages,
 
 // ──────────────────────────────────────────────────────────────────────────────
 // OpenSSL initialization — must happen before any OpenSSL calls.
-// The Shining Light OpenSSL 3.x builds read an openssl.cnf that tries to load
+// The Shining Light OpenSSL builds can read an openssl.cnf that tries to load
 // the FIPS provider, which causes a fatal error if FIPS isn't built.
 // Setting OPENSSL_CONF to "nul" prevents the config file from being loaded.
+//
+// This is intentionally lazy. Dynamic OpenSSL builds are delay-loaded, so a
+// static initializer must not call OpenSSL before the app has had a chance to
+// start and show a useful setup/configuration error.
 // ──────────────────────────────────────────────────────────────────────────────
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 namespace {
-    struct OpenSSLInit {
-        OpenSSLInit() {
-            _putenv_s("OPENSSL_CONF", "nul");
-            Logger::Info("OpenSSL", "OPENSSL_CONF set to nul");
-            OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG, nullptr);
-            Logger::Info("OpenSSL", "OPENSSL_init_crypto called");
-        }
+
+std::once_flag g_openssl_init_once;
+
+#ifdef AGENT_OPENSSL_DYNAMIC
+std::vector<HMODULE>& LoadedOpenSslModules()
+{
+    static std::vector<HMODULE> modules;
+    return modules;
+}
+
+std::vector<std::vector<std::wstring>> ExpectedOpenSslDllSets()
+{
+#if defined(AGENT_OPENSSL_CRYPTO_DLL_NAME) && defined(AGENT_OPENSSL_SSL_DLL_NAME)
+    return {
+        {
+            Utf8ToWide(AGENT_OPENSSL_CRYPTO_DLL_NAME),
+            Utf8ToWide(AGENT_OPENSSL_SSL_DLL_NAME),
+        },
     };
-    static OpenSSLInit openssl_init;
+#else
+    return {
+        { L"libcrypto-4-x64.dll", L"libssl-4-x64.dll" },
+        { L"libcrypto-3-x64.dll", L"libssl-3-x64.dll" },
+    };
+#endif
+}
+
+bool EnsureOpenSslRuntimeDlls(std::string* error)
+{
+    static bool checked = false;
+    static bool available = false;
+    static std::string checked_error;
+    if (checked) {
+        if (!available && error) *error = checked_error;
+        return available;
+    }
+
+    checked = true;
+    std::vector<std::string> attempt_errors;
+    for (const auto& candidate : ExpectedOpenSslDllSets()) {
+        std::vector<HMODULE> loaded;
+        bool candidate_available = true;
+
+        for (const auto& dll : candidate) {
+            if (dll.empty()) continue;
+            HMODULE module = LoadLibraryW(dll.c_str());
+            if (!module) {
+                candidate_available = false;
+                attempt_errors.push_back(WideToUtf8(dll) + " failed with LoadLibrary error " +
+                    std::to_string(GetLastError()));
+                break;
+            }
+            loaded.push_back(module);
+        }
+
+        if (candidate_available) {
+            auto& modules = LoadedOpenSslModules();
+            modules.insert(modules.end(), loaded.begin(), loaded.end());
+            available = true;
+            return true;
+        }
+
+        for (HMODULE module : loaded) {
+            FreeLibrary(module);
+        }
+    }
+
+    checked_error = "OpenSSL runtime DLLs are missing or could not be loaded.";
+    if (!attempt_errors.empty()) {
+        checked_error += " Attempts: ";
+        for (size_t i = 0; i < attempt_errors.size(); ++i) {
+            if (i > 0) checked_error += "; ";
+            checked_error += attempt_errors[i];
+        }
+    }
+    Logger::Error("OpenSSL", checked_error);
+    if (error) *error = checked_error;
+    return false;
+}
+#endif
+
+bool InitializeOpenSslIfNeeded(std::string* error = nullptr)
+{
+#ifdef AGENT_OPENSSL_DYNAMIC
+    if (!EnsureOpenSslRuntimeDlls(error)) {
+        return false;
+    }
+#endif
+    std::call_once(g_openssl_init_once, []() {
+        _putenv_s("OPENSSL_CONF", "nul");
+        Logger::Info("OpenSSL", "OPENSSL_CONF set to nul");
+        OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG, nullptr);
+        Logger::Info("OpenSSL", "OPENSSL_init_crypto called");
+    });
+    return true;
+}
+
 }
 #endif
 
@@ -4075,6 +4168,11 @@ WebServer::CallModel(const std::string& project_id,
                     break;
                 }
                 ++completion_driver_continuations;
+                if (!working_messages.empty() &&
+                    built_in_tools::IsCompletionDriverContinuationMessage(
+                        working_messages.back())) {
+                    working_messages.pop_back();
+                }
                 working_messages.push_back(
                     built_in_tools::MakeCompletionDriverContinuationMessage(
                         completion_driver_continuations,
@@ -4879,6 +4977,11 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     }
                     message += "...";
                     on_activity_status("completion_driver_continue", message);
+                }
+                if (!working_messages.empty() &&
+                    built_in_tools::IsCompletionDriverContinuationMessage(
+                        working_messages.back())) {
+                    working_messages.pop_back();
                 }
                 working_messages.push_back(
                     built_in_tools::MakeCompletionDriverContinuationMessage(
@@ -7097,7 +7200,7 @@ fs::path WebServer::TlsCertsDir() const {
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 // Generate a self-signed RSA-2048 / SHA-256 certificate valid for 3 years.
-// Uses the modern EVP_PKEY_CTX API (OpenSSL 3.x compatible).
+// Uses the modern EVP_PKEY_CTX API (OpenSSL 3.x/4.x compatible).
 static bool GenerateSelfSignedCert(const fs::path& cert_path, const fs::path& key_path)
 {
     Logger::Info("OpenSSL", "GenerateSelfSignedCert: starting");
@@ -7136,12 +7239,18 @@ static bool GenerateSelfSignedCert(const fs::path& cert_path, const fs::path& ke
 
     X509_set_pubkey(x509, pkey);
 
-    X509_NAME* name = X509_get_subject_name(x509);
+    X509_NAME* name = X509_NAME_new();
+    if (!name) {
+        Logger::Error("OpenSSL", "GenerateSelfSignedCert: X509_NAME_new failed");
+        X509_free(x509); EVP_PKEY_free(pkey); return false;
+    }
     X509_NAME_add_entry_by_txt(name, "O",  MBSTRING_ASC,
         reinterpret_cast<const unsigned char*>("Agent"), -1, -1, 0);
     X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
         reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
+    X509_set_subject_name(x509, name);
     X509_set_issuer_name(x509, name);   // self-signed
+    X509_NAME_free(name);
 
     if (X509_sign(x509, pkey, EVP_sha256()) == 0) {
         Logger::Error("OpenSSL", "GenerateSelfSignedCert: X509_sign failed");
@@ -7223,6 +7332,11 @@ bool WebServer::ResolveTlsCertAndKey(const WebServerConfig& config,
 
         if (!fs::exists(cert_path) || !fs::exists(key_path)) {
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+            std::string openssl_error;
+            if (!InitializeOpenSslIfNeeded(&openssl_error)) {
+                Logger::Error("WebServer", "Cannot generate self-signed certificate: " + openssl_error);
+                return false;
+            }
             Logger::Info("WebServer", "Generating self-signed certificate…");
             if (!GenerateSelfSignedCert(cert_path, key_path)) {
                 Logger::Error("WebServer", "Self-signed cert generation failed.");
@@ -7277,6 +7391,7 @@ int WebServer::GetCertExpiryDays(const WebServerConfig& config) const
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     std::string cert_path, key_path;
     if (!ResolveTlsCertAndKey(config, cert_path, key_path)) return -1;
+    if (!InitializeOpenSslIfNeeded()) return -1;
 
     FILE* f = nullptr;
     if (_wfopen_s(&f, fs::path(cert_path).wstring().c_str(), L"r") != 0 || !f)
@@ -7320,6 +7435,11 @@ bool WebServer::Start()
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (has_tls) {
+        std::string openssl_error;
+        if (!InitializeOpenSslIfNeeded(&openssl_error)) {
+            Logger::Error("WebServer", "TLS requested but OpenSSL runtime is unavailable: " + openssl_error);
+            return false;
+        }
         Logger::Info("WebServer",
             "Starting HTTPS server on port " + std::to_string(config_.port) +
             " (cert=" + cert_path + ")");
@@ -7457,4 +7577,5 @@ void WebServer::Reconfigure(const WebServerConfig& new_config)
 
     if (was_running) Start();
 }
+
 

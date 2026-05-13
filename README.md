@@ -11,7 +11,9 @@ Agent Desktop is the local setup and service host for the web-based agent system
 5. Restart the app when prompted.
 6. Open the website.
 
-Setup System restores the bundled default configuration, creates `C:\Temp` if needed, installs required system tools, pulls local Ollama models, and prepares the default web server configuration.
+Setup System restores the bundled default configuration, creates `C:\Temp` if needed, installs required system tools including OpenSSL for HTTPS/TLS, pulls local Ollama models, and prepares the default web server configuration.
+
+The setup step checks for OpenSSL 4 on PATH and uses winget to install or upgrade `ShiningLight.OpenSSL.Light` when needed. If the light package cannot be installed, it falls back to `ShiningLight.OpenSSL.Dev`.
 
 By default, the web server listens on HTTPS port `8080`, with HTTP port `80` redirecting to HTTPS.
 
@@ -66,16 +68,16 @@ To change it:
 
 Syntax Options
 
-- \$VARNAME\$ — standard form
-- \$<VARNAME>\$ — angle-bracket form
-- \$VARNAME_\$ — underscore-modifier (repaces spaces with underscores)
+- \$VARNAME\$ - standard form
+- \$<VARNAME>\$ - angle-bracket form
+- \$VARNAME_\$ - underscore modifier (replaces spaces with underscores)
 
 Notes
 
 - Variable names are case-insensitive (e.g., $username$ and $USERNAME$ resolve to the same value)
-- Variables support nesting — one variable's value can reference another variable
+- Variables support nesting - one variable's value can reference another variable
 - You can also define custom project variables in the project settings dialog, which can reference these built-ins (e.g., "value": "$ProjectFolder$\\backups")
-- \$ProjectFolder\$ is special — it's seeded from the MCP global binding configuration before other variables are resolved
+- \$ProjectFolder\$ is special - it is seeded from the MCP global binding configuration before other variables are resolved
 
 The variables are used throughout the app for path templates (planner storage, filesystem working directory, artifact memory folders, etc.) and MCP server variable bindings.
 

@@ -53,14 +53,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
-where cl.exe >/dev/null 2>/dev/null
+where cl.exe >nul 2>nul
 if errorlevel 1 (
     echo ERROR: cl.exe is not available after MSVC environment initialization.
     popd
     exit /b 1
 )
 
-where rc.exe >/dev/null 2>/dev/null
+where rc.exe >nul 2>nul
 if errorlevel 1 (
     echo ERROR: rc.exe is not available. Install the Windows SDK resource compiler component.
     popd
@@ -93,12 +93,14 @@ rem -- OpenSSL auto-detection --------------------------------------------------
 rem If third_party\openssl\ exists and contains the expected headers, enable HTTPS.
 rem Run  scripts\download_openssl.ps1  to populate that directory automatically.
 rem
-rem Static linking is strongly preferred -- it embeds OpenSSL into agent.exe so
-rem no separate DLLs are needed on end-user machines.
+rem Static linking is preferred when explicit _static libraries are available.
+rem Otherwise build with import libraries and delay-load the runtime DLLs so a
+rem missing OpenSSL install produces a setup/configuration error instead of a
+rem process-start crash.
 rem
 rem Static lib search order:
 rem   1. third_party\openssl\lib\VC\x64\MD\libssl_static.lib   (old naming, release)
-rem   2. third_party\openssl\lib\VC\x64\MD\libssl.lib           (new naming 3.4+, release)
+rem   2. third_party\openssl\lib\VC\x64\MD\libssl.lib           (import lib -- dynamic)
 rem   3. same two checks for MDd (debug)
 rem   4. third_party\openssl\lib\libssl_static.lib              (flat layout)
 rem   5. third_party\openssl\lib\libssl.lib                     (import lib -- dynamic)
@@ -106,9 +108,18 @@ rem
 set OPENSSL_DIR=%SCRIPT_DIR%third_party\openssl
 set OPENSSL_SSL_LIB=
 set OPENSSL_CRYPTO_LIB=
+set OPENSSL_SSL_DLL=
+set OPENSSL_CRYPTO_DLL=
 set OPENSSL_STATIC=0
 
 if not exist "%OPENSSL_DIR%\include\openssl\ssl.h" goto :no_openssl
+
+for %%f in ("%OPENSSL_DIR%\bin\libssl-*.dll") do (
+    if exist "%%~f" set OPENSSL_SSL_DLL=%%~nxf
+)
+for %%f in ("%OPENSSL_DIR%\bin\libcrypto-*.dll") do (
+    if exist "%%~f" set OPENSSL_CRYPTO_DLL=%%~nxf
+)
 
 rem -- Pick VC subdirectory for this runtime variant ---------------------------
 if /I "%BUILD_TYPE%"=="release" (
@@ -125,12 +136,14 @@ if exist "%OPENSSL_STATIC_DIR%\libssl_static.lib" (
     goto :openssl_found
 )
 
-rem -- Try plain name in VC subdir (OpenSSL 3.4+ renamed _static -> plain) -----
-rem    libs in lib\VC\x64\MD[d]\ are ALWAYS the static variants
+rem -- Try plain name in VC subdir ---------------------------------------------
+rem    Shining Light installers may use these as import libraries for runtime
+rem    DLLs. Treat them as dynamic unless explicit _static libraries were
+rem    present above.
 if exist "%OPENSSL_STATIC_DIR%\libssl.lib" (
     set OPENSSL_SSL_LIB=%OPENSSL_STATIC_DIR%\libssl.lib
     set OPENSSL_CRYPTO_LIB=%OPENSSL_STATIC_DIR%\libcrypto.lib
-    set OPENSSL_STATIC=1
+    set OPENSSL_STATIC=0
     goto :openssl_found
 )
 
@@ -157,7 +170,7 @@ echo OpenSSL found -- enabling HTTPS/TLS support.
 if "%OPENSSL_STATIC%"=="1" (
     echo   Linking STATICALLY -- no runtime DLLs needed.
 ) else (
-    echo   Linking dynamically -- DLLs will be copied to build directory.
+    echo   Linking dynamically with delay-loaded OpenSSL runtime DLLs.
 )
 set CFLAGS=%CFLAGS% /DCPPHTTPLIB_OPENSSL_SUPPORT
 set INCLUDES=%INCLUDES% /I"%OPENSSL_DIR%\include"
@@ -166,9 +179,21 @@ rem OpenSSL static builds also need these Windows system libs:
 set LIBS=%LIBS% %OPENSSL_SSL_LIB% %OPENSSL_CRYPTO_LIB% Crypt32.lib ws2_32.lib
 
 if "%OPENSSL_STATIC%"=="0" (
+    set CFLAGS=%CFLAGS% /DAGENT_OPENSSL_DYNAMIC
+    if defined OPENSSL_SSL_DLL if defined OPENSSL_CRYPTO_DLL (
+        set CFLAGS=%CFLAGS% /DAGENT_OPENSSL_SSL_DLL_NAME=\"%OPENSSL_SSL_DLL%\" /DAGENT_OPENSSL_CRYPTO_DLL_NAME=\"%OPENSSL_CRYPTO_DLL%\"
+        set LDFLAGS=%LDFLAGS% /DELAYLOAD:%OPENSSL_SSL_DLL% /DELAYLOAD:%OPENSSL_CRYPTO_DLL%
+        set LIBS=%LIBS% delayimp.lib
+        echo   Delay loading %OPENSSL_SSL_DLL% and %OPENSSL_CRYPTO_DLL%.
+    ) else (
+        echo   WARNING: OpenSSL DLL names were not detected; delay-load metadata will not be added.
+    )
+)
+
+if "%OPENSSL_STATIC%"=="0" (
     rem Copy runtime DLLs to build output so the exe runs in-place
     for %%f in ("%OPENSSL_DIR%\bin\*.dll") do (
-        copy /y "%%f" "%OUT_DIR%\" >/dev/null 2>&1
+        copy /y "%%f" "%OUT_DIR%\" >nul 2>&1
     )
 )
 

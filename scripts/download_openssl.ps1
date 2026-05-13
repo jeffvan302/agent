@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Downloads and unpacks a prebuilt Win64 OpenSSL 3.x distribution into
+    Downloads and unpacks a prebuilt Win64 OpenSSL 4.x distribution into
     third_party\openssl\ so that build.bat can automatically enable HTTPS/TLS.
 
 .DESCRIPTION
@@ -22,8 +22,8 @@
           lib\VC\x64\MDd\libcrypto_static.lib
           lib\libssl.lib                       (dynamic import fallback)
           lib\libcrypto.lib
-          bin\libssl-3-x64.dll                 (dynamic fallback DLLs)
-          bin\libcrypto-3-x64.dll
+          bin\libssl-4-x64.dll                 (dynamic fallback DLLs)
+          bin\libcrypto-4-x64.dll
 
 .NOTES
     Requires PowerShell 5.1+ and an internet connection.
@@ -34,7 +34,7 @@
 [CmdletBinding()]
 param(
     # OpenSSL version to download (x.y.z)
-    [string]$Version = "3.6.2",
+    [string]$Version = "4.0.0",
 
     # Override the target directory (default: third_party\openssl relative to repo root)
     [string]$TargetDir = ""
@@ -56,7 +56,7 @@ Write-Host "OpenSSL version          : $Version"
 
 # ---------- Build download URL --------------------------------------------------
 # Shining Light Productions URL pattern -- FULL (non-Light) installer:
-#   Win64OpenSSL-3_6_2.exe
+#   Win64OpenSSL-4_0_0.exe
 $VerUnd   = $Version -replace "\.",  "_"
 $Filename = "Win64OpenSSL-${VerUnd}.exe"
 $TempExe  = Join-Path $env:TEMP $Filename
@@ -98,8 +98,14 @@ if (-not (Test-Path $TempExe)) {
 # ---------- Run installer silently ----------------------------------------------
 Write-Host "Installing OpenSSL to $InstDir ..."
 $null = New-Item -ItemType Directory -Force -Path $InstDir
+
+# Shining Light's WiX package launches this same Inno installer with the /MSI
+# token below. Newer OpenSSL 4 installers exit with code 2 without it, even
+# when the normal Inno silent switches are otherwise valid.
+$msiBridgeToken = '/MSI=8BA62D91-E3D5-4E94-AEDB-7BB3BA1B578E'
 $proc = Start-Process -FilePath $TempExe `
-    -ArgumentList '/SILENT', "/DIR=$InstDir", '/TASKS=' `
+    -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
+        '/RESTARTEXITCODE=0', $msiBridgeToken, "/DIR=$InstDir" `
     -Wait -PassThru
 if ($proc.ExitCode -ne 0) {
     Write-Error "Installer exited with code $($proc.ExitCode)"
@@ -130,7 +136,7 @@ if (Test-Path $IncSrc) {
 # ---------- Copy static libs (primary goal -- self-contained exe) ---------------
 Write-Host "Copying static libraries ..."
 
-# Shining Light full installer layout (OpenSSL 3.x):
+# Shining Light full installer layout (OpenSSL 3.x/4.x):
 #   lib\VC\x64\MD\   -- release /MD
 #   lib\VC\x64\MDd\  -- debug   /MDd
 foreach ($rt in @("MD", "MDd")) {

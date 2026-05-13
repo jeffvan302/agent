@@ -483,10 +483,12 @@ bool GenerateRemoteProviderWorkerSelfSignedCertificateMaterial(
     X509_gmtime_adj(X509_get_notBefore(x509.get()), 0);
     X509_gmtime_adj(X509_get_notAfter(x509.get()), 60LL * 60 * 24 * 365 * 3);
     X509_set_pubkey(x509.get(), pkey.get());
-    X509_NAME* name = X509_get_subject_name(x509.get());
-    X509_NAME_add_entry_by_txt(name, "O", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("Agent Remote Worker"), -1, -1, 0);
-    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("agent-remote-worker"), -1, -1, 0);
-    X509_set_issuer_name(x509.get(), name);
+    std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)> name(X509_NAME_new(), X509_NAME_free);
+    if (!name) { if (error) *error = "X509_NAME_new failed."; return false; }
+    X509_NAME_add_entry_by_txt(name.get(), "O", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("Agent Remote Worker"), -1, -1, 0);
+    X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("agent-remote-worker"), -1, -1, 0);
+    X509_set_subject_name(x509.get(), name.get());
+    X509_set_issuer_name(x509.get(), name.get());
     if (X509_sign(x509.get(), pkey.get(), EVP_sha256()) == 0) { if (error) *error = "X509_sign failed."; return false; }
 
     std::unique_ptr<BIO, decltype(&BIO_free)> cert_bio(BIO_new(BIO_s_mem()), BIO_free);
