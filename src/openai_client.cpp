@@ -43,6 +43,17 @@ std::string LowerAscii(std::string value) {
         [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
 }
+
+std::string DumpJsonForProviderRequest(const json& value, const std::string& context) {
+    try {
+        return value.dump();
+    } catch (const nlohmann::json::type_error& ex) {
+        Logger::Warn("OpenAIClient",
+            "Invalid UTF-8 while serializing " + context +
+            "; replacing invalid sequences. error=" + ex.what());
+        return value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+}
 } // namespace
 
 // Static provider cache for compression model calls
@@ -1296,7 +1307,8 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
     AppendDetail("RunRequest: POST " + url);
     AppendDetail("  stream=" + std::to_string(stream) + " provider=" + request.provider.name + " model=" + request.model.id);
     const ParsedUrl parsed = CrackUrl(url);
-    const std::string body = BuildRequestBody(request, stream).dump();
+    const std::string body = DumpJsonForProviderRequest(
+        BuildRequestBody(request, stream), "chat request body");
     AppendDetail("  body: " + body);
     AppendDetail("  parsed host=" + WideToUtf8(parsed.host) + " port=" + std::to_string(parsed.port) + " path=" + WideToUtf8(parsed.path));
     constexpr int kMaxAttempts = 4;
@@ -1460,6 +1472,7 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
         size_t streamed_chunks = 0;
         bool thinking_emitted = false;
         bool thinking_closed = false;
+        std::string finish_reason;
 
         while (true) {
             if (IsCancelRequested(should_cancel)) {
@@ -1548,6 +1561,9 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
                     }
 
                     const auto& choice = chunk["choices"][0];
+                    if (choice.contains("finish_reason") && !choice["finish_reason"].is_null()) {
+                        finish_reason = choice["finish_reason"].get<std::string>();
+                    }
                     if (choice.contains("delta")) {
                         const auto& delta = choice["delta"];
                         const std::string reasoning_piece = ExtractReasoningString(delta);
@@ -1589,6 +1605,24 @@ ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, c
             result.full_text += close;
         }
 
+        if (finish_reason.empty()) {
+            const std::string detail =
+                "Streaming response ended without the provider completion marker.";
+            const std::string report_path = WriteWinHttpTransportReport(
+                request,
+                parsed,
+                "stream_chat_missing_done",
+                ERROR_SUCCESS,
+                detail,
+                attempt,
+                status_code,
+                streamed_bytes,
+                streamed_chunks,
+                response_buffer);
+            result.error = AppendReportPathToError(detail, report_path);
+            return result;
+        }
+
         result.success = true;
         return result;
     }
@@ -1620,7 +1654,7 @@ bool TestOpenAICompatibleEmbeddingConnection(const ProviderConfig& provider, con
         if (!req_h) { if (message) *message = "WinHttpOpenRequest failed"; return false; }
         WinHttpSetTimeouts(req_h, 10000, 10000, 30000, 180000);
 
-        const std::string body_str = body.dump();
+        const std::string body_str = DumpJsonForProviderRequest(body, "embedding request body");
         std::wstring headers = L"Content-Type: application/json\r\nAccept: application/json\r\n";
         if (!provider.api_key.empty()) {
             headers += L"Authorization: Bearer ";
@@ -1874,7 +1908,8 @@ ChatCompletionResult OpenAIClient::CreateToolAwareCompletion(const ChatRequestOp
     try {
         const std::string url = JoinChatCompletionsUrl(request.provider.base_url);
         const ParsedUrl parsed = CrackUrl(url);
-        const std::string body = BuildRequestBody(request, false, tools).dump();
+        const std::string body = DumpJsonForProviderRequest(
+            BuildRequestBody(request, false, tools), "tool-aware chat request body");
         constexpr int kMaxAttempts = 4;
         std::string last_error;
 
@@ -2055,7 +2090,8 @@ ChatCompletionResult OpenAIClient::CreateSimpleCompletion(const ChatRequestOptio
     try {
         const std::string url = JoinChatCompletionsUrl(request.provider.base_url);
         const ParsedUrl parsed = CrackUrl(url);
-        const std::string body = BuildRequestBody(request, false, {}).dump();
+        const std::string body = DumpJsonForProviderRequest(
+            BuildRequestBody(request, false, {}), "chat request body");
         constexpr int kMaxAttempts = 4;
         std::string last_error;
 
@@ -2252,7 +2288,8 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
     try {
         const std::string url = JoinChatCompletionsUrl(request.provider.base_url);
         const ParsedUrl parsed = CrackUrl(url);
-        const std::string body = BuildRequestBody(request, true, tools).dump();
+        const std::string body = DumpJsonForProviderRequest(
+            BuildRequestBody(request, true, tools), "streaming tool-aware chat request body");
         constexpr int kMaxAttempts = 4;
         std::string last_error;
 
@@ -2367,6 +2404,30 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
             bool thinking_emitted = false;
             bool thinking_closed = false;
             std::vector<ChatToolCall> streamed_tool_calls;
+            auto finalize_streamed_tool_result = [&]() {
+                result.success = true;
+                result.tool_calls.clear();
+                for (auto tool_call : streamed_tool_calls) {
+                    if (!tool_call.name.empty()) {
+                        NormalizeToolCall(tool_call);
+                        result.tool_calls.push_back(std::move(tool_call));
+                    }
+                }
+
+                json raw_message{
+                    {"role", "assistant"},
+                };
+                if (!result.thinking_text.empty()) {
+                    raw_message["thinking"] = result.thinking_text;
+                }
+                if (!result.assistant_text.empty()) {
+                    raw_message["content"] = result.assistant_text;
+                }
+                if (!result.tool_calls.empty()) {
+                    raw_message["tool_calls"] = SerializeToolCallsForProvider(result.tool_calls);
+                }
+                result.raw_message_json = raw_message.dump(2);
+            };
 
             while (true) {
                 if (IsCancelRequested(should_cancel)) {
@@ -2444,28 +2505,7 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
 
                     std::string payload = Trim(line.substr(5));
                     if (payload == "[DONE]") {
-                        result.success = true;
-                        result.tool_calls.clear();
-                        for (auto tool_call : streamed_tool_calls) {
-                            if (!tool_call.name.empty()) {
-                                NormalizeToolCall(tool_call);
-                                result.tool_calls.push_back(std::move(tool_call));
-                            }
-                        }
-
-                        json raw_message{
-                            {"role", "assistant"},
-                        };
-                        if (!result.thinking_text.empty()) {
-                            raw_message["thinking"] = result.thinking_text;
-                        }
-                        if (!result.assistant_text.empty()) {
-                            raw_message["content"] = result.assistant_text;
-                        }
-                        if (!result.tool_calls.empty()) {
-                            raw_message["tool_calls"] = SerializeToolCallsForProvider(result.tool_calls);
-                        }
-                        result.raw_message_json = raw_message.dump(2);
+                        finalize_streamed_tool_result();
                         return result;
                     }
 
@@ -2552,14 +2592,24 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
                 result.assistant_text += close;
             }
 
-            result.success = true;
-            result.tool_calls.clear();
-            for (auto tool_call : streamed_tool_calls) {
-                if (!tool_call.name.empty()) {
-                    NormalizeToolCall(tool_call);
-                    result.tool_calls.push_back(std::move(tool_call));
-                }
+            if (result.finish_reason.empty()) {
+                const std::string detail =
+                    "Streaming tool-aware response ended without the provider completion marker.";
+                const std::string report_path = WriteWinHttpTransportReport(
+                    request,
+                    parsed,
+                    "stream_tool_missing_done",
+                    ERROR_SUCCESS,
+                    detail,
+                    attempt,
+                    status_code,
+                    streamed_bytes,
+                    streamed_chunks,
+                    response_buffer);
+                result.error = AppendReportPathToError(detail, report_path);
+                return result;
             }
+            finalize_streamed_tool_result();
             return result;
         }
 

@@ -2,6 +2,7 @@
 
 #include "types.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <vector>
@@ -47,7 +48,14 @@ public:
     void SaveChat(const std::string& project_id, const ChatInfo& chat) const;
 
     std::vector<MessageRecord> LoadMessages(const std::string& project_id, const std::string& chat_id) const;
+    std::vector<MessageRecord> LoadMessagesIncludingArchives(const std::string& project_id, const std::string& chat_id) const;
     void SaveMessages(const std::string& project_id, const std::string& chat_id, const std::vector<MessageRecord>& messages) const;
+    bool RolloverMessagesAfterCompression(
+        const std::string& project_id,
+        const std::string& chat_id,
+        size_t compressed_model_visible_messages,
+        const std::optional<MessageRecord>& compression_record = std::nullopt,
+        std::uintmax_t min_size_bytes = kMessageArchiveRolloverThresholdBytes) const;
     std::vector<ChatContextDebugEntry> LoadChatContextDebugEntries(const std::string& project_id, const std::string& chat_id) const;
     void SaveChatContextDebugEntries(const std::string& project_id, const std::string& chat_id, const std::vector<ChatContextDebugEntry>& entries) const;
     void AppendChatContextDebugEntry(const std::string& project_id, const std::string& chat_id, const ChatContextDebugEntry& entry) const;

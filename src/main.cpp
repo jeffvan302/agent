@@ -36,6 +36,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cwchar>
 #include <cwctype>
@@ -228,6 +229,41 @@ size_t EstimateMessageTokens(const MessageRecord& message) {
     tokens += EstimateTokenCount(message.tool_call_id);
     tokens += EstimateTokenCount(message.tool_calls_json);
     return tokens;
+}
+
+size_t EstimateMessagesTokens(const std::vector<MessageRecord>& messages) {
+    size_t tokens = 0;
+    for (const auto& message : messages) {
+        tokens += EstimateMessageTokens(message);
+    }
+    return tokens;
+}
+
+MessageRecord MakeCompressionRecord(
+    const std::vector<MessageRecord>& before_messages,
+    const std::vector<MessageRecord>& after_messages,
+    size_t compressed_through,
+    const std::string& compressed_context,
+    const std::string& message) {
+    const std::string created_at = CurrentTimestampUtc();
+    nlohmann::json payload = {
+        {"status", "done"},
+        {"message", message},
+        {"created_at", created_at},
+        {"before_messages", before_messages.size()},
+        {"after_messages", after_messages.size()},
+        {"compressed_through", compressed_through},
+        {"before_tokens", EstimateMessagesTokens(before_messages)},
+        {"after_tokens", EstimateMessagesTokens(after_messages) +
+            EstimateTokenCount(compressed_context)},
+        {"compressed_context_tokens", EstimateTokenCount(compressed_context)},
+    };
+
+    MessageRecord record;
+    record.role = "compression";
+    record.content = payload.dump();
+    record.created_at = created_at;
+    return record;
 }
 
 std::vector<MessageRecord> ModelVisibleMessages(const std::vector<MessageRecord>& messages) {
@@ -3832,6 +3868,7 @@ void MainWindow::EditProjectSettings() {
     options.built_in_completion_driver_enabled = project_settings.built_in_completion_driver_enabled;
     options.completion_driver_allowed_mode_ids = project_settings.completion_driver_allowed_mode_ids;
     options.completion_driver_max_continuations = project_settings.completion_driver_max_continuations;
+    options.completion_driver_overload_delay_seconds = project_settings.completion_driver_overload_delay_seconds;
     options.built_in_questionnaire_enabled = project_settings.built_in_questionnaire_enabled;
     options.questionnaire_max_options = project_settings.questionnaire_max_options;
     options.questionnaire_restrict_by_mode = project_settings.questionnaire_restrict_by_mode;
@@ -3839,6 +3876,8 @@ void MainWindow::EditProjectSettings() {
     options.built_in_filesystem_enabled = project_settings.built_in_filesystem_enabled;
     options.built_in_filesystem_auto_archive = project_settings.built_in_filesystem_auto_archive;
     options.built_in_filesystem_working_directory = project_settings.built_in_filesystem_working_directory;
+    options.built_in_sleep_enabled = project_settings.built_in_sleep_enabled;
+    options.built_in_sleep_max_seconds = project_settings.built_in_sleep_max_seconds;
     options.model_timeout_seconds = project_settings.model_timeout_seconds;
 
     // Pre-seed ProjectFolder from MCP global binding values if not already set.
@@ -3893,6 +3932,7 @@ void MainWindow::EditProjectSettings() {
     saved_settings.built_in_completion_driver_enabled = result->built_in_completion_driver_enabled;
     saved_settings.completion_driver_allowed_mode_ids = result->completion_driver_allowed_mode_ids;
     saved_settings.completion_driver_max_continuations = result->completion_driver_max_continuations;
+    saved_settings.completion_driver_overload_delay_seconds = result->completion_driver_overload_delay_seconds;
     saved_settings.built_in_questionnaire_enabled = result->built_in_questionnaire_enabled;
     saved_settings.questionnaire_max_options = result->questionnaire_max_options;
     saved_settings.questionnaire_restrict_by_mode = result->questionnaire_restrict_by_mode;
@@ -3900,6 +3940,8 @@ void MainWindow::EditProjectSettings() {
     saved_settings.built_in_filesystem_enabled = result->built_in_filesystem_enabled;
     saved_settings.built_in_filesystem_auto_archive = result->built_in_filesystem_auto_archive;
     saved_settings.built_in_filesystem_working_directory = result->built_in_filesystem_working_directory;
+    saved_settings.built_in_sleep_enabled = result->built_in_sleep_enabled;
+    saved_settings.built_in_sleep_max_seconds = result->built_in_sleep_max_seconds;
     saved_settings.model_timeout_seconds = result->model_timeout_seconds;
     storage_.SaveProjectSettings(active_project_id_, saved_settings);
     storage_.SaveProjectCompressionSettings(active_project_id_, ProjectCompressionSettings{
@@ -4723,7 +4765,9 @@ void MainWindow::SendCurrentMessage() {
     request.model    = *selected_model;
     request.system_prompt = chat->system_prompt;
     request.temperature = chat->temperature;
-    request.max_tokens = chat->max_tokens;
+    request.max_tokens = selected_model->max_output_tokens > 0
+        ? selected_model->max_output_tokens
+        : kDefaultModelMaxOutputTokens;
     request.model_timeout_seconds = send_proj_settings.model_timeout_seconds;
 
     std::vector<MessageRecord> full_messages = active_messages_;
@@ -4731,6 +4775,7 @@ void MainWindow::SendCurrentMessage() {
 
     std::vector<MessageRecord> request_history = ModelVisibleMessages(active_messages_);
     std::string compressed_context;
+    bool compression_generated = false;
     auto proj_settings = storage_.LoadProjectSettings(active_project_id_);
     const auto runtime_variables = BuildRuntimeVariablesForChat(active_project_id_, active_chat_id_);
     const auto resolved_prompt_variables = BuildResolvedVariablesForChat(
@@ -4754,6 +4799,7 @@ void MainWindow::SendCurrentMessage() {
                     false,
                     "automatic",
                     resolved_prompt_variables);
+                compression_generated = !compressed_context.empty();
             }
 
             auto compression_state = compression_service_.LoadChatState(active_project_id_, active_chat_id_);
@@ -4791,6 +4837,32 @@ void MainWindow::SendCurrentMessage() {
                 const size_t first_uncompressed = std::min(compression_state.last_compression_message_index, request_history.size());
                 request_history.erase(request_history.begin(), request_history.begin() + first_uncompressed);
                 request_history = message_sanitizer::SanitizeModelVisibleMessages(request_history);
+                if (compression_generated) {
+                    const auto compression_record = MakeCompressionRecord(
+                        compression_messages,
+                        request_history,
+                        compression_state.last_compression_message_index,
+                        compressed_context,
+                        "Context window compressed.");
+                    if (storage_.RolloverMessagesAfterCompression(
+                            active_project_id_,
+                            active_chat_id_,
+                            compression_state.last_compression_message_index,
+                            compression_record)) {
+                        compression_state.last_compression_message_index = 0;
+                        compression_state.layer0_last_processed_message_index = 0;
+                        compression_service_.SaveChatState(
+                            active_project_id_, active_chat_id_, compression_state);
+                        active_messages_ =
+                            storage_.LoadMessages(active_project_id_, active_chat_id_);
+                        full_messages = active_messages_;
+                        full_messages.push_back(user_message);
+                    } else {
+                        full_messages = active_messages_;
+                        full_messages.push_back(compression_record);
+                        full_messages.push_back(user_message);
+                    }
+                }
             }
         }
     }
@@ -4874,6 +4946,15 @@ void MainWindow::SendCurrentMessage() {
             }
             request.system_prompt += q_context;
             system_prompt_sections.push_back({"User Questionnaire", q_context});
+        }
+        if (proj_settings.built_in_sleep_enabled) {
+            const std::string sleep_context = built_in_tools::SleepSystemPrompt(
+                built_in_tools::NormalizedSleepMaxSeconds(proj_settings));
+            if (!request.system_prompt.empty()) {
+                request.system_prompt += "\n\n";
+            }
+            request.system_prompt += sleep_context;
+            system_prompt_sections.push_back({"Sleep / Pause", sleep_context});
         }
         if (proj_settings.built_in_filesystem_enabled) {
             const std::string fs_context = built_in_tools::FilesystemSystemPrompt();
@@ -4970,6 +5051,30 @@ void MainWindow::SendCurrentMessage() {
                     const size_t first_uncompressed = std::min(compression_state.last_compression_message_index, request_history.size());
                     request_history.erase(request_history.begin(), request_history.begin() + first_uncompressed);
                     request_history = message_sanitizer::SanitizeModelVisibleMessages(request_history);
+                    const auto compression_record = MakeCompressionRecord(
+                        compression_messages,
+                        request_history,
+                        compression_state.last_compression_message_index,
+                        compressed_context,
+                        "Context window compressed.");
+                    if (storage_.RolloverMessagesAfterCompression(
+                            active_project_id_,
+                            active_chat_id_,
+                            compression_state.last_compression_message_index,
+                            compression_record)) {
+                        compression_state.last_compression_message_index = 0;
+                        compression_state.layer0_last_processed_message_index = 0;
+                        compression_service_.SaveChatState(
+                            active_project_id_, active_chat_id_, compression_state);
+                        active_messages_ =
+                            storage_.LoadMessages(active_project_id_, active_chat_id_);
+                        full_messages = active_messages_;
+                        full_messages.push_back(user_message);
+                    } else {
+                        full_messages = active_messages_;
+                        full_messages.push_back(compression_record);
+                        full_messages.push_back(user_message);
+                    }
                 }
                 request.messages = std::move(request_history);
                 request.messages.push_back(user_message);
@@ -5190,15 +5295,56 @@ void MainWindow::SendCurrentMessage() {
     const size_t existing_count = request.messages.size();
 
     if (!include_tools) {
-        std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging]() {
+        std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, send_proj_settings]() {
             try {
-                const auto result = OpenAIClient::StreamChat(request, [hwnd, project_id, chat_id](const std::string& piece) {
-                    auto* payload = new ChatDeltaPayload;
-                    payload->project_id = project_id;
-                    payload->chat_id = chat_id;
-                    payload->text = piece;
-                    PostMessageW(hwnd, kChatDeltaMessage, 0, reinterpret_cast<LPARAM>(payload));
-                });
+                const bool overload_retry_enabled = built_in_tools::IsCompletionDriverEnabled(
+                    send_proj_settings, send_proj_settings.selected_agentic_mode_id);
+                const int overload_retry_max =
+                    built_in_tools::NormalizedCompletionDriverMaxContinuations(send_proj_settings);
+                const int overload_retry_delay_seconds =
+                    built_in_tools::NormalizedCompletionDriverOverloadDelaySeconds(send_proj_settings);
+                int overload_retry_count = 0;
+                std::string streamed_text;
+                ChatExecutionResult result;
+                for (;;) {
+                    streamed_text.clear();
+                    result = OpenAIClient::StreamChat(request, [hwnd, project_id, chat_id, &streamed_text](const std::string& piece) {
+                        streamed_text += piece;
+                        auto* payload = new ChatDeltaPayload;
+                        payload->project_id = project_id;
+                        payload->chat_id = chat_id;
+                        payload->text = piece;
+                        PostMessageW(hwnd, kChatDeltaMessage, 0, reinterpret_cast<LPARAM>(payload));
+                    });
+                    if (result.success ||
+                        !streamed_text.empty() ||
+                        !overload_retry_enabled ||
+                        !built_in_tools::IsTransientProviderOverloadError(result.error)) {
+                        break;
+                    }
+                    if (overload_retry_max > 0 && overload_retry_count >= overload_retry_max) {
+                        Logger::Warn("CompletionDriver",
+                            "plain desktop stream overload retry limit reached project=" + project_id +
+                            " chat=" + chat_id +
+                            " limit=" + std::to_string(overload_retry_max) +
+                            " error=" + result.error);
+                        break;
+                    }
+                    ++overload_retry_count;
+                    Logger::Warn("CompletionDriver",
+                        "plain desktop stream overloaded; retrying project=" + project_id +
+                        " chat=" + chat_id +
+                        " retry=" + std::to_string(overload_retry_count) +
+                        (overload_retry_max > 0
+                            ? " limit=" + std::to_string(overload_retry_max)
+                            : " limit=unlimited") +
+                        " delay_seconds=" + std::to_string(overload_retry_delay_seconds) +
+                        " error=" + result.error);
+                    if (overload_retry_delay_seconds > 0) {
+                        std::this_thread::sleep_for(
+                            std::chrono::seconds(overload_retry_delay_seconds));
+                    }
+                }
 
                 auto* final_payload = new ChatFinishedPayload;
                 final_payload->success = result.success;
@@ -5292,6 +5438,8 @@ void MainWindow::SendCurrentMessage() {
             project_settings_for_tools, proj_settings.selected_agentic_mode_id);
         const int completion_driver_max_continuations =
             built_in_tools::NormalizedCompletionDriverMaxContinuations(project_settings_for_tools);
+        const int completion_driver_overload_delay_seconds =
+            built_in_tools::NormalizedCompletionDriverOverloadDelaySeconds(project_settings_for_tools);
         // Keep the limit scoped to this desktop send operation. A later send gets
         // a new counter, matching the web automation per-step behavior.
         int completion_driver_continuations = 0;
@@ -5323,7 +5471,37 @@ void MainWindow::SendCurrentMessage() {
                 PostMessageW(hwnd, kChatDeltaMessage, 0, reinterpret_cast<LPARAM>(payload));
             });
             if (!completion.success) {
-                error = completion.error;
+                const std::string provider_error = completion.error.empty()
+                    ? "Model call failed"
+                    : completion.error;
+                if (completion_driver_enabled &&
+                    built_in_tools::IsTransientProviderOverloadError(provider_error)) {
+                    if (completion_driver_max_continuations > 0 &&
+                        completion_driver_continuations >= completion_driver_max_continuations) {
+                        Logger::Warn("CompletionDriver",
+                            "provider overload retry limit reached project=" + project_id +
+                            " chat=" + chat_id +
+                            " limit=" + std::to_string(completion_driver_max_continuations) +
+                            " error=" + provider_error);
+                    } else {
+                        ++completion_driver_continuations;
+                        Logger::Warn("CompletionDriver",
+                            "provider overloaded; retrying project=" + project_id +
+                            " chat=" + chat_id +
+                            " retry=" + std::to_string(completion_driver_continuations) +
+                            (completion_driver_max_continuations > 0
+                                ? " limit=" + std::to_string(completion_driver_max_continuations)
+                                : " limit=unlimited") +
+                            " delay_seconds=" + std::to_string(completion_driver_overload_delay_seconds) +
+                            " error=" + provider_error);
+                        if (completion_driver_overload_delay_seconds > 0) {
+                            std::this_thread::sleep_for(
+                                std::chrono::seconds(completion_driver_overload_delay_seconds));
+                        }
+                        continue;
+                    }
+                }
+                error = provider_error;
                 break;
             }
 
@@ -5586,15 +5764,50 @@ void MainWindow::SendCurrentMessage() {
                 "work succeeded, say so and summarize the important output. If it did "
                 "not fully succeed, explain the last observed state and what remains.";
 
-            const auto final_result = OpenAIClient::StreamChat(
-                final_request,
-                [hwnd, project_id, chat_id](const std::string& piece) {
-                    auto* payload = new ChatDeltaPayload;
-                    payload->project_id = project_id;
-                    payload->chat_id = chat_id;
-                    payload->text = piece;
-                    PostMessageW(hwnd, kChatDeltaMessage, 0, reinterpret_cast<LPARAM>(payload));
-                });
+            std::string final_text;
+            ChatExecutionResult final_result;
+            for (;;) {
+                final_text.clear();
+                final_result = OpenAIClient::StreamChat(
+                    final_request,
+                    [hwnd, project_id, chat_id, &final_text](const std::string& piece) {
+                        final_text += piece;
+                        auto* payload = new ChatDeltaPayload;
+                        payload->project_id = project_id;
+                        payload->chat_id = chat_id;
+                        payload->text = piece;
+                        PostMessageW(hwnd, kChatDeltaMessage, 0, reinterpret_cast<LPARAM>(payload));
+                    });
+                if (final_result.success ||
+                    !final_text.empty() ||
+                    !completion_driver_enabled ||
+                    !built_in_tools::IsTransientProviderOverloadError(final_result.error)) {
+                    break;
+                }
+                if (completion_driver_max_continuations > 0 &&
+                    completion_driver_continuations >= completion_driver_max_continuations) {
+                    Logger::Warn("CompletionDriver",
+                        "final summary overload retry limit reached project=" + project_id +
+                        " chat=" + chat_id +
+                        " limit=" + std::to_string(completion_driver_max_continuations) +
+                        " error=" + final_result.error);
+                    break;
+                }
+                ++completion_driver_continuations;
+                Logger::Warn("CompletionDriver",
+                    "final summary overloaded; retrying project=" + project_id +
+                    " chat=" + chat_id +
+                    " retry=" + std::to_string(completion_driver_continuations) +
+                    (completion_driver_max_continuations > 0
+                        ? " limit=" + std::to_string(completion_driver_max_continuations)
+                        : " limit=unlimited") +
+                    " delay_seconds=" + std::to_string(completion_driver_overload_delay_seconds) +
+                    " error=" + final_result.error);
+                if (completion_driver_overload_delay_seconds > 0) {
+                    std::this_thread::sleep_for(
+                        std::chrono::seconds(completion_driver_overload_delay_seconds));
+                }
+            }
 
             if (final_result.success && !final_result.full_text.empty()) {
                 MessageRecord assistant_message;
@@ -5736,6 +5949,36 @@ void MainWindow::CompressCurrentContext() {
 
     if (compressed.empty()) {
         compressed = state.current_compressed_context;
+    }
+
+    if (!compressed.empty() && state.last_compression_message_index > 0) {
+        const size_t compressed_through =
+            std::min(state.last_compression_message_index, messages.size());
+        std::vector<MessageRecord> remaining_messages;
+        if (compressed_through < messages.size()) {
+            remaining_messages.assign(
+                messages.begin() + static_cast<std::ptrdiff_t>(compressed_through),
+                messages.end());
+        }
+        const auto compression_record = MakeCompressionRecord(
+            messages,
+            remaining_messages,
+            state.last_compression_message_index,
+            compressed,
+            "Context compressed successfully");
+        if (storage_.RolloverMessagesAfterCompression(
+                active_project_id_,
+                active_chat_id_,
+                state.last_compression_message_index,
+                compression_record)) {
+            auto rolled_state = state;
+            rolled_state.last_compression_message_index = 0;
+            rolled_state.layer0_last_processed_message_index = 0;
+            compression_service_.SaveChatState(
+                active_project_id_, active_chat_id_, rolled_state);
+            active_messages_ =
+                storage_.LoadMessages(active_project_id_, active_chat_id_);
+        }
     }
 
     // Build a scrollable preview that shows both the diagnostic layers and the exact

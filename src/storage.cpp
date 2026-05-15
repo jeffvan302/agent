@@ -10,9 +10,19 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cctype>
 #include <fstream>
+#include <iomanip>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -37,6 +47,272 @@ BindingRoutingMode BindingRoutingModeFromString(std::string value) {
         return BindingRoutingMode::RoundRobin;
     }
     return BindingRoutingMode::TopDownFailover;
+}
+
+std::shared_ptr<std::mutex> JsonFileMutexForPath(const std::filesystem::path& path) {
+    static std::mutex mutexes_lock;
+    static std::unordered_map<std::string, std::weak_ptr<std::mutex>> mutexes;
+
+    std::error_code ec;
+    const auto normalized = std::filesystem::absolute(path, ec).lexically_normal();
+    const std::string key = ec ? path.lexically_normal().string() : normalized.string();
+
+    std::lock_guard<std::mutex> lock(mutexes_lock);
+    auto& weak = mutexes[key];
+    auto existing = weak.lock();
+    if (existing) {
+        return existing;
+    }
+    auto created = std::make_shared<std::mutex>();
+    weak = created;
+    return created;
+}
+
+std::filesystem::path UniqueJsonTempPathFor(const std::filesystem::path& path) {
+    static std::atomic<unsigned long long> counter{0};
+    std::ostringstream suffix;
+    suffix << ".tmp."
+           << GetCurrentProcessId() << "."
+           << GetCurrentThreadId() << "."
+           << counter.fetch_add(1, std::memory_order_relaxed);
+    return std::filesystem::path(path.string() + suffix.str());
+}
+
+std::filesystem::path UniqueJsonBackupPathFor(const std::filesystem::path& path) {
+    static std::atomic<unsigned long long> counter{0};
+    std::string stamp = CurrentTimestampUtc();
+    for (char& ch : stamp) {
+        if (!std::isalnum(static_cast<unsigned char>(ch))) {
+            ch = '-';
+        }
+    }
+    std::ostringstream suffix;
+    suffix << ".recover-" << stamp << "."
+           << GetCurrentProcessId() << "."
+           << GetCurrentThreadId() << "."
+           << counter.fetch_add(1, std::memory_order_relaxed)
+           << ".bak";
+    return std::filesystem::path(path.string() + suffix.str());
+}
+
+std::string LastWin32ErrorText(DWORD code) {
+    LPSTR buffer = nullptr;
+    const DWORD length = FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER |
+            FORMAT_MESSAGE_FROM_SYSTEM |
+            FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        code,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPSTR>(&buffer),
+        0,
+        nullptr);
+    std::string detail;
+    if (length > 0 && buffer) {
+        detail.assign(buffer, length);
+        while (!detail.empty() &&
+               (detail.back() == '\r' || detail.back() == '\n' || detail.back() == '.')) {
+            detail.pop_back();
+        }
+    }
+    if (buffer) {
+        LocalFree(buffer);
+    }
+    return "Win32 error " + std::to_string(code) +
+        (detail.empty() ? "" : ": " + detail);
+}
+
+class ScopedJsonInterprocessLock {
+public:
+    explicit ScopedJsonInterprocessLock(const std::filesystem::path& target_path)
+        : lock_path_(std::filesystem::path(target_path.string() + ".lock")) {
+        std::filesystem::create_directories(lock_path_.parent_path());
+        for (int attempt = 1; attempt <= 600; ++attempt) {
+            handle_ = CreateFileW(
+                lock_path_.wstring().c_str(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                nullptr,
+                OPEN_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                nullptr);
+            if (handle_ != INVALID_HANDLE_VALUE) {
+                acquired_ = true;
+                return;
+            }
+
+            last_error_ = LastWin32ErrorText(GetLastError());
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+
+        Logger::Warn(
+            "Storage",
+            "Could not acquire JSON interprocess lock for " +
+                target_path.string() + " (" + last_error_ +
+                "); proceeding with in-process lock only.");
+    }
+
+    ~ScopedJsonInterprocessLock() {
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(handle_);
+        }
+        if (acquired_) {
+            std::error_code ec;
+            std::filesystem::remove(lock_path_, ec);
+        }
+    }
+
+    ScopedJsonInterprocessLock(const ScopedJsonInterprocessLock&) = delete;
+    ScopedJsonInterprocessLock& operator=(const ScopedJsonInterprocessLock&) = delete;
+
+private:
+    std::filesystem::path lock_path_;
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+    bool acquired_ = false;
+    std::string last_error_;
+};
+
+bool ReadFileTextAllowReplace(const std::filesystem::path& path, std::string* out) {
+    if (!out) {
+        return false;
+    }
+    out->clear();
+
+    HANDLE handle = CreateFileW(
+        path.wstring().c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    LARGE_INTEGER size = {};
+    if (!GetFileSizeEx(handle, &size) || size.QuadPart < 0) {
+        CloseHandle(handle);
+        return false;
+    }
+    if (size.QuadPart > static_cast<LONGLONG>(std::numeric_limits<size_t>::max())) {
+        CloseHandle(handle);
+        return false;
+    }
+
+    out->resize(static_cast<size_t>(size.QuadPart));
+    size_t offset = 0;
+    while (offset < out->size()) {
+        DWORD chunk = static_cast<DWORD>(
+            std::min<size_t>(out->size() - offset, 1ull << 20));
+        DWORD read = 0;
+        if (!ReadFile(handle, out->data() + offset, chunk, &read, nullptr)) {
+            CloseHandle(handle);
+            return false;
+        }
+        if (read == 0) {
+            break;
+        }
+        offset += read;
+    }
+    CloseHandle(handle);
+    out->resize(offset);
+    return true;
+}
+
+bool DirectOverwriteFileAllowReplaceBlockers(const std::filesystem::path& path,
+                                             const std::string& content,
+                                             std::string* error) {
+    HANDLE handle = CreateFileW(
+        path.wstring().c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        if (error) {
+            *error = LastWin32ErrorText(GetLastError());
+        }
+        return false;
+    }
+
+    size_t offset = 0;
+    while (offset < content.size()) {
+        DWORD chunk = static_cast<DWORD>(
+            std::min<size_t>(content.size() - offset, 1ull << 20));
+        DWORD written = 0;
+        if (!WriteFile(handle, content.data() + offset, chunk, &written, nullptr) ||
+            written == 0) {
+            if (error) {
+                *error = LastWin32ErrorText(GetLastError());
+            }
+            CloseHandle(handle);
+            return false;
+        }
+        offset += written;
+    }
+    FlushFileBuffers(handle);
+    CloseHandle(handle);
+    return true;
+}
+
+void WriteJsonReplaceReport(const std::filesystem::path& path,
+                            const std::filesystem::path& tmp_path,
+                            const std::string& replace_error,
+                            const std::string& fallback_error,
+                            const std::filesystem::path& backup_path,
+                            bool fallback_succeeded) {
+    std::ostringstream message;
+    message << "JSON replace " << (fallback_succeeded ? "used fallback" : "failed")
+            << " path=" << path.string()
+            << " temp=" << tmp_path.string()
+            << " replace_error=" << replace_error;
+    if (!backup_path.empty()) {
+        message << " backup=" << backup_path.string();
+    }
+    if (!fallback_error.empty()) {
+        message << " fallback_error=" << fallback_error;
+    }
+
+    if (fallback_succeeded) {
+        Logger::Warn("Storage", message.str());
+    } else {
+        Logger::Error("Storage", message.str());
+    }
+
+    std::string stamp = CurrentTimestampUtc();
+    for (char& ch : stamp) {
+        if (!std::isalnum(static_cast<unsigned char>(ch))) {
+            ch = '-';
+        }
+    }
+    const auto report_dir = path.parent_path() / "json_write_reports";
+    const auto report_path =
+        report_dir / (path.filename().string() + "-" + stamp + ".log");
+    std::error_code ec;
+    std::filesystem::create_directories(report_dir, ec);
+    std::ofstream report(report_path, std::ios::binary | std::ios::trunc);
+    if (report.is_open()) {
+        report << message.str() << "\n";
+        report << "target_exists="
+               << std::filesystem::exists(path, ec) << "\n";
+        ec.clear();
+        report << "target_size="
+               << (std::filesystem::exists(path, ec)
+                    ? std::filesystem::file_size(path, ec)
+                    : static_cast<std::uintmax_t>(0))
+               << "\n";
+        report << "target_attributes=";
+        const DWORD attrs = GetFileAttributesW(path.wstring().c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES) {
+            report << LastWin32ErrorText(GetLastError());
+        } else {
+            report << attrs;
+        }
+        report << "\n";
+    }
 }
 
 json BindingTargetToJson(const BindingTargetConfig& target) {
@@ -178,7 +454,7 @@ ModelConfig ModelFromJson(const json& item) {
     model.id = item.value("id", "");
     model.display_name = item.value("display_name", model.id);
     model.context_window = item.value("context_window", 0);
-    model.max_output_tokens = item.value("max_output_tokens", 0);
+    model.max_output_tokens = std::max(0, item.value("max_output_tokens", kDefaultModelMaxOutputTokens));
     model.supports_streaming = item.value("supports_streaming", true);
     model.supports_tools = item.value("supports_tools", false);
     model.supports_vision = item.value("supports_vision", false);
@@ -721,6 +997,18 @@ ProjectInfo ProjectFromJson(const json& item, const std::string& fallback_id) {
     return project;
 }
 
+bool ProjectNameLooksMissing(const ProjectInfo& project) {
+    const std::string name = Trim(project.name);
+    return name.empty() || name == project.id;
+}
+
+std::string ProjectNameFromSettingsJson(const json& item) {
+    if (!item.is_object()) {
+        return {};
+    }
+    return Trim(item.value("project_name", ""));
+}
+
 json ChatToJson(const ChatInfo& chat) {
     return json{
         {"id", chat.id},
@@ -855,46 +1143,262 @@ RagWorkingSetEntry RagWorkingSetEntryFromJson(const json& item) {
     return entry;
 }
 
-json LoadJsonFile(const std::filesystem::path& path, const json& fallback) {
-    std::ifstream input(path);
-    if (!input.is_open()) {
-        return fallback;
+json LoadJsonFileUnlocked(const std::filesystem::path& path, const json& fallback) {
+    std::string last_error;
+    for (int attempt = 1; attempt <= 8; ++attempt) {
+        std::ifstream input(path, std::ios::binary);
+        if (input.is_open()) {
+            try {
+                json data;
+                input >> data;
+                return data;
+            } catch (const std::exception& ex) {
+                last_error = ex.what();
+            } catch (...) {
+                last_error = "unknown parse error";
+            }
+        } else {
+            last_error = "ifstream open failed";
+        }
+
+        std::string content;
+        if (ReadFileTextAllowReplace(path, &content)) {
+            try {
+                return json::parse(content);
+            } catch (const std::exception& ex) {
+                last_error += "; Win32 read parse failed: ";
+                last_error += ex.what();
+            } catch (...) {
+                last_error += "; Win32 read parse failed";
+            }
+        } else {
+            last_error += "; Win32 read failed";
+        }
+
+        if (attempt < 8) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(std::min(500, 25 * attempt)));
+        }
     }
 
-    try {
-        json data;
-        input >> data;
-        return data;
-    } catch (...) {
-        return fallback;
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec)) {
+        Logger::Warn(
+            "Storage",
+            "Using fallback while loading JSON " + path.string() +
+                " (" + last_error + ").");
     }
+    return fallback;
 }
 
-void SaveJsonFile(const std::filesystem::path& path, const json& data) {
+json LoadJsonFile(const std::filesystem::path& path, const json& fallback) {
+    const auto path_mutex = JsonFileMutexForPath(path);
+    std::lock_guard<std::mutex> path_lock(*path_mutex);
+    return LoadJsonFileUnlocked(path, fallback);
+}
+
+void SaveJsonFileUnlocked(const std::filesystem::path& path, const json& data) {
     std::filesystem::create_directories(path.parent_path());
-    const std::filesystem::path tmp_path = path.string() + ".tmp";
+    const std::filesystem::path tmp_path = UniqueJsonTempPathFor(path);
+    std::string serialized;
+    try {
+        serialized = data.dump(2);
+    } catch (const nlohmann::json::type_error& ex) {
+        Logger::Warn("Storage",
+            "Invalid UTF-8 while serializing JSON file " + path.string() +
+            "; replacing invalid sequences. error=" + ex.what());
+        serialized = data.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
     // Write to a temporary file so readers never see a half-written file.
     {
         std::ofstream output(tmp_path, std::ios::binary | std::ios::trunc);
         if (!output.is_open()) {
             throw std::runtime_error("Unable to open file for writing: " + tmp_path.string());
         }
-        output << data.dump(2);
+        output << serialized;
         output.flush();
-    }
-    // Atomic rename with retries in case another thread/process holds the target.
-    for (int attempt = 1; attempt <= 5; ++attempt) {
-        try {
-            std::filesystem::rename(tmp_path, path);
-            return;
-        } catch (const std::filesystem::filesystem_error&) {
-            if (attempt == 5) {
-                std::filesystem::remove(tmp_path);
-                throw std::runtime_error("Unable to replace file: " + path.string());
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        if (!output.good()) {
+            output.close();
+            std::error_code remove_ec;
+            std::filesystem::remove(tmp_path, remove_ec);
+            throw std::runtime_error("Unable to flush file: " + tmp_path.string());
         }
     }
+    // Atomic replace with retries in case another thread/process briefly holds
+    // the target. Windows is especially strict about replacing open files, so
+    // use a unique temp name and MoveFileExW instead of a shared .tmp path.
+    std::string last_error;
+    for (int attempt = 1; attempt <= 40; ++attempt) {
+        std::error_code exists_ec;
+        const bool target_exists = std::filesystem::exists(path, exists_ec);
+
+        if (target_exists) {
+            const std::wstring target_w = path.wstring();
+            const DWORD attrs = GetFileAttributesW(target_w.c_str());
+            if (attrs != INVALID_FILE_ATTRIBUTES &&
+                (attrs & FILE_ATTRIBUTE_READONLY) != 0) {
+                SetFileAttributesW(target_w.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
+            }
+        }
+
+        const std::wstring tmp_w = tmp_path.wstring();
+        const std::wstring target_w = path.wstring();
+        if (MoveFileExW(
+                tmp_w.c_str(),
+                target_w.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            return;
+        }
+
+        const DWORD error_code = GetLastError();
+        last_error = LastWin32ErrorText(error_code);
+        if (error_code == ERROR_FILE_NOT_FOUND || error_code == ERROR_PATH_NOT_FOUND) {
+            std::error_code rename_ec;
+            std::filesystem::rename(tmp_path, path, rename_ec);
+            if (!rename_ec) {
+                return;
+            }
+            last_error = rename_ec.message();
+        }
+
+        const int delay_ms = std::min(1000, 25 * attempt);
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+    }
+
+    std::error_code remove_ec;
+    std::filesystem::path backup_path;
+    std::string fallback_error;
+    std::error_code backup_ec;
+    if (std::filesystem::exists(path, backup_ec)) {
+        backup_path = UniqueJsonBackupPathFor(path);
+        if (!CopyFileW(path.wstring().c_str(), backup_path.wstring().c_str(), TRUE)) {
+            fallback_error = "backup copy failed: " +
+                LastWin32ErrorText(GetLastError());
+            backup_path.clear();
+        }
+    }
+    std::string direct_error;
+    if (DirectOverwriteFileAllowReplaceBlockers(path, serialized, &direct_error)) {
+        std::filesystem::remove(tmp_path, remove_ec);
+        WriteJsonReplaceReport(
+            path, tmp_path, last_error, fallback_error, backup_path, true);
+        return;
+    }
+    if (!fallback_error.empty()) {
+        fallback_error += "; ";
+    }
+    fallback_error += "direct overwrite failed: " + direct_error;
+    WriteJsonReplaceReport(
+        path, tmp_path, last_error, fallback_error, backup_path, false);
+    std::filesystem::remove(tmp_path, remove_ec);
+    throw std::runtime_error(
+        "Unable to replace file: " + path.string() +
+        (last_error.empty() ? "" : " (" + last_error + ")") +
+        (fallback_error.empty() ? "" : " (" + fallback_error + ")"));
+}
+
+void SaveJsonFile(const std::filesystem::path& path, const json& data) {
+    const auto path_mutex = JsonFileMutexForPath(path);
+    std::lock_guard<std::mutex> path_lock(*path_mutex);
+    ScopedJsonInterprocessLock file_lock(path);
+    SaveJsonFileUnlocked(path, data);
+}
+
+json MessagesToJsonArray(const std::vector<MessageRecord>& messages) {
+    json payload = json::array();
+    for (const auto& message : messages) {
+        payload.push_back(MessageToJson(message));
+    }
+    return payload;
+}
+
+std::vector<MessageRecord> MessagesFromJsonArray(const json& data) {
+    std::vector<MessageRecord> messages;
+    if (!data.is_array()) {
+        return messages;
+    }
+    messages.reserve(data.size());
+    for (const auto& item : data) {
+        messages.push_back(MessageFromJson(item));
+    }
+    return messages;
+}
+
+bool MessageCountsAsModelVisibleForArchive(const MessageRecord& message) {
+    return message.role == "system" ||
+           message.role == "user" ||
+           message.role == "assistant" ||
+           message.role == "tool";
+}
+
+std::optional<int> MessageArchiveSequenceFromName(const std::string& filename) {
+    const std::string prefix = "messages-old-";
+    const std::string suffix = ".json";
+    if (filename.size() <= prefix.size() + suffix.size() ||
+        filename.rfind(prefix, 0) != 0 ||
+        filename.compare(filename.size() - suffix.size(), suffix.size(), suffix) != 0) {
+        return std::nullopt;
+    }
+
+    const std::string digits = filename.substr(
+        prefix.size(),
+        filename.size() - prefix.size() - suffix.size());
+    if (digits.empty()) {
+        return std::nullopt;
+    }
+    for (unsigned char ch : digits) {
+        if (!std::isdigit(ch)) {
+            return std::nullopt;
+        }
+    }
+
+    try {
+        return std::stoi(digits);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::filesystem::path MessageArchivePath(const std::filesystem::path& chat_dir,
+                                         int sequence) {
+    std::ostringstream name;
+    name << "messages-old-" << std::setw(3) << std::setfill('0')
+         << sequence << ".json";
+    return chat_dir / name.str();
+}
+
+std::vector<std::pair<int, std::filesystem::path>> MessageArchivePaths(
+    const std::filesystem::path& chat_dir) {
+    std::vector<std::pair<int, std::filesystem::path>> archives;
+    std::error_code ec;
+    if (!std::filesystem::exists(chat_dir, ec) ||
+        !std::filesystem::is_directory(chat_dir, ec)) {
+        return archives;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(chat_dir, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file(ec)) {
+            continue;
+        }
+        const auto sequence =
+            MessageArchiveSequenceFromName(entry.path().filename().string());
+        if (sequence) {
+            archives.emplace_back(*sequence, entry.path());
+        }
+    }
+    std::sort(archives.begin(), archives.end(),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+    return archives;
+}
+
+int NextMessageArchiveSequence(const std::filesystem::path& chat_dir) {
+    int next = 1;
+    for (const auto& [sequence, path] : MessageArchivePaths(chat_dir)) {
+        (void)path;
+        next = std::max(next, sequence + 1);
+    }
+    return next;
 }
 }  // namespace
 
@@ -1177,6 +1681,22 @@ std::vector<ProjectRecord> AppStorage::LoadProjects() const {
 
         ProjectRecord record;
         record.info = ProjectFromJson(project_json, project_id);
+        if (ProjectNameLooksMissing(record.info)) {
+            const json settings_json =
+                LoadJsonFile(ProjectSettingsPath(project_id), json::object());
+            const std::string recovered_name =
+                ProjectNameFromSettingsJson(settings_json);
+            if (!recovered_name.empty()) {
+                record.info.id = project_id;
+                record.info.name = recovered_name;
+                SaveJsonFile(ProjectMetaPath(project_id), ProjectToJson(record.info));
+                Logger::Warn(
+                    "Storage",
+                    "Repaired missing project metadata for " + project_id +
+                        " using project_settings.json name \"" +
+                        recovered_name + "\".");
+            }
+        }
 
         const auto chats_root = ChatsRoot(project_id);
         if (std::filesystem::exists(chats_root)) {
@@ -1243,22 +1763,105 @@ void AppStorage::SaveChat(const std::string& project_id, const ChatInfo& chat) c
 
 std::vector<MessageRecord> AppStorage::LoadMessages(const std::string& project_id, const std::string& chat_id) const {
     const json data = LoadJsonFile(ChatMessagesPath(project_id, chat_id), json::array());
+    return MessagesFromJsonArray(data);
+}
+
+std::vector<MessageRecord> AppStorage::LoadMessagesIncludingArchives(const std::string& project_id, const std::string& chat_id) const {
+    const auto chat_dir = ChatPath(project_id, chat_id);
     std::vector<MessageRecord> messages;
-    if (!data.is_array()) {
-        return messages;
+
+    for (const auto& [sequence, archive_path] : MessageArchivePaths(chat_dir)) {
+        (void)sequence;
+        auto archived = MessagesFromJsonArray(LoadJsonFile(archive_path, json::array()));
+        messages.insert(
+            messages.end(),
+            std::make_move_iterator(archived.begin()),
+            std::make_move_iterator(archived.end()));
     }
-    for (const auto& item : data) {
-        messages.push_back(MessageFromJson(item));
-    }
+
+    auto active = LoadMessages(project_id, chat_id);
+    messages.insert(
+        messages.end(),
+        std::make_move_iterator(active.begin()),
+        std::make_move_iterator(active.end()));
     return messages;
 }
 
 void AppStorage::SaveMessages(const std::string& project_id, const std::string& chat_id, const std::vector<MessageRecord>& messages) const {
-    json payload = json::array();
-    for (const auto& message : messages) {
-        payload.push_back(MessageToJson(message));
+    SaveJsonFile(ChatMessagesPath(project_id, chat_id), MessagesToJsonArray(messages));
+}
+
+bool AppStorage::RolloverMessagesAfterCompression(
+    const std::string& project_id,
+    const std::string& chat_id,
+    size_t compressed_model_visible_messages,
+    const std::optional<MessageRecord>& compression_record,
+    std::uintmax_t min_size_bytes) const {
+    if (compressed_model_visible_messages == 0) {
+        return false;
     }
-    SaveJsonFile(ChatMessagesPath(project_id, chat_id), payload);
+
+    const auto active_path = ChatMessagesPath(project_id, chat_id);
+    std::error_code ec;
+    const auto active_size = std::filesystem::exists(active_path, ec)
+        ? std::filesystem::file_size(active_path, ec)
+        : static_cast<std::uintmax_t>(0);
+    if (ec || active_size < min_size_bytes) {
+        return false;
+    }
+
+    const auto path_mutex = JsonFileMutexForPath(active_path);
+    std::lock_guard<std::mutex> path_lock(*path_mutex);
+    ScopedJsonInterprocessLock file_lock(active_path);
+
+    ec.clear();
+    const auto locked_size = std::filesystem::exists(active_path, ec)
+        ? std::filesystem::file_size(active_path, ec)
+        : static_cast<std::uintmax_t>(0);
+    if (ec || locked_size < min_size_bytes) {
+        return false;
+    }
+
+    const json data = LoadJsonFileUnlocked(active_path, json::array());
+    auto messages = MessagesFromJsonArray(data);
+    if (messages.empty()) {
+        return false;
+    }
+
+    size_t visible_seen = 0;
+    size_t split_index = 0;
+    for (; split_index < messages.size(); ++split_index) {
+        if (MessageCountsAsModelVisibleForArchive(messages[split_index])) {
+            ++visible_seen;
+        }
+        if (visible_seen >= compressed_model_visible_messages) {
+            ++split_index;
+            break;
+        }
+    }
+
+    if (visible_seen < compressed_model_visible_messages || split_index == 0) {
+        return false;
+    }
+
+    std::vector<MessageRecord> archived(
+        std::make_move_iterator(messages.begin()),
+        std::make_move_iterator(messages.begin() + static_cast<std::ptrdiff_t>(split_index)));
+    std::vector<MessageRecord> active;
+    if (compression_record) {
+        active.push_back(*compression_record);
+    }
+    active.insert(
+        active.end(),
+        std::make_move_iterator(messages.begin() + static_cast<std::ptrdiff_t>(split_index)),
+        std::make_move_iterator(messages.end()));
+
+    const auto chat_dir = ChatPath(project_id, chat_id);
+    const auto archive_path =
+        MessageArchivePath(chat_dir, NextMessageArchiveSequence(chat_dir));
+    SaveJsonFile(archive_path, MessagesToJsonArray(archived));
+    SaveJsonFileUnlocked(active_path, MessagesToJsonArray(active));
+    return true;
 }
 
 std::vector<ChatContextDebugEntry> AppStorage::LoadChatContextDebugEntries(const std::string& project_id, const std::string& chat_id) const {
@@ -1868,6 +2471,7 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     }
     j["completion_driver_allowed_mode_ids"] = std::move(cd_modes_arr);
     j["completion_driver_max_continuations"] = settings.completion_driver_max_continuations;
+    j["completion_driver_overload_delay_seconds"] = settings.completion_driver_overload_delay_seconds;
     j["built_in_questionnaire_enabled"] = settings.built_in_questionnaire_enabled;
     j["questionnaire_max_options"] = settings.questionnaire_max_options;
     j["questionnaire_restrict_by_mode"] = settings.questionnaire_restrict_by_mode;
@@ -1875,6 +2479,8 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     j["built_in_filesystem_enabled"] = settings.built_in_filesystem_enabled;
     j["built_in_filesystem_auto_archive"] = settings.built_in_filesystem_auto_archive;
     j["built_in_filesystem_working_directory"] = settings.built_in_filesystem_working_directory;
+    j["built_in_sleep_enabled"] = settings.built_in_sleep_enabled;
+    j["built_in_sleep_max_seconds"] = settings.built_in_sleep_max_seconds;
     j["model_timeout_seconds"] = settings.model_timeout_seconds;
 
     return j;
@@ -1967,6 +2573,12 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     if (settings.completion_driver_max_continuations < 0) {
         settings.completion_driver_max_continuations = 0;
     }
+    settings.completion_driver_overload_delay_seconds = j.value(
+        "completion_driver_overload_delay_seconds",
+        kDefaultCompletionDriverOverloadDelaySeconds);
+    if (settings.completion_driver_overload_delay_seconds < 0) {
+        settings.completion_driver_overload_delay_seconds = 0;
+    }
     settings.built_in_questionnaire_enabled = j.value("built_in_questionnaire_enabled", false);
     settings.questionnaire_max_options = j.value("questionnaire_max_options", 8);
     if (settings.questionnaire_max_options < 2) settings.questionnaire_max_options = 2;
@@ -1978,6 +2590,11 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     settings.built_in_filesystem_working_directory = j.value("built_in_filesystem_working_directory", "$ProjectFolder$");
     if (Trim(settings.built_in_filesystem_working_directory).empty()) {
         settings.built_in_filesystem_working_directory = "$ProjectFolder$";
+    }
+    settings.built_in_sleep_enabled = j.value("built_in_sleep_enabled", false);
+    settings.built_in_sleep_max_seconds = j.value("built_in_sleep_max_seconds", 0);
+    if (settings.built_in_sleep_max_seconds < 0) {
+        settings.built_in_sleep_max_seconds = 0;
     }
     settings.model_timeout_seconds = j.value("model_timeout_seconds", 0);
     if (settings.model_timeout_seconds < 0) {

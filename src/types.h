@@ -44,11 +44,15 @@ struct BindingModelRuntimeState {
     std::vector<BindingTargetRuntimeState> targets;
 };
 
+inline constexpr int kDefaultModelMaxOutputTokens = 8192;
+inline constexpr std::uintmax_t kMessageArchiveRolloverThresholdBytes =
+    6ull * 1024ull * 1024ull;
+
 struct ModelConfig {
     std::string id;
     std::string display_name;
     int context_window = 0;
-    int max_output_tokens = 0;
+    int max_output_tokens = kDefaultModelMaxOutputTokens;
     bool supports_streaming = true;
     bool supports_tools = false;
     bool supports_vision = false;
@@ -638,6 +642,8 @@ struct AgenticModeConfig {
     std::string instructions;  // system prompt / instructions for this mode, stored as markdown
 };
 
+inline constexpr int kDefaultCompletionDriverOverloadDelaySeconds = 180;
+
 struct ProjectSettings {
     std::string project_name;
     std::string project_instructions;
@@ -664,6 +670,7 @@ struct ProjectSettings {
     bool built_in_completion_driver_enabled = false;  // Enable completion-loop driver tool for selected modes
     std::vector<std::string> completion_driver_allowed_mode_ids; // Agentic mode IDs allowed to use Completion Driver
     int completion_driver_max_continuations = 0;      // 0 = unlimited, otherwise max host continuations per run/automation step
+    int completion_driver_overload_delay_seconds = kDefaultCompletionDriverOverloadDelaySeconds; // Retry delay for transient provider overloads
     bool built_in_questionnaire_enabled = false;      // Enable user questionnaire built-in tool
     int questionnaire_max_options = 8;                // Max options the questionnaire tool can offer
     bool questionnaire_restrict_by_mode = false;      // Only allow questionnaire in a specific agentic mode
@@ -671,5 +678,7 @@ struct ProjectSettings {
     bool built_in_filesystem_enabled = false;         // Enable project_filesystem built-in tool
     bool built_in_filesystem_auto_archive = false;    // Auto-archive file reads/writes into Artifact/Code Memory
     std::string built_in_filesystem_working_directory = "$ProjectFolder$";
+    bool built_in_sleep_enabled = false;              // Enable sleep_seconds built-in tool for short host-side waits
+    int built_in_sleep_max_seconds = 0;               // 0 = unlimited, otherwise max seconds per sleep_seconds call
     int model_timeout_seconds = 0;                  // 0 = wait forever (default), otherwise max seconds per model request
 };

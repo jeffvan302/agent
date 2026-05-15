@@ -45,6 +45,7 @@ struct ProjectSettingsOptions {
     bool built_in_completion_driver_enabled = false;
     std::vector<std::string> completion_driver_allowed_mode_ids;
     int completion_driver_max_continuations = 0;      // 0 = unlimited, otherwise max host continuations per run/automation step
+    int completion_driver_overload_delay_seconds = kDefaultCompletionDriverOverloadDelaySeconds;
     bool built_in_questionnaire_enabled = false;
     int questionnaire_max_options = 8;
     bool questionnaire_restrict_by_mode = false;
@@ -52,6 +53,8 @@ struct ProjectSettingsOptions {
     bool built_in_filesystem_enabled = false;
     bool built_in_filesystem_auto_archive = false;
     std::string built_in_filesystem_working_directory = "$ProjectFolder$";
+    bool built_in_sleep_enabled = false;
+    int built_in_sleep_max_seconds = 0;              // 0 = unlimited, otherwise max seconds per sleep call
     int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 
@@ -81,6 +84,7 @@ struct ProjectSettingsResult {
     bool built_in_completion_driver_enabled = false;
     std::vector<std::string> completion_driver_allowed_mode_ids;
     int completion_driver_max_continuations = 0;      // 0 = unlimited, otherwise max host continuations per run/automation step
+    int completion_driver_overload_delay_seconds = kDefaultCompletionDriverOverloadDelaySeconds;
     bool built_in_questionnaire_enabled = false;
     int questionnaire_max_options = 8;
     bool questionnaire_restrict_by_mode = false;
@@ -88,6 +92,8 @@ struct ProjectSettingsResult {
     bool built_in_filesystem_enabled = false;
     bool built_in_filesystem_auto_archive = false;
     std::string built_in_filesystem_working_directory = "$ProjectFolder$";
+    bool built_in_sleep_enabled = false;
+    int built_in_sleep_max_seconds = 0;              // 0 = unlimited, otherwise max seconds per sleep call
     int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 

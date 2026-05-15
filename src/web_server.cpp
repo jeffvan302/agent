@@ -52,6 +52,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -65,6 +66,10 @@ namespace fs = std::filesystem;
 static std::string NowIso();
 static std::vector<MessageRecord> ModelVisibleMessages(
     const std::vector<MessageRecord>& messages);
+void ResetCompressionIndexesAfterMessageRollover(
+    ContextCompressionService* compression_service,
+    const std::string& project_id,
+    const std::string& chat_id);
 
 namespace {
 
@@ -72,6 +77,19 @@ bool HeaderContains(std::string value, const std::string& needle) {
     std::transform(value.begin(), value.end(), value.begin(),
         [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value.find(needle) != std::string::npos;
+}
+
+std::string DumpJsonForWeb(const json& value,
+                           const std::string& context,
+                           int indent = -1) {
+    try {
+        return indent >= 0 ? value.dump(indent) : value.dump();
+    } catch (const nlohmann::json::type_error& ex) {
+        Logger::Warn("WebJson",
+            "Invalid UTF-8 while serializing " + context +
+            "; replacing invalid sequences. error=" + ex.what());
+        return value.dump(indent, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
 }
 
 bool IsFormUrlEncoded(const httplib::Request& req) {
@@ -143,6 +161,12 @@ bool IsActiveAutomationStatus(const std::string& status) {
 std::string AutomationChatKey(const std::string& project_id,
                               const std::string& chat_id) {
     return project_id + ":" + chat_id;
+}
+
+int ResolveModelMaxOutputTokens(const ModelConfig& model) {
+    return model.max_output_tokens > 0
+        ? model.max_output_tokens
+        : kDefaultModelMaxOutputTokens;
 }
 
 bool HasPathSeparator(const std::string& value) {
@@ -2638,6 +2662,9 @@ void WebServer::HandleGetProjectAgenticModes(const void* req_ptr, void* res_ptr)
         {"built_in_completion_driver_enabled", proj_settings.built_in_completion_driver_enabled},
         {"completion_driver_allowed_mode_ids", proj_settings.completion_driver_allowed_mode_ids},
         {"completion_driver_max_continuations", proj_settings.completion_driver_max_continuations},
+        {"completion_driver_overload_delay_seconds", proj_settings.completion_driver_overload_delay_seconds},
+        {"built_in_sleep_enabled", proj_settings.built_in_sleep_enabled},
+        {"built_in_sleep_max_seconds", proj_settings.built_in_sleep_max_seconds},
     };
     SendJson(res_ptr, 200, resp.dump());
 }
@@ -2827,10 +2854,17 @@ void WebServer::HandleCompressChat(const void* req_ptr, void* res_ptr) {
 
     MessageRecord comp_msg;
     comp_msg.role = "compression";
-    comp_msg.content = record_payload.dump();
+    comp_msg.content = DumpJsonForWeb(record_payload, "manual compression chat record");
     comp_msg.created_at = compression_created_at;
-    messages.push_back(comp_msg);
-    storage_->SaveMessages(*project_id, chat_id, messages);
+    const bool rolled_over = storage_->RolloverMessagesAfterCompression(
+        *project_id, chat_id, compressed_through, comp_msg);
+    if (rolled_over) {
+        ResetCompressionIndexesAfterMessageRollover(
+            &compression_service_, *project_id, chat_id);
+    } else {
+        messages.push_back(comp_msg);
+        storage_->SaveMessages(*project_id, chat_id, messages);
+    }
     NotifyContentChanged();
 
     json resp = {
@@ -2839,6 +2873,7 @@ void WebServer::HandleCompressChat(const void* req_ptr, void* res_ptr) {
         {"before_messages", visible.size()},
         {"after_messages", remaining},
         {"compressed_through", compressed_through},
+        {"messages_archived", rolled_over},
     };
     SendJson(res_ptr, 200, resp.dump());
 }
@@ -3021,7 +3056,9 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
     }
     const bool full_debug_payload = debug_requested && project_settings.enable_web_debugging;
 
-    const auto stored_messages = storage_->LoadMessages(*project_id, chat_id);
+    const auto stored_messages = full_debug_payload
+        ? storage_->LoadMessagesIncludingArchives(*project_id, chat_id)
+        : storage_->LoadMessages(*project_id, chat_id);
     size_t first_message_index = 0;
     if (!full_debug_payload) {
         for (size_t i = stored_messages.size(); i > 0; --i) {
@@ -3430,6 +3467,7 @@ struct PreparedWebHistory {
     std::string compressed_context;
     std::optional<ContextCompressionConfig> selected_config;
     std::optional<MessageRecord> compression_record;
+    bool messages_rolled_over = false;
 };
 
 struct BuiltWebSystemPrompt {
@@ -3457,6 +3495,19 @@ bool NeedsLegacyCompressionRepair(const ChatCompressionState& state) {
         }
     }
     return false;
+}
+
+void ResetCompressionIndexesAfterMessageRollover(
+    ContextCompressionService* compression_service,
+    const std::string& project_id,
+    const std::string& chat_id) {
+    if (!compression_service) {
+        return;
+    }
+    auto state = compression_service->LoadChatState(project_id, chat_id);
+    state.last_compression_message_index = 0;
+    state.layer0_last_processed_message_index = 0;
+    compression_service->SaveChatState(project_id, chat_id, state);
 }
 
 PreparedWebHistory PrepareWebRequestHistory(
@@ -3569,9 +3620,19 @@ PreparedWebHistory PrepareWebRequestHistory(
         };
         MessageRecord comp_msg;
         comp_msg.role = "compression";
-        comp_msg.content = payload.dump();
+        comp_msg.content = DumpJsonForWeb(payload, "automatic compression chat record");
         comp_msg.created_at = compression_created_at;
         prepared.compression_record = comp_msg;
+        prepared.messages_rolled_over = storage->RolloverMessagesAfterCompression(
+            project_id,
+            chat_id,
+            compression_state.last_compression_message_index,
+            comp_msg);
+        if (prepared.messages_rolled_over) {
+            ResetCompressionIndexesAfterMessageRollover(
+                compression_service, project_id, chat_id);
+            prepared.compression_record.reset();
+        }
 
         // ── Chat log the automatic compression event ────────────────
         ChatRequestLogger::MaybeInitialize(
@@ -3659,6 +3720,12 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
         const std::string q_context = built_in_tools::QuestionnaireSystemPrompt();
         AppendPromptSection(built.full_prompt, q_context);
         built.sections.push_back({"User Questionnaire", q_context});
+    }
+    if (project_settings.built_in_sleep_enabled) {
+        const std::string sleep_context = built_in_tools::SleepSystemPrompt(
+            built_in_tools::NormalizedSleepMaxSeconds(project_settings));
+        AppendPromptSection(built.full_prompt, sleep_context);
+        built.sections.push_back({"Sleep / Pause", sleep_context});
     }
     if (project_settings.built_in_filesystem_enabled) {
         const std::string fs_context = built_in_tools::FilesystemSystemPrompt();
@@ -3812,8 +3879,11 @@ json ProjectSettingsDebugJson(
         {"completion_driver_active_for_effective_mode",
             built_in_tools::IsCompletionDriverEnabled(settings, effective_agentic_mode_id)},
         {"completion_driver_max_continuations", settings.completion_driver_max_continuations},
+        {"completion_driver_overload_delay_seconds", settings.completion_driver_overload_delay_seconds},
         {"built_in_questionnaire_enabled", settings.built_in_questionnaire_enabled},
         {"built_in_filesystem_enabled", settings.built_in_filesystem_enabled},
+        {"built_in_sleep_enabled", settings.built_in_sleep_enabled},
+        {"built_in_sleep_max_seconds", settings.built_in_sleep_max_seconds},
         {"model_timeout_seconds", settings.model_timeout_seconds},
     };
 }
@@ -3951,7 +4021,12 @@ WebServer::CallModel(const std::string& project_id,
         chat_selected_agentic_mode_id);
     const std::string& system_prompt = built_system_prompt.full_prompt;
 
-    auto messages = stored_messages;
+    auto messages = prepared_history.messages_rolled_over
+        ? storage_->LoadMessages(project_id, chat_id)
+        : stored_messages;
+    if (prepared_history.messages_rolled_over) {
+        NotifyContentChanged();
+    }
     if (prepared_history.compression_record) {
         messages.push_back(*prepared_history.compression_record);
     }
@@ -3970,7 +4045,7 @@ WebServer::CallModel(const std::string& project_id,
     opts.model        = selected_model;
     opts.system_prompt = system_prompt;
     opts.temperature  = 0.2;
-    opts.max_tokens   = 1024;
+    opts.max_tokens   = ResolveModelMaxOutputTokens(selected_model);
     opts.model_timeout_seconds = proj_settings.model_timeout_seconds;
     opts.messages     = prepared_history.request_history;
     opts.messages.push_back(user_msg);
@@ -4034,7 +4109,11 @@ WebServer::CallModel(const std::string& project_id,
             proj_settings,
             stored_messages,
             resolved_prompt_variables);
-        if (refreshed.compression_record) {
+        if (refreshed.messages_rolled_over) {
+            messages = storage_->LoadMessages(project_id, chat_id);
+            messages.push_back(user_msg);
+            NotifyContentChanged();
+        } else if (refreshed.compression_record) {
             messages = stored_messages;
             messages.push_back(*refreshed.compression_record);
             messages.push_back(user_msg);
@@ -4059,6 +4138,8 @@ WebServer::CallModel(const std::string& project_id,
             proj_settings, effective_agentic_mode_id);
         const int completion_driver_max_continuations =
             built_in_tools::NormalizedCompletionDriverMaxContinuations(proj_settings);
+        const int completion_driver_overload_delay_seconds =
+            built_in_tools::NormalizedCompletionDriverOverloadDelaySeconds(proj_settings);
         // This counter is intentionally scoped to one request. The automation
         // runner starts a new streaming request per step, so each step gets a
         // fresh continuation budget.
@@ -4087,9 +4168,37 @@ WebServer::CallModel(const std::string& project_id,
             const auto completion =
                 OpenAIClient::CreateToolAwareCompletion(loop_opts, tool_definitions);
             if (!completion.success) {
-                result.error = completion.error.empty()
+                const std::string provider_error = completion.error.empty()
                     ? "Model call failed"
                     : completion.error;
+                if (completion_driver_enabled &&
+                    built_in_tools::IsTransientProviderOverloadError(provider_error)) {
+                    if (completion_driver_max_continuations > 0 &&
+                        completion_driver_continuations >= completion_driver_max_continuations) {
+                        Logger::Warn("CompletionDriver",
+                            "provider overload retry limit reached project=" + project_id +
+                            " chat=" + chat_id +
+                            " limit=" + std::to_string(completion_driver_max_continuations) +
+                            " error=" + provider_error);
+                    } else {
+                        ++completion_driver_continuations;
+                        Logger::Warn("CompletionDriver",
+                            "provider overloaded; retrying project=" + project_id +
+                            " chat=" + chat_id +
+                            " retry=" + std::to_string(completion_driver_continuations) +
+                            (completion_driver_max_continuations > 0
+                                ? " limit=" + std::to_string(completion_driver_max_continuations)
+                                : " limit=unlimited") +
+                            " delay_seconds=" + std::to_string(completion_driver_overload_delay_seconds) +
+                            " error=" + provider_error);
+                        if (completion_driver_overload_delay_seconds > 0) {
+                            std::this_thread::sleep_for(
+                                std::chrono::seconds(completion_driver_overload_delay_seconds));
+                        }
+                        continue;
+                    }
+                }
+                result.error = provider_error;
                 if (logging) {
                     ChatRequestLogger::Log(project_id, logging,
                         log_block + ChatRequestLogger::FormatErrorResponse(result.error));
@@ -4194,8 +4303,38 @@ WebServer::CallModel(const std::string& project_id,
                 "work succeeded, say so and summarize the important output. If it did "
                 "not fully succeed, explain the last observed state and what remains.";
 
-            const auto final_completion =
-                OpenAIClient::CreateSimpleCompletion(final_opts);
+            ChatCompletionResult final_completion;
+            for (;;) {
+                final_completion = OpenAIClient::CreateSimpleCompletion(final_opts);
+                if (final_completion.success ||
+                    !completion_driver_enabled ||
+                    !built_in_tools::IsTransientProviderOverloadError(final_completion.error)) {
+                    break;
+                }
+                if (completion_driver_max_continuations > 0 &&
+                    completion_driver_continuations >= completion_driver_max_continuations) {
+                    Logger::Warn("CompletionDriver",
+                        "final summary overload retry limit reached project=" + project_id +
+                        " chat=" + chat_id +
+                        " limit=" + std::to_string(completion_driver_max_continuations) +
+                        " error=" + final_completion.error);
+                    break;
+                }
+                ++completion_driver_continuations;
+                Logger::Warn("CompletionDriver",
+                    "final summary overloaded; retrying project=" + project_id +
+                    " chat=" + chat_id +
+                    " retry=" + std::to_string(completion_driver_continuations) +
+                    (completion_driver_max_continuations > 0
+                        ? " limit=" + std::to_string(completion_driver_max_continuations)
+                        : " limit=unlimited") +
+                    " delay_seconds=" + std::to_string(completion_driver_overload_delay_seconds) +
+                    " error=" + final_completion.error);
+                if (completion_driver_overload_delay_seconds > 0) {
+                    std::this_thread::sleep_for(
+                        std::chrono::seconds(completion_driver_overload_delay_seconds));
+                }
+            }
             if (final_completion.success && !final_completion.assistant_text.empty()) {
                 MessageRecord asst_msg;
                 asst_msg.role       = "assistant";
@@ -4225,8 +4364,48 @@ WebServer::CallModel(const std::string& project_id,
         return result;
     }
 
-    // Call model without tools when none are connected for the project.
-    const auto call_result = OpenAIClient::CreateSimpleCompletion(opts);
+    // Call model without tools when none are connected for the project. Even
+    // without tool definitions, a Completion Driver-enabled mode still gets the
+    // same provider-overload retry budget so a transient 503 does not end the
+    // chat before the driver can continue on the next successful response.
+    const bool overload_retry_enabled = built_in_tools::IsCompletionDriverEnabled(
+        proj_settings, effective_agentic_mode_id);
+    const int overload_retry_max =
+        built_in_tools::NormalizedCompletionDriverMaxContinuations(proj_settings);
+    const int overload_retry_delay_seconds =
+        built_in_tools::NormalizedCompletionDriverOverloadDelaySeconds(proj_settings);
+    int overload_retry_count = 0;
+    ChatCompletionResult call_result;
+    for (;;) {
+        call_result = OpenAIClient::CreateSimpleCompletion(opts);
+        if (call_result.success ||
+            !overload_retry_enabled ||
+            !built_in_tools::IsTransientProviderOverloadError(call_result.error)) {
+            break;
+        }
+        if (overload_retry_max > 0 && overload_retry_count >= overload_retry_max) {
+            Logger::Warn("CompletionDriver",
+                "plain call overload retry limit reached project=" + project_id +
+                " chat=" + chat_id +
+                " limit=" + std::to_string(overload_retry_max) +
+                " error=" + call_result.error);
+            break;
+        }
+        ++overload_retry_count;
+        Logger::Warn("CompletionDriver",
+            "plain call overloaded; retrying project=" + project_id +
+            " chat=" + chat_id +
+            " retry=" + std::to_string(overload_retry_count) +
+            (overload_retry_max > 0
+                ? " limit=" + std::to_string(overload_retry_max)
+                : " limit=unlimited") +
+            " delay_seconds=" + std::to_string(overload_retry_delay_seconds) +
+            " error=" + call_result.error);
+        if (overload_retry_delay_seconds > 0) {
+            std::this_thread::sleep_for(
+                std::chrono::seconds(overload_retry_delay_seconds));
+        }
+    }
 
     if (!call_result.success) {
         result.error = call_result.error.empty() ? "Model call failed" : call_result.error;
@@ -4424,7 +4603,10 @@ std::string WebServer::StreamModel(const std::string& project_id,
         stored_messages,
         resolved_prompt_variables,
         on_status);
-    if (prepared_history.compression_record) {
+    if (prepared_history.messages_rolled_over) {
+        messages = storage_->LoadMessages(project_id, chat_id);
+        NotifyContentChanged();
+    } else if (prepared_history.compression_record) {
         messages = stored_messages;
         messages.push_back(*prepared_history.compression_record);
         messages.push_back(user_msg);
@@ -4452,7 +4634,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
     opts.model         = selected_model;
     opts.system_prompt = system_prompt;
     opts.temperature   = 0.2;
-    opts.max_tokens    = 4096;  // allow longer outputs when streaming
+    opts.max_tokens    = ResolveModelMaxOutputTokens(selected_model);
     opts.model_timeout_seconds = proj_settings.model_timeout_seconds;
     opts.messages      = prepared_history.request_history;
     opts.messages.push_back(user_msg);
@@ -4554,6 +4736,16 @@ std::string WebServer::StreamModel(const std::string& project_id,
             proj_settings,
             stored_messages,
             resolved_prompt_variables);
+        if (refreshed.messages_rolled_over) {
+            messages = storage_->LoadMessages(project_id, chat_id);
+            NotifyContentChanged();
+        } else if (refreshed.compression_record) {
+            messages = stored_messages;
+            messages.push_back(*refreshed.compression_record);
+            messages.push_back(user_msg);
+            storage_->SaveMessages(project_id, chat_id, messages);
+            NotifyContentChanged();
+        }
         opts.messages = refreshed.request_history;
         opts.messages.push_back(user_msg);
         if (!refreshed.compressed_context.empty()) {
@@ -4605,7 +4797,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
     };
     MessageRecord context_msg;
     context_msg.role = "context";
-    context_msg.content = context_payload.dump();
+    context_msg.content = DumpJsonForWeb(context_payload, "context usage chat record");
     context_msg.created_at = audit_created_at;
 
     json debug_payload = {
@@ -4664,7 +4856,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
     };
     MessageRecord debug_msg;
     debug_msg.role = "web_debug";
-    debug_msg.content = debug_payload.dump();
+    debug_msg.content = DumpJsonForWeb(debug_payload, "web debug chat record");
     debug_msg.created_at = audit_created_at;
 
     messages.push_back(std::move(debug_msg));
@@ -4689,6 +4881,8 @@ std::string WebServer::StreamModel(const std::string& project_id,
             proj_settings, effective_agentic_mode_id);
         const int completion_driver_max_continuations =
             built_in_tools::NormalizedCompletionDriverMaxContinuations(proj_settings);
+        const int completion_driver_overload_delay_seconds =
+            built_in_tools::NormalizedCompletionDriverOverloadDelaySeconds(proj_settings);
         // This counter is intentionally scoped to one request. The automation
         // runner starts a new streaming request per step, so each step gets a
         // fresh continuation budget.
@@ -4751,6 +4945,78 @@ std::string WebServer::StreamModel(const std::string& project_id,
                 " assistant_chars=" + std::to_string(completion.assistant_text.size()) +
                 " tool_calls=" + std::to_string(completion.tool_calls.size()) +
                 (completion.error.empty() ? "" : " error=" + completion.error));
+
+            if (!completion.success && !aborted &&
+                completion_driver_enabled &&
+                built_in_tools::IsTransientProviderOverloadError(completion.error)) {
+                const std::string provider_error = completion.error.empty()
+                    ? "Streaming model call failed."
+                    : completion.error;
+                if (completion_driver_max_continuations > 0 &&
+                    completion_driver_continuations >= completion_driver_max_continuations) {
+                    if (on_activity_status) {
+                        on_activity_status("completion_driver_overload_limit",
+                            "Model overload retry limit reached; reporting provider error.");
+                    }
+                    Logger::Warn("CompletionDriver",
+                        "provider overload retry limit reached request_id=" + model_request_id +
+                        " project=" + project_id +
+                        " chat=" + chat_id +
+                        " limit=" + std::to_string(completion_driver_max_continuations) +
+                        " error=" + provider_error);
+                } else {
+                    ++completion_driver_continuations;
+                    auto retry_message = [&](int remaining_seconds) {
+                        std::ostringstream message;
+                        message << "Model overloaded; ";
+                        if (remaining_seconds > 0) {
+                            message << "retrying in " << remaining_seconds << "s";
+                        } else {
+                            message << "retrying now";
+                        }
+                        if (completion_driver_max_continuations > 0) {
+                            message << " (" << completion_driver_continuations
+                                    << " / " << completion_driver_max_continuations << ")";
+                        } else {
+                            message << " (unlimited)";
+                        }
+                        message << "...";
+                        return message.str();
+                    };
+                    if (on_activity_status) {
+                        on_activity_status("completion_driver_overload_wait",
+                            retry_message(completion_driver_overload_delay_seconds));
+                    }
+                    Logger::Warn("CompletionDriver",
+                        "provider overloaded; retrying request_id=" + model_request_id +
+                        " project=" + project_id +
+                        " chat=" + chat_id +
+                        " retry=" + std::to_string(completion_driver_continuations) +
+                        (completion_driver_max_continuations > 0
+                            ? " limit=" + std::to_string(completion_driver_max_continuations)
+                            : " limit=unlimited") +
+                        " delay_seconds=" + std::to_string(completion_driver_overload_delay_seconds) +
+                        " error=" + provider_error);
+                    for (int remaining = completion_driver_overload_delay_seconds;
+                         remaining > 0 && !cancelled();
+                         --remaining) {
+                        if (on_activity_status &&
+                            (remaining == completion_driver_overload_delay_seconds ||
+                             remaining <= 5 ||
+                             (remaining % 30) == 0)) {
+                            on_activity_status("completion_driver_overload_wait",
+                                retry_message(remaining));
+                        }
+                        std::this_thread::sleep_for(std::chrono::seconds(1));
+                    }
+                    if (cancelled()) {
+                        aborted = true;
+                    } else {
+                        accumulated.clear();
+                        continue;
+                    }
+                }
+            }
 
             if (!completion.success && !aborted) {
                 const std::string err_msg = completion.error.empty()
@@ -4893,7 +5159,9 @@ std::string WebServer::StreamModel(const std::string& project_id,
                                 tool_call.arguments_json,
                                 proj_settings,
                                 resolved_prompt_variables,
-                                effective_agentic_mode_id);
+                                effective_agentic_mode_id,
+                                {},
+                                cancelled);
                         }
                         if (tool_call.name == built_in_tools::kCompletionDriverToolName &&
                             built_in_tools::IsCompletionDriverCompletedResult(tool_result)) {
@@ -5018,36 +5286,111 @@ std::string WebServer::StreamModel(const std::string& project_id,
 
             std::string final_text;
             bool final_aborted = false;
-            Logger::Info("WebModel",
-                "provider-call-final request_id=" + model_request_id +
-                " project=" + project_id +
-                " chat=" + chat_id +
-                " messages=" + std::to_string(final_opts.messages.size()));
-            const auto final_result = OpenAIClient::StreamChat(
-                final_opts,
-                [&](const std::string& delta) {
-                    if (cancelled()) {
-                        final_aborted = true;
-                        return;
-                    }
-                    final_text += delta;
-                    if (!on_delta(delta)) {
-                        final_aborted = true;
-                    }
-                },
-                on_queue_status,
-                on_activity_status,
-                cancelled);
+            ChatExecutionResult final_result;
+            for (;;) {
+                final_text.clear();
+                final_aborted = false;
+                Logger::Info("WebModel",
+                    "provider-call-final request_id=" + model_request_id +
+                    " project=" + project_id +
+                    " chat=" + chat_id +
+                    " messages=" + std::to_string(final_opts.messages.size()));
+                final_result = OpenAIClient::StreamChat(
+                    final_opts,
+                    [&](const std::string& delta) {
+                        if (cancelled()) {
+                            final_aborted = true;
+                            return;
+                        }
+                        final_text += delta;
+                        if (!on_delta(delta)) {
+                            final_aborted = true;
+                        }
+                    },
+                    on_queue_status,
+                    on_activity_status,
+                    cancelled);
 
-            if (cancelled()) {
-                final_aborted = true;
+                if (cancelled()) {
+                    final_aborted = true;
+                }
+                Logger::Info("WebModel",
+                    "provider-return-final request_id=" + model_request_id +
+                    " success=" + std::to_string(final_result.success) +
+                    " cancelled=" + std::to_string(cancelled()) +
+                    " assistant_chars=" + std::to_string(final_text.size()) +
+                    (final_result.error.empty() ? "" : " error=" + final_result.error));
+
+                if (final_result.success ||
+                    final_aborted ||
+                    !final_text.empty() ||
+                    !completion_driver_enabled ||
+                    !built_in_tools::IsTransientProviderOverloadError(final_result.error)) {
+                    break;
+                }
+                if (completion_driver_max_continuations > 0 &&
+                    completion_driver_continuations >= completion_driver_max_continuations) {
+                    if (on_activity_status) {
+                        on_activity_status("completion_driver_overload_limit",
+                            "Model overload retry limit reached while finalizing the response.");
+                    }
+                    Logger::Warn("CompletionDriver",
+                        "final summary overload retry limit reached request_id=" + model_request_id +
+                        " project=" + project_id +
+                        " chat=" + chat_id +
+                        " limit=" + std::to_string(completion_driver_max_continuations) +
+                        " error=" + final_result.error);
+                    break;
+                }
+                ++completion_driver_continuations;
+                auto final_retry_message = [&](int remaining_seconds) {
+                    std::ostringstream message;
+                    message << "Model overloaded while finalizing; ";
+                    if (remaining_seconds > 0) {
+                        message << "retrying in " << remaining_seconds << "s";
+                    } else {
+                        message << "retrying now";
+                    }
+                    if (completion_driver_max_continuations > 0) {
+                        message << " (" << completion_driver_continuations
+                                << " / " << completion_driver_max_continuations << ")";
+                    } else {
+                        message << " (unlimited)";
+                    }
+                    message << "...";
+                    return message.str();
+                };
+                if (on_activity_status) {
+                    on_activity_status("completion_driver_overload_wait",
+                        final_retry_message(completion_driver_overload_delay_seconds));
+                }
+                Logger::Warn("CompletionDriver",
+                    "final summary overloaded; retrying request_id=" + model_request_id +
+                    " project=" + project_id +
+                    " chat=" + chat_id +
+                    " retry=" + std::to_string(completion_driver_continuations) +
+                    (completion_driver_max_continuations > 0
+                        ? " limit=" + std::to_string(completion_driver_max_continuations)
+                        : " limit=unlimited") +
+                    " delay_seconds=" + std::to_string(completion_driver_overload_delay_seconds) +
+                    " error=" + final_result.error);
+                for (int remaining = completion_driver_overload_delay_seconds;
+                     remaining > 0 && !cancelled();
+                     --remaining) {
+                    if (on_activity_status &&
+                        (remaining == completion_driver_overload_delay_seconds ||
+                         remaining <= 5 ||
+                         (remaining % 30) == 0)) {
+                        on_activity_status("completion_driver_overload_wait",
+                            final_retry_message(remaining));
+                    }
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+                if (cancelled()) {
+                    final_aborted = true;
+                    break;
+                }
             }
-            Logger::Info("WebModel",
-                "provider-return-final request_id=" + model_request_id +
-                " success=" + std::to_string(final_result.success) +
-                " cancelled=" + std::to_string(cancelled()) +
-                " assistant_chars=" + std::to_string(final_text.size()) +
-                (final_result.error.empty() ? "" : " error=" + final_result.error));
 
             if (!final_result.success && !final_aborted) {
                 const std::string err_msg = final_result.error.empty()
@@ -5094,47 +5437,131 @@ std::string WebServer::StreamModel(const std::string& project_id,
         return {};
     }
 
-    // Accumulate full text so we can save it at the end
+    // Accumulate full text so we can save it at the end. This no-tools path is
+    // still part of the same agent run, so it also receives Completion
+    // Driver-style overload retries instead of failing immediately on a 503.
     std::string accumulated;
     bool aborted = false;
+    ChatExecutionResult stream_result;
+    const bool overload_retry_enabled = built_in_tools::IsCompletionDriverEnabled(
+        proj_settings, effective_agentic_mode_id);
+    const int overload_retry_max =
+        built_in_tools::NormalizedCompletionDriverMaxContinuations(proj_settings);
+    const int overload_retry_delay_seconds =
+        built_in_tools::NormalizedCompletionDriverOverloadDelaySeconds(proj_settings);
+    int overload_retry_count = 0;
 
     if (cancelled()) {
         return {};
     }
 
-    Logger::Info("WebModel",
-        "provider-call request_id=" + model_request_id +
-        " project=" + project_id +
-        " chat=" + chat_id +
-        " messages=" + std::to_string(opts.messages.size()) +
-        " tools=0");
+    for (;;) {
+        accumulated.clear();
+        aborted = false;
 
-    const auto stream_result = OpenAIClient::StreamChat(opts,
-        [&](const std::string& delta) {
-            if (cancelled()) {
-                aborted = true;
-                return;
-            }
-            accumulated += delta;
-            // on_delta returns false to signal the client disconnected
-            if (!on_delta(delta)) {
-                aborted = true;
-            }
-        },
-        on_queue_status,
-        on_activity_status,
-        cancelled);
+        Logger::Info("WebModel",
+            "provider-call request_id=" + model_request_id +
+            " project=" + project_id +
+            " chat=" + chat_id +
+            " messages=" + std::to_string(opts.messages.size()) +
+            " tools=0");
 
-    if (cancelled()) {
-        aborted = true;
+        stream_result = OpenAIClient::StreamChat(opts,
+            [&](const std::string& delta) {
+                if (cancelled()) {
+                    aborted = true;
+                    return;
+                }
+                accumulated += delta;
+                // on_delta returns false to signal the client disconnected
+                if (!on_delta(delta)) {
+                    aborted = true;
+                }
+            },
+            on_queue_status,
+            on_activity_status,
+            cancelled);
+
+        if (cancelled()) {
+            aborted = true;
+        }
+
+        Logger::Info("WebModel",
+            "provider-return request_id=" + model_request_id +
+            " success=" + std::to_string(stream_result.success) +
+            " cancelled=" + std::to_string(cancelled()) +
+            " assistant_chars=" + std::to_string(accumulated.size()) +
+            (stream_result.error.empty() ? "" : " error=" + stream_result.error));
+
+        if (stream_result.success ||
+            aborted ||
+            !accumulated.empty() ||
+            !overload_retry_enabled ||
+            !built_in_tools::IsTransientProviderOverloadError(stream_result.error)) {
+            break;
+        }
+        if (overload_retry_max > 0 && overload_retry_count >= overload_retry_max) {
+            if (on_activity_status) {
+                on_activity_status("completion_driver_overload_limit",
+                    "Model overload retry limit reached; reporting provider error.");
+            }
+            Logger::Warn("CompletionDriver",
+                "plain stream overload retry limit reached request_id=" + model_request_id +
+                " project=" + project_id +
+                " chat=" + chat_id +
+                " limit=" + std::to_string(overload_retry_max) +
+                " error=" + stream_result.error);
+            break;
+        }
+        ++overload_retry_count;
+        auto retry_message = [&](int remaining_seconds) {
+            std::ostringstream message;
+            message << "Model overloaded; ";
+            if (remaining_seconds > 0) {
+                message << "retrying in " << remaining_seconds << "s";
+            } else {
+                message << "retrying now";
+            }
+            if (overload_retry_max > 0) {
+                message << " (" << overload_retry_count
+                        << " / " << overload_retry_max << ")";
+            } else {
+                message << " (unlimited)";
+            }
+            message << "...";
+            return message.str();
+        };
+        if (on_activity_status) {
+            on_activity_status("completion_driver_overload_wait",
+                retry_message(overload_retry_delay_seconds));
+        }
+        Logger::Warn("CompletionDriver",
+            "plain stream overloaded; retrying request_id=" + model_request_id +
+            " project=" + project_id +
+            " chat=" + chat_id +
+            " retry=" + std::to_string(overload_retry_count) +
+            (overload_retry_max > 0
+                ? " limit=" + std::to_string(overload_retry_max)
+                : " limit=unlimited") +
+            " delay_seconds=" + std::to_string(overload_retry_delay_seconds) +
+            " error=" + stream_result.error);
+        for (int remaining = overload_retry_delay_seconds;
+             remaining > 0 && !cancelled();
+             --remaining) {
+            if (on_activity_status &&
+                (remaining == overload_retry_delay_seconds ||
+                 remaining <= 5 ||
+                 (remaining % 30) == 0)) {
+                on_activity_status("completion_driver_overload_wait",
+                    retry_message(remaining));
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        if (cancelled()) {
+            aborted = true;
+            break;
+        }
     }
-
-    Logger::Info("WebModel",
-        "provider-return request_id=" + model_request_id +
-        " success=" + std::to_string(stream_result.success) +
-        " cancelled=" + std::to_string(cancelled()) +
-        " assistant_chars=" + std::to_string(accumulated.size()) +
-        (stream_result.error.empty() ? "" : " error=" + stream_result.error));
 
     if (!stream_result.success && !aborted) {
         const std::string err_msg = stream_result.error.empty() ? "Streaming model call failed." : stream_result.error;
@@ -5260,6 +5687,27 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                           encode_sse, attachments, web_debug_requested,
                           cancel_token, stream_key]() {
         std::string err;
+        auto persist_producer_error = [&](const std::string& message) {
+            if (message.empty()) return;
+            try {
+                MessageRecord error_msg;
+                error_msg.role = "error";
+                error_msg.content = message;
+                error_msg.created_at = NowIso();
+                auto latest_messages = storage_->LoadMessages(proj_id, chat_id);
+                latest_messages.push_back(std::move(error_msg));
+                storage_->SaveMessages(proj_id, chat_id, latest_messages);
+                NotifyContentChanged();
+            } catch (const std::exception& save_ex) {
+                Logger::Error("WebModel",
+                    "Could not persist producer-thread streaming error for project=" + proj_id +
+                    " chat=" + chat_id + " error=" + save_ex.what());
+            } catch (...) {
+                Logger::Error("WebModel",
+                    "Could not persist producer-thread streaming error for project=" + proj_id +
+                    " chat=" + chat_id + " error=unknown");
+            }
+        };
         try {
             err = StreamModel(
             proj_id, chat_id, content, sess_user,
@@ -5269,7 +5717,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                     if (cancel_token->cancelled.load()) return false;
                     if (pipe->abort) return true;
                     json ev = {{"delta", delta}};
-                    pipe->pending += encode_sse(ev.dump());
+                    pipe->pending += encode_sse(DumpJsonForWeb(ev, "stream delta event"));
                 }
                 pipe->cv.notify_one();
                 return true;
@@ -5283,7 +5731,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                         {"ctx_used", used_tokens},
                         {"ctx_total", total_tokens},
                     };
-                    pipe->pending += encode_sse(ev.dump());
+                    pipe->pending += encode_sse(DumpJsonForWeb(ev, "context usage stream event"));
                 }
                 pipe->cv.notify_one();
             },
@@ -5295,7 +5743,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                         {"compression_status", status},
                         {"compression_message", message},
                     };
-                    pipe->pending += encode_sse(ev.dump());
+                    pipe->pending += encode_sse(DumpJsonForWeb(ev, "compression status stream event"));
                 }
                 pipe->cv.notify_one();
             },
@@ -5312,7 +5760,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                         {"queue_max_active", status.max_active_requests},
                         {"queue_max_queue", status.max_queue_size},
                     };
-                    pipe->pending += encode_sse(ev.dump());
+                    pipe->pending += encode_sse(DumpJsonForWeb(ev, "provider queue stream event"));
                 }
                 pipe->cv.notify_one();
             },
@@ -5324,7 +5772,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                         {"activity_status", status},
                         {"activity_message", message},
                     };
-                    pipe->pending += encode_sse(ev.dump());
+                    pipe->pending += encode_sse(DumpJsonForWeb(ev, "activity status stream event"));
                 }
                 pipe->cv.notify_one();
             },
@@ -5347,7 +5795,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                         {"started_at", timestamp},
                         {"updated_at", timestamp},
                     };
-                    pipe->pending += encode_sse(ev.dump());
+                    pipe->pending += encode_sse(DumpJsonForWeb(ev, "tool status stream event"));
                 }
                 pipe->cv.notify_one();
             },
@@ -5371,7 +5819,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                         {"user_prompt", user_prompt},
                         {"request_messages", messages_json},
                     };
-                    pipe->pending += encode_sse(ev.dump());
+                    pipe->pending += encode_sse(DumpJsonForWeb(ev, "web debug stream event"));
                 }
                 pipe->cv.notify_one();
             },
@@ -5392,7 +5840,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                         {"started_at", timestamp},
                         {"updated_at", timestamp},
                     };
-                    pipe->pending += encode_sse(ev.dump());
+                    pipe->pending += encode_sse(DumpJsonForWeb(ev, "questionnaire stream event"));
                 }
                 pipe->cv.notify_one();
             },
@@ -5403,9 +5851,11 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
         } catch (const std::exception& ex) {
             Logger::Error("WebModel", std::string("Producer thread exception: ") + ex.what());
             err = std::string("Unhandled error in streaming model: ") + ex.what();
+            persist_producer_error(err);
         } catch (...) {
             Logger::Error("WebModel", "Producer thread unknown exception");
             err = "Unhandled unknown error in streaming model.";
+            persist_producer_error(err);
         }
 
         // Enqueue final event
@@ -5415,7 +5865,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 pipe->pending += encode_sse(R"({"cancelled":true,"done":true})");
             } else if (!err.empty()) {
                 json ev = {{"error", err}};
-                pipe->pending += encode_sse(ev.dump());
+                pipe->pending += encode_sse(DumpJsonForWeb(ev, "stream final error event"));
             } else {
                 pipe->pending += encode_sse(R"({"done":true})");
             }
@@ -5664,7 +6114,7 @@ std::string WebServer::SerializeAutomationJob(
     } else {
         payload["questionnaire"] = nullptr;
     }
-    return payload.dump();
+    return DumpJsonForWeb(payload, "automation job JSON");
 }
 
 bool WebServer::SetChatAgenticModeForAutomation(
@@ -5786,16 +6236,25 @@ bool WebServer::CompressChatForAutomation(const std::string& project_id,
 
     MessageRecord comp_msg;
     comp_msg.role = "compression";
-    comp_msg.content = record_payload.dump();
+    comp_msg.content = DumpJsonForWeb(record_payload, "automation compression chat record");
     comp_msg.created_at = compression_created_at;
 
-    messages = storage_->LoadMessages(project_id, chat_id);
-    messages.push_back(comp_msg);
-    storage_->SaveMessages(project_id, chat_id, messages);
+    const bool rolled_over = storage_->RolloverMessagesAfterCompression(
+        project_id, chat_id, compressed_through, comp_msg);
+    if (rolled_over) {
+        ResetCompressionIndexesAfterMessageRollover(
+            &compression_service_, project_id, chat_id);
+    } else {
+        messages = storage_->LoadMessages(project_id, chat_id);
+        messages.push_back(comp_msg);
+        storage_->SaveMessages(project_id, chat_id, messages);
+    }
     NotifyContentChanged();
 
     if (status_message) {
-        *status_message = "Context compressed successfully.";
+        *status_message = rolled_over
+            ? "Context compressed successfully; older messages were archived."
+            : "Context compressed successfully.";
     }
     return true;
 }

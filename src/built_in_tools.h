@@ -10,11 +10,14 @@
 #include <chrono>
 #include <cctype>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 #include <windows.h>
 
@@ -28,11 +31,12 @@ inline constexpr const char* kCompletionDriverContinuationPrefix = "[Completion 
 inline constexpr const char* kDefaultPlannerStorageFolder = "$ProjectFolder$\\.agent";
 inline constexpr const char* kPlannerFileName = "planner.json";
 inline constexpr const char* kFilesystemToolName = "project_filesystem";
+inline constexpr const char* kSleepToolName = "sleep_seconds";
 
 inline bool IsBuiltInToolName(const std::string& name) {
     return name == kPowerShellToolName || name == kQuestionnaireToolName ||
            name == kPlannerToolName || name == kCompletionDriverToolName ||
-           name == kFilesystemToolName;
+           name == kFilesystemToolName || name == kSleepToolName;
 }
 
 inline std::string TraceTitleForBuiltInTool(const std::string& name) {
@@ -41,6 +45,7 @@ inline std::string TraceTitleForBuiltInTool(const std::string& name) {
     if (name == kPlannerToolName) return "Built-in / Planner";
     if (name == kCompletionDriverToolName) return "Built-in / Completion Driver";
     if (name == kFilesystemToolName) return "Built-in / Project Filesystem";
+    if (name == kSleepToolName) return "Built-in / Sleep / Pause";
     return "Built-in / " + name;
 }
 
@@ -122,6 +127,24 @@ inline std::string PowerShellSystemPrompt() {
         "  Build project: {\"command\":\"cmake --build build --config Release\",\"timeout_seconds\":120}");
 }
 
+inline std::string SleepSystemPrompt(int max_sleep_seconds = 0) {
+    std::ostringstream text;
+    text
+        << "Sleep / Pause Instructions:\n"
+        << "- The sleep_seconds tool pauses the current agent/tool loop for a requested number of seconds, then returns control so you can continue.\n"
+        << "- Use it when you have started or requested background work and need to wait briefly before checking status, reading output, polling a file, or continuing a sequence.\n"
+        << "- The tool only waits. It does not start work in parallel, monitor a process for you, or prove that external work has completed.\n"
+        << "- Keep waits purposeful and short when possible, then follow the sleep with a concrete status check or next action.\n";
+    if (max_sleep_seconds > 0) {
+        text << "- This project limits each sleep_seconds call to "
+             << max_sleep_seconds
+             << " seconds. Do not request more than that in one call.";
+    } else {
+        text << "- This project has no configured maximum sleep duration. Choose a reasonable duration for the current task.";
+    }
+    return text.str();
+}
+
 inline std::string PlannerSystemPrompt() {
     return (
         "Planner / Task Decomposition Instructions:\n"
@@ -156,6 +179,28 @@ inline std::string PlannerSystemPrompt() {
 
 inline int NormalizedCompletionDriverMaxContinuations(const ProjectSettings& settings) {
     return std::max(0, settings.completion_driver_max_continuations);
+}
+
+inline int NormalizedCompletionDriverOverloadDelaySeconds(const ProjectSettings& settings) {
+    return std::max(0, settings.completion_driver_overload_delay_seconds);
+}
+
+inline int NormalizedSleepMaxSeconds(const ProjectSettings& settings) {
+    return std::max(0, settings.built_in_sleep_max_seconds);
+}
+
+inline bool IsTransientProviderOverloadError(const std::string& error) {
+    const std::string lower = LowerAsciiCopy(error);
+    return lower.find("temporarily overloaded") != std::string::npos ||
+           lower.find("model overloaded") != std::string::npos ||
+           lower.find("provider overloaded") != std::string::npos ||
+           lower.find("server overloaded") != std::string::npos ||
+           lower.find("api error 503") != std::string::npos ||
+           lower.find("http 503") != std::string::npos ||
+           lower.find("status 503") != std::string::npos ||
+           lower.find("503 service unavailable") != std::string::npos ||
+           lower.find("service unavailable") != std::string::npos ||
+           lower.find("temporarily unavailable") != std::string::npos;
 }
 
 inline std::string CompletionDriverSystemPrompt(int max_continuations = 0) {
@@ -307,6 +352,42 @@ inline std::vector<ChatToolDefinition> BuildDefinitions(
             "Do not ask rhetorical questions without this tool when a decision is needed.";
         q.parameters_json = R"({"type":"object","properties":{"question":{"type":"string","description":"The question or prompt text shown to the user."},"options":{"type":"array","items":{"type":"string"},"description":"A list of distinct clickable answer choices."},"allow_multiple":{"type":"boolean","description":"If true, the user may select more than one option. Default false."}},"required":["question","options"]})";
         definitions.push_back(std::move(q));
+    }
+    if (settings.built_in_sleep_enabled) {
+        const int max_sleep_seconds = NormalizedSleepMaxSeconds(settings);
+        ChatToolDefinition sleep;
+        sleep.name = kSleepToolName;
+        std::ostringstream desc;
+        desc
+            << "Pause the current agent/tool loop for a requested number of seconds, then continue. "
+            << "Use this when background work has been started or requested and you need to wait before checking status, "
+            << "polling output, reading a file, or taking the next step. This tool only waits; it does not start, monitor, "
+            << "or verify external work. Prefer short, purposeful waits followed by a concrete status check. ";
+        if (max_sleep_seconds > 0) {
+            desc << "This project limits each sleep_seconds call to " << max_sleep_seconds
+                 << " seconds; requests above that limit will fail.";
+        } else {
+            desc << "This project has no configured maximum sleep duration, so choose a reasonable duration for the task.";
+        }
+        sleep.description = desc.str();
+        nlohmann::json schema = {
+            {"type", "object"},
+            {"properties", {
+                {"seconds", {
+                    {"type", "integer"},
+                    {"description", max_sleep_seconds > 0
+                        ? "Number of seconds to pause before continuing. Must be between 0 and the configured project maximum."
+                        : "Number of seconds to pause before continuing. Use a reasonable duration for the task."},
+                    {"minimum", 0}
+                }}
+            }},
+            {"required", {"seconds"}}
+        };
+        if (max_sleep_seconds > 0) {
+            schema["properties"]["seconds"]["maximum"] = max_sleep_seconds;
+        }
+        sleep.parameters_json = schema.dump(2);
+        definitions.push_back(std::move(sleep));
     }
     if (settings.built_in_filesystem_enabled) {
         ChatToolDefinition fs;
@@ -574,6 +655,108 @@ inline McpToolCallResult CallCompletionDriver(const std::string& arguments_json)
     if (!remaining_work.empty()) text << "\nRemaining work: " << remaining_work;
     if (!next_action.empty()) text << "\nNext action: " << next_action;
     result.content_text = text.str();
+    return result;
+}
+
+inline McpToolCallResult CallSleep(
+    const std::string& arguments_json,
+    int max_sleep_seconds,
+    std::function<bool()> should_cancel = {}) {
+    nlohmann::json args;
+    try {
+        args = nlohmann::json::parse(arguments_json.empty() ? "{}" : arguments_json);
+    } catch (const std::exception& ex) {
+        return ErrorResult(std::string("Invalid sleep_seconds arguments: ") + ex.what());
+    }
+
+    if (!args.contains("seconds")) {
+        return ErrorResult("sleep_seconds requires a seconds value.");
+    }
+
+    long long requested_seconds = 0;
+    try {
+        const auto& seconds_j = args["seconds"];
+        if (seconds_j.is_number_unsigned()) {
+            const auto raw_seconds = seconds_j.get<unsigned long long>();
+            if (raw_seconds > static_cast<unsigned long long>(std::numeric_limits<long long>::max())) {
+                return ErrorResult("sleep_seconds seconds value is too large.");
+            }
+            requested_seconds = static_cast<long long>(raw_seconds);
+        } else if (seconds_j.is_number_integer()) {
+            requested_seconds = seconds_j.get<long long>();
+        } else if (seconds_j.is_number_float()) {
+            const double raw_seconds = seconds_j.get<double>();
+            if (raw_seconds < 0.0) {
+                return ErrorResult("sleep_seconds seconds must be zero or greater.");
+            }
+            if (raw_seconds > static_cast<double>(std::numeric_limits<long long>::max())) {
+                return ErrorResult("sleep_seconds seconds value is too large.");
+            }
+            requested_seconds = static_cast<long long>(raw_seconds);
+            if (static_cast<double>(requested_seconds) != raw_seconds) {
+                return ErrorResult("sleep_seconds seconds must be a whole number.");
+            }
+        } else if (seconds_j.is_string()) {
+            std::string seconds_text = Trim(seconds_j.get<std::string>());
+            size_t parsed = 0;
+            requested_seconds = std::stoll(seconds_text, &parsed);
+            if (parsed != seconds_text.size()) {
+                return ErrorResult("sleep_seconds seconds must be a whole number.");
+            }
+        } else {
+            return ErrorResult("sleep_seconds seconds must be a whole number.");
+        }
+    } catch (const std::exception&) {
+        return ErrorResult("sleep_seconds seconds must be a whole number.");
+    }
+
+    if (requested_seconds < 0) {
+        return ErrorResult("sleep_seconds seconds must be zero or greater.");
+    }
+
+    max_sleep_seconds = std::max(0, max_sleep_seconds);
+    if (max_sleep_seconds > 0 && requested_seconds > max_sleep_seconds) {
+        std::ostringstream err;
+        err << "sleep_seconds requested " << requested_seconds
+            << " seconds, but this project limits each sleep to "
+            << max_sleep_seconds << " seconds.";
+        return ErrorResult(err.str());
+    }
+
+    long long slept_seconds = 0;
+    for (; slept_seconds < requested_seconds; ++slept_seconds) {
+        if (should_cancel && should_cancel()) {
+            McpToolCallResult result;
+            result.success = false;
+            result.is_tool_error = true;
+            nlohmann::json payload = {
+                {"tool", kSleepToolName},
+                {"success", false},
+                {"cancelled", true},
+                {"requested_seconds", requested_seconds},
+                {"slept_seconds", slept_seconds},
+                {"max_sleep_seconds", max_sleep_seconds},
+            };
+            result.raw_result_json = payload.dump(2);
+            result.content_text = "Sleep cancelled after " + std::to_string(slept_seconds) +
+                " of " + std::to_string(requested_seconds) + " seconds.";
+            return result;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    McpToolCallResult result;
+    result.success = true;
+    nlohmann::json payload = {
+        {"tool", kSleepToolName},
+        {"success", true},
+        {"cancelled", false},
+        {"requested_seconds", requested_seconds},
+        {"slept_seconds", slept_seconds},
+        {"max_sleep_seconds", max_sleep_seconds},
+    };
+    result.raw_result_json = payload.dump(2);
+    result.content_text = "Slept for " + std::to_string(slept_seconds) + " seconds.";
     return result;
 }
 
@@ -1597,7 +1780,8 @@ inline McpToolCallResult CallTool(
     const ProjectSettings& settings,
     const std::vector<ProjectMcpVariableValue>& variables,
     const std::string& current_agentic_mode_id = {},
-    std::function<McpToolCallResult(const std::string&)> questionnaire_wait = {}) {
+    std::function<McpToolCallResult(const std::string&)> questionnaire_wait = {},
+    std::function<bool()> should_cancel = {}) {
     if (name == kPowerShellToolName && settings.built_in_powershell_enabled) {
         return CallPowerShell(arguments_json, settings.built_in_powershell_working_directory, variables);
     }
@@ -1609,6 +1793,9 @@ inline McpToolCallResult CallTool(
     }
     if (name == kQuestionnaireToolName && IsQuestionnaireEnabled(settings, current_agentic_mode_id)) {
         return CallQuestionnaire(arguments_json, questionnaire_wait);
+    }
+    if (name == kSleepToolName && settings.built_in_sleep_enabled) {
+        return CallSleep(arguments_json, NormalizedSleepMaxSeconds(settings), should_cancel);
     }
     if (name == kFilesystemToolName && settings.built_in_filesystem_enabled) {
         return CallFilesystem(arguments_json, settings, variables);

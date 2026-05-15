@@ -145,6 +145,8 @@ enum ControlId : int {
     kCompletionDriverNoteLabel = 6493,
     kCompletionDriverMaxContinuationsLabel = 6496,
     kCompletionDriverMaxContinuationsEdit = 6497,
+    kCompletionDriverOverloadDelayLabel = 6498,
+    kCompletionDriverOverloadDelayEdit = 6499,
 
     // Filesystem built-in tool settings
     kFilesystemEnabledCheck = 6500,
@@ -152,6 +154,10 @@ enum ControlId : int {
     kFilesystemWorkingDirLabel = 6502,
     kFilesystemWorkingDirEdit = 6503,
     kFilesystemNoteLabel = 6504,
+    kSleepEnabledCheck = 6505,
+    kSleepMaxSecondsLabel = 6506,
+    kSleepMaxSecondsEdit = 6507,
+    kSleepNoteLabel = 6508,
 
     // Right panel scrollable host
     kSettingsScrollPanel = 6480,
@@ -711,6 +717,7 @@ private:
             &completion_driver_enabled_check_,
             &completion_driver_modes_list_,
             &completion_driver_max_continuations_edit_,
+            &completion_driver_overload_delay_edit_,
             &questionnaire_enabled_check_,
             &questionnaire_max_options_edit_,
             &questionnaire_restrict_mode_check_,
@@ -718,6 +725,8 @@ private:
             &filesystem_enabled_check_,
             &filesystem_auto_archive_check_,
             &filesystem_working_dir_edit_,
+            &sleep_enabled_check_,
+            &sleep_max_seconds_edit_,
             &rag_services_list_,
             &rag_enabled_check_,
             &rag_read_check_,
@@ -782,7 +791,7 @@ private:
                 const LRESULT item_info = SendMessageW(hwnd, LB_ITEMFROMPOINT, 0, MAKELPARAM(x, y));
                 const int index = LOWORD(item_info);
                 const bool outside = HIWORD(item_info) != 0;
-                if (!outside && index >= 0 && index <= 5) {
+                if (!outside && index >= 0 && index <= 6) {
                     SetFocus(hwnd);
                     if (x <= Scale(hwnd, 42)) {
                         self->ToggleInternalToolEnabled(index);
@@ -796,7 +805,7 @@ private:
             case WM_KEYDOWN:
                 if (w_param == VK_SPACE) {
                     const int index = ListBox_GetCurSel(hwnd);
-                    if (index >= 0 && index <= 5) {
+                    if (index >= 0 && index <= 6) {
                         self->ToggleInternalToolEnabled(index);
                         return 0;
                     }
@@ -1121,8 +1130,14 @@ private:
         completion_driver_max_continuations_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"0",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverMaxContinuationsEdit), nullptr, nullptr);
+        completion_driver_overload_delay_label_ = CreateWindowExW(0, L"STATIC", L"Overload Delay(s):",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverOverloadDelayLabel), nullptr, nullptr);
+        completion_driver_overload_delay_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"180",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverOverloadDelayEdit), nullptr, nullptr);
         completion_driver_note_label_ = CreateWindowExW(0, L"STATIC",
-            L"Only checked modes can use completion_driver. The host continues those modes until completed/done or until the max continuation limit is reached. Use 0 for unlimited.",
+            L"Only checked modes can use completion_driver. The host continues those modes until completed/done or until the max continuation limit is reached. Provider overload retries wait the configured delay and share the same continuation budget. Use 0 max for unlimited.",
             WS_CHILD | WS_VISIBLE,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kCompletionDriverNoteLabel), nullptr, nullptr);
 
@@ -1161,6 +1176,20 @@ private:
             L"Allows the model to read, write, edit, list, and create files under the working directory.",
             WS_CHILD | WS_VISIBLE,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kFilesystemNoteLabel), nullptr, nullptr);
+
+        sleep_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable Sleep / Pause tool",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kSleepEnabledCheck), nullptr, nullptr);
+        sleep_max_seconds_label_ = CreateWindowExW(0, L"STATIC", L"Max sleep (seconds, 0 = unlimited):",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kSleepMaxSecondsLabel), nullptr, nullptr);
+        sleep_max_seconds_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"0",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kSleepMaxSecondsEdit), nullptr, nullptr);
+        sleep_note_label_ = CreateWindowExW(0, L"STATIC",
+            L"Lets the model pause briefly before checking background work or polling status. Set 0 to allow any requested duration.",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kSleepNoteLabel), nullptr, nullptr);
 
         // RAG services section
         rag_services_header_ = CreateWindowExW(0, L"STATIC", L"RAG Services:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagServicesHeader), nullptr, nullptr);
@@ -1263,11 +1292,13 @@ private:
             planner_enabled_check_, planner_storage_folder_label_, planner_storage_folder_edit_, planner_note_label_,
             completion_driver_enabled_check_, completion_driver_modes_label_, completion_driver_modes_list_,
             completion_driver_max_continuations_label_, completion_driver_max_continuations_edit_,
+            completion_driver_overload_delay_label_, completion_driver_overload_delay_edit_,
             completion_driver_note_label_,
             questionnaire_enabled_check_, questionnaire_max_options_label_, questionnaire_max_options_edit_,
             questionnaire_restrict_mode_check_, questionnaire_mode_label_, questionnaire_mode_combo_,
             filesystem_enabled_check_, filesystem_auto_archive_check_, filesystem_working_dir_label_,
             filesystem_working_dir_edit_, filesystem_note_label_,
+            sleep_enabled_check_, sleep_max_seconds_label_, sleep_max_seconds_edit_, sleep_note_label_,
             rag_services_header_, rag_services_list_, rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_check_,
             rag_priority_label_, rag_priority_edit_, rag_max_chunks_label_, rag_max_chunks_edit_,
@@ -1383,16 +1414,21 @@ private:
         filesystem_working_directory_ = Trim(options_.built_in_filesystem_working_directory).empty()
             ? std::string("$ProjectFolder$")
             : options_.built_in_filesystem_working_directory;
+        sleep_enabled_ = options_.built_in_sleep_enabled;
+        sleep_max_seconds_ = std::max(0, options_.built_in_sleep_max_seconds);
         if (completion_driver_enabled_) {
             CheckDlgButton(scroll_content_host_, kCompletionDriverEnabledCheck, BST_CHECKED);
         }
         SetWindowTextW(completion_driver_max_continuations_edit_,
             std::to_wstring(options_.completion_driver_max_continuations).c_str());
+        SetWindowTextW(completion_driver_overload_delay_edit_,
+            std::to_wstring(options_.completion_driver_overload_delay_seconds).c_str());
         RefreshCompletionDriverModesList();
         if (questionnaire_enabled_) {
             CheckDlgButton(scroll_content_host_, kQuestionnaireEnabledCheck, BST_CHECKED);
         }
         SetWindowTextW(questionnaire_max_options_edit_, std::to_wstring(options_.questionnaire_max_options).c_str());
+        SetWindowTextW(sleep_max_seconds_edit_, std::to_wstring(sleep_max_seconds_).c_str());
         if (options_.questionnaire_restrict_by_mode) {
             CheckDlgButton(scroll_content_host_, kQuestionnaireRestrictModeCheck, BST_CHECKED);
         }
@@ -1511,7 +1547,9 @@ private:
         MoveWindow(completion_driver_modes_list_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 45), internal_settings_w - panel_pad * 2, Scale(hwnd_, 72), TRUE);
         MoveWindow(completion_driver_max_continuations_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 122), Scale(hwnd_, 125), label_height, TRUE);
         MoveWindow(completion_driver_max_continuations_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 128), tool_y + Scale(hwnd_, 119), Scale(hwnd_, 60), Scale(hwnd_, 22), TRUE);
-        MoveWindow(completion_driver_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 148), internal_settings_w - panel_pad * 2, Scale(hwnd_, 46), TRUE);
+        MoveWindow(completion_driver_overload_delay_label_, internal_settings_x + panel_pad + Scale(hwnd_, 210), tool_y + Scale(hwnd_, 122), Scale(hwnd_, 125), label_height, TRUE);
+        MoveWindow(completion_driver_overload_delay_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 338), tool_y + Scale(hwnd_, 119), Scale(hwnd_, 70), Scale(hwnd_, 22), TRUE);
+        MoveWindow(completion_driver_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 148), internal_settings_w - panel_pad * 2, Scale(hwnd_, 56), TRUE);
 
         MoveWindow(questionnaire_enabled_check_, internal_settings_x + panel_pad, tool_y, internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
         MoveWindow(questionnaire_max_options_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), Scale(hwnd_, 80), Scale(hwnd_, 20), TRUE);
@@ -1531,6 +1569,11 @@ private:
         MoveWindow(filesystem_working_dir_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 50), Scale(hwnd_, 100), label_height, TRUE);
         MoveWindow(filesystem_working_dir_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 102), tool_y + Scale(hwnd_, 48), internal_settings_w - panel_pad * 2 - Scale(hwnd_, 102), Scale(hwnd_, 22), TRUE);
         MoveWindow(filesystem_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 74), internal_settings_w - panel_pad * 2, Scale(hwnd_, 56), TRUE);
+
+        MoveWindow(sleep_enabled_check_, internal_settings_x + panel_pad, tool_y, internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(sleep_max_seconds_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), Scale(hwnd_, 205), label_height, TRUE);
+        MoveWindow(sleep_max_seconds_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 208), tool_y + Scale(hwnd_, 22), Scale(hwnd_, 70), Scale(hwnd_, 22), TRUE);
+        MoveWindow(sleep_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 52), internal_settings_w - panel_pad * 2, Scale(hwnd_, 56), TRUE);
 
         // RAG services section
         y += internal_h + gutter * 2;
@@ -1733,6 +1776,14 @@ private:
                 RefreshInternalToolsList();
             }
             break;
+        case kSleepEnabledCheck:
+            if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
+                sleep_enabled_ = (IsDlgButtonChecked(scroll_content_host_, kSleepEnabledCheck) == BST_CHECKED);
+                RefreshInternalToolsList();
+            }
+            break;
+        case kSleepMaxSecondsEdit:
+            break; // ignore EN_CHANGE
         case kCompletionDriverModesList:
             break;
         case kQuestionnaireEnabledCheck:
@@ -2196,10 +2247,36 @@ private:
             questionnaire_enabled_ =
                 (IsDlgButtonChecked(scroll_content_host_, kQuestionnaireEnabledCheck) == BST_CHECKED);
         }
+        if (selected_internal_tool_index_ == 5 && filesystem_enabled_check_) {
+            filesystem_enabled_ =
+                (IsDlgButtonChecked(scroll_content_host_, kFilesystemEnabledCheck) == BST_CHECKED);
+        }
+        if (selected_internal_tool_index_ == 5 && filesystem_auto_archive_check_) {
+            filesystem_auto_archive_ =
+                (IsDlgButtonChecked(scroll_content_host_, kFilesystemAutoArchiveCheck) == BST_CHECKED);
+        }
+        if (selected_internal_tool_index_ == 5 && filesystem_working_dir_edit_) {
+            filesystem_working_directory_ = Trim(WideToUtf8(GetWindowTextString(filesystem_working_dir_edit_)));
+            if (filesystem_working_directory_.empty()) {
+                filesystem_working_directory_ = "$ProjectFolder$";
+            }
+        }
+        if (selected_internal_tool_index_ == 6 && sleep_enabled_check_) {
+            sleep_enabled_ =
+                (IsDlgButtonChecked(scroll_content_host_, kSleepEnabledCheck) == BST_CHECKED);
+        }
+        if (selected_internal_tool_index_ == 6 && sleep_max_seconds_edit_) {
+            const std::wstring sleep_limit_text =
+                TrimWide(GetWindowTextString(sleep_max_seconds_edit_));
+            sleep_max_seconds_ = sleep_limit_text.empty() ? 0 : std::stoi(sleep_limit_text);
+            if (sleep_max_seconds_ < 0) {
+                sleep_max_seconds_ = 0;
+            }
+        }
     }
 
     void ToggleInternalToolEnabled(int index) {
-        if (index < 0 || index > 5) return;
+        if (index < 0 || index > 6) return;
         SaveCurrentInternalToolSettings();
         selected_internal_tool_index_ = index;
         if (index == 0) {
@@ -2216,12 +2293,14 @@ private:
             completion_driver_enabled_ = !completion_driver_enabled_;
         } else if (index == 5) {
             filesystem_enabled_ = !filesystem_enabled_;
+        } else if (index == 6) {
+            sleep_enabled_ = !sleep_enabled_;
         }
         RefreshInternalToolsList(false);
     }
 
     void SelectInternalTool(int index) {
-        if (index < 0 || index > 5) return;
+        if (index < 0 || index > 6) return;
         SaveCurrentInternalToolSettings();
         selected_internal_tool_index_ = index;
         ListBox_SetCurSel(internal_tools_list_, index);
@@ -2278,7 +2357,7 @@ private:
         if (SendMessageW(internal_tools_list_, LB_GETTEXT, index, reinterpret_cast<LPARAM>(text.data())) == LB_ERR) {
             return fallback;
         }
-        return text[0] == L'[' && text[1] != L' ' && text[2] == L']';
+        return text[0] == L'[' && text[1] != L' ';
     }
 
     void RefreshInternalToolsList(bool save_current = true) {
@@ -2313,8 +2392,33 @@ private:
         ListBox_AddString(internal_tools_list_,
             (std::wstring(filesystem_enabled_ ? L"[✓] " : L"[ ] ") + L"Project Filesystem").c_str());
 
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(sleep_enabled_ ? L"[âœ“] " : L"[ ] ") + L"Sleep / Pause").c_str());
+
+        ListBox_ResetContent(internal_tools_list_);
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(internal_powershell_enabled_ ? L"[x] " : L"[ ] ") + L"PowerShell command execution").c_str());
+        const bool clean_memory_forced = ArtifactMemoryForcedByLayer0();
+        const bool clean_memory_enabled = ArtifactMemoryEffectiveEnabled();
+        std::wstring clean_memory_label = (clean_memory_enabled ? L"[x] " : L"[ ] ");
+        clean_memory_label += L"Artifact/Code Memory";
+        if (clean_memory_forced) {
+            clean_memory_label += L" (forced by L0)";
+        }
+        ListBox_AddString(internal_tools_list_, clean_memory_label.c_str());
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(planner_enabled_ ? L"[x] " : L"[ ] ") + L"Planner / Task Decomposition").c_str());
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(questionnaire_enabled_ ? L"[x] " : L"[ ] ") + L"User Questionnaire").c_str());
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(completion_driver_enabled_ ? L"[x] " : L"[ ] ") + L"Completion Driver").c_str());
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(filesystem_enabled_ ? L"[x] " : L"[ ] ") + L"Project Filesystem").c_str());
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(sleep_enabled_ ? L"[x] " : L"[ ] ") + L"Sleep / Pause").c_str());
+
         int sel = selected_internal_tool_index_;
-        if (sel < 0 || sel > 5) sel = 0;
+        if (sel < 0 || sel > 6) sel = 0;
         ListBox_SetCurSel(internal_tools_list_, sel);
         toggling_internal_tool_ = false;
         ShowInternalToolSettings(sel);
@@ -2337,12 +2441,18 @@ private:
         ShowWindow(completion_driver_modes_list_, SW_HIDE);
         ShowWindow(completion_driver_max_continuations_label_, SW_HIDE);
         ShowWindow(completion_driver_max_continuations_edit_, SW_HIDE);
+        ShowWindow(completion_driver_overload_delay_label_, SW_HIDE);
+        ShowWindow(completion_driver_overload_delay_edit_, SW_HIDE);
         ShowWindow(completion_driver_note_label_, SW_HIDE);
         ShowWindow(filesystem_enabled_check_, SW_HIDE);
         ShowWindow(filesystem_auto_archive_check_, SW_HIDE);
         ShowWindow(filesystem_working_dir_label_, SW_HIDE);
         ShowWindow(filesystem_working_dir_edit_, SW_HIDE);
         ShowWindow(filesystem_note_label_, SW_HIDE);
+        ShowWindow(sleep_enabled_check_, SW_HIDE);
+        ShowWindow(sleep_max_seconds_label_, SW_HIDE);
+        ShowWindow(sleep_max_seconds_edit_, SW_HIDE);
+        ShowWindow(sleep_note_label_, SW_HIDE);
         ShowWindow(questionnaire_enabled_check_, SW_HIDE);
         ShowWindow(questionnaire_max_options_label_, SW_HIDE);
         ShowWindow(questionnaire_max_options_edit_, SW_HIDE);
@@ -2406,6 +2516,8 @@ private:
             ShowWindow(completion_driver_modes_list_, SW_SHOW);
             ShowWindow(completion_driver_max_continuations_label_, SW_SHOW);
             ShowWindow(completion_driver_max_continuations_edit_, SW_SHOW);
+            ShowWindow(completion_driver_overload_delay_label_, SW_SHOW);
+            ShowWindow(completion_driver_overload_delay_edit_, SW_SHOW);
             ShowWindow(completion_driver_note_label_, SW_SHOW);
             CheckDlgButton(scroll_content_host_, kCompletionDriverEnabledCheck,
                 completion_driver_enabled_ ? BST_CHECKED : BST_UNCHECKED);
@@ -2414,6 +2526,8 @@ private:
             EnableWindow(completion_driver_modes_list_, completion_driver_enabled_ ? TRUE : FALSE);
             EnableWindow(completion_driver_max_continuations_label_, completion_driver_enabled_ ? TRUE : FALSE);
             EnableWindow(completion_driver_max_continuations_edit_, completion_driver_enabled_ ? TRUE : FALSE);
+            EnableWindow(completion_driver_overload_delay_label_, completion_driver_enabled_ ? TRUE : FALSE);
+            EnableWindow(completion_driver_overload_delay_edit_, completion_driver_enabled_ ? TRUE : FALSE);
         }
         if (index == 5) {
             panel_has_content = true;
@@ -2431,6 +2545,18 @@ private:
             EnableWindow(filesystem_working_dir_label_, filesystem_enabled_ ? TRUE : FALSE);
             EnableWindow(filesystem_working_dir_edit_, filesystem_enabled_ ? TRUE : FALSE);
         }
+        if (index == 6) {
+            panel_has_content = true;
+            ShowWindow(sleep_enabled_check_, SW_SHOW);
+            ShowWindow(sleep_max_seconds_label_, SW_SHOW);
+            ShowWindow(sleep_max_seconds_edit_, SW_SHOW);
+            ShowWindow(sleep_note_label_, SW_SHOW);
+            CheckDlgButton(scroll_content_host_, kSleepEnabledCheck,
+                sleep_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+            SetWindowTextW(sleep_max_seconds_edit_, std::to_wstring(sleep_max_seconds_).c_str());
+            EnableWindow(sleep_max_seconds_label_, sleep_enabled_ ? TRUE : FALSE);
+            EnableWindow(sleep_max_seconds_edit_, sleep_enabled_ ? TRUE : FALSE);
+        }
         if (panel_has_content) {
             std::wstring title;
             switch (index) {
@@ -2440,6 +2566,7 @@ private:
             case 3: title = L"Questionnaire Settings"; break;
             case 4: title = L"Completion Driver Settings"; break;
             case 5: title = L"Filesystem Settings"; break;
+            case 6: title = L"Sleep / Pause Settings"; break;
             default: title = L"Tool Settings"; break;
             }
             SetWindowTextW(internal_tool_settings_panel_, title.c_str());
@@ -2923,18 +3050,18 @@ private:
         result.enable_web_debugging = (IsDlgButtonChecked(scroll_content_host_, kWebDebuggingCheck) == BST_CHECKED);
         result.serve_web_links_inline = (IsDlgButtonChecked(scroll_content_host_, kInlineWebLinksCheck) == BST_CHECKED);
         result.enable_automation = (IsDlgButtonChecked(scroll_content_host_, kAutomationCheck) == BST_CHECKED);
-        result.built_in_powershell_enabled = InternalToolListChecked(0, internal_powershell_enabled_);
+        result.built_in_powershell_enabled = internal_powershell_enabled_;
         result.built_in_powershell_working_directory = workdir_;
         if (result.built_in_powershell_working_directory.empty()) {
             result.built_in_powershell_working_directory = "$ProjectFolder$";
         }
         result.built_in_artifact_memory_enabled = internal_artifact_memory_enabled_;
-        result.built_in_planner_enabled = InternalToolListChecked(2, planner_enabled_);
+        result.built_in_planner_enabled = planner_enabled_;
         result.built_in_planner_storage_folder = planner_storage_folder_;
         if (result.built_in_planner_storage_folder.empty()) {
             result.built_in_planner_storage_folder = "$ProjectFolder$\\.agent";
         }
-        result.built_in_completion_driver_enabled = InternalToolListChecked(4, completion_driver_enabled_);
+        result.built_in_completion_driver_enabled = completion_driver_enabled_;
         for (size_t i = 0; i < completion_driver_mode_allowed_.size() && i < options_.agentic_modes.size(); ++i) {
             if (completion_driver_mode_allowed_[i]) {
                 result.completion_driver_allowed_mode_ids.push_back(options_.agentic_modes[i].id);
@@ -2948,12 +3075,23 @@ private:
                 result.completion_driver_max_continuations = 0;
             }
         }
-        result.built_in_filesystem_enabled = InternalToolListChecked(5, filesystem_enabled_);
+        result.completion_driver_overload_delay_seconds = kDefaultCompletionDriverOverloadDelaySeconds;
+        const std::wstring overload_delay_text =
+            TrimWide(GetWindowTextString(completion_driver_overload_delay_edit_));
+        if (!overload_delay_text.empty()) {
+            result.completion_driver_overload_delay_seconds = std::stoi(overload_delay_text);
+            if (result.completion_driver_overload_delay_seconds < 0) {
+                result.completion_driver_overload_delay_seconds = 0;
+            }
+        }
+        result.built_in_filesystem_enabled = filesystem_enabled_;
         result.built_in_filesystem_auto_archive = filesystem_auto_archive_;
         result.built_in_filesystem_working_directory = filesystem_working_directory_;
         if (result.built_in_filesystem_working_directory.empty()) {
             result.built_in_filesystem_working_directory = "$ProjectFolder$";
         }
+        result.built_in_sleep_enabled = sleep_enabled_;
+        result.built_in_sleep_max_seconds = std::max(0, sleep_max_seconds_);
         const std::wstring max_opts_text = TrimWide(GetWindowTextString(questionnaire_max_options_edit_));
         result.built_in_questionnaire_enabled = questionnaire_enabled_;
         if (!max_opts_text.empty()) {
@@ -3226,6 +3364,7 @@ private:
         preview_settings.built_in_completion_driver_enabled = settings.built_in_completion_driver_enabled;
         preview_settings.completion_driver_allowed_mode_ids = settings.completion_driver_allowed_mode_ids;
         preview_settings.completion_driver_max_continuations = settings.completion_driver_max_continuations;
+        preview_settings.completion_driver_overload_delay_seconds = settings.completion_driver_overload_delay_seconds;
 
         if (settings.built_in_powershell_enabled) {
             if (!context.empty()) context += "\n\n";
@@ -3243,6 +3382,10 @@ private:
         if (settings.built_in_questionnaire_enabled) {
             if (!context.empty()) context += "\n\n";
             context += built_in_tools::QuestionnaireSystemPrompt();
+        }
+        if (settings.built_in_sleep_enabled) {
+            if (!context.empty()) context += "\n\n";
+            context += built_in_tools::SleepSystemPrompt(settings.built_in_sleep_max_seconds);
         }
         if (settings.built_in_filesystem_enabled) {
             if (!context.empty()) context += "\n\n";
@@ -3545,6 +3688,8 @@ private:
     HWND completion_driver_modes_list_ = nullptr;
     HWND completion_driver_max_continuations_label_ = nullptr;
     HWND completion_driver_max_continuations_edit_ = nullptr;
+    HWND completion_driver_overload_delay_label_ = nullptr;
+    HWND completion_driver_overload_delay_edit_ = nullptr;
     HWND completion_driver_note_label_ = nullptr;
     WNDPROC completion_driver_modes_list_prev_proc_ = nullptr;
     HWND questionnaire_enabled_check_ = nullptr;
@@ -3558,12 +3703,18 @@ private:
     HWND filesystem_working_dir_label_ = nullptr;
     HWND filesystem_working_dir_edit_ = nullptr;
     HWND filesystem_note_label_ = nullptr;
+    HWND sleep_enabled_check_ = nullptr;
+    HWND sleep_max_seconds_label_ = nullptr;
+    HWND sleep_max_seconds_edit_ = nullptr;
+    HWND sleep_note_label_ = nullptr;
     bool internal_powershell_enabled_ = false;
     bool internal_artifact_memory_enabled_ = false;
     bool planner_enabled_ = false;
     bool completion_driver_enabled_ = false;
     bool filesystem_enabled_ = false;
     bool filesystem_auto_archive_ = false;
+    bool sleep_enabled_ = false;
+    int sleep_max_seconds_ = 0;
     bool toggling_internal_tool_ = false;
     std::vector<bool> agentic_mode_enabled_;
     std::vector<bool> completion_driver_mode_allowed_;
