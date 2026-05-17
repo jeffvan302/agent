@@ -414,7 +414,26 @@ inline std::vector<ChatToolDefinition> BuildDefinitions(
     "start_offset": {"type": "integer", "description": "Optional byte start offset for read."},
     "length": {"type": "integer", "description": "Optional byte length for read."},
     "create_backup": {"type": "boolean", "description": "If true, backup the original file or directory before write or edit."},
-    "edits": {"type": "array", "description": "For edit action: list of {old_lines:[...], new_lines:[...]} objects. Each array entry may be a single line or multiline block. old_lines must match contiguous lines after newline normalization."}
+    "edits": {
+      "type": "array",
+      "description": "For edit action: list of {old_lines:[...], new_lines:[...]} objects. Each array entry may be a single line or multiline block. old_lines must match contiguous lines after newline normalization.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "old_lines": {
+            "type": "array",
+            "description": "Contiguous lines to match and replace.",
+            "items": {"type": "string"}
+          },
+          "new_lines": {
+            "type": "array",
+            "description": "Replacement lines. Use an empty array to delete the old_lines block.",
+            "items": {"type": "string"}
+          }
+        },
+        "required": ["old_lines", "new_lines"]
+      }
+    }
   },
   "required": ["action", "path"]
 })";

@@ -212,6 +212,7 @@ private:
     void HandleGetMessages    (const void* req, void* res);
     void HandleSendMessage    (const void* req, void* res);
     void HandleStreamMessage  (const void* req, void* res);  // SSE streaming
+    void HandleGetStreamStatus(const void* req, void* res);
     void HandleCancelStream   (const void* req, void* res);
     void HandleStartAutomation(const void* req, void* res);
     void HandleGetAutomationStatus(const void* req, void* res);
@@ -322,6 +323,45 @@ private:
         std::string updated_at;
     };
 
+    struct ActiveChatRun {
+        std::string id;
+        std::string project_id;
+        std::string chat_id;
+        std::shared_ptr<ActiveStreamCancellation> cancel_token;
+
+        mutable std::mutex mtx;
+        std::string status = "running"; // running | cancelling | completed | failed | cancelled
+        std::string message;
+        std::string error;
+        std::string activity_status;
+        std::string activity_message;
+        std::string queue_state;
+        std::string queue_provider;
+        std::string live_response;
+        std::string live_mode_name;
+        std::string live_started_at;
+        std::string current_tool_name;
+        std::string current_tool_status;
+        std::string current_tool_at;
+        std::vector<AutomationToolTraceItem> live_tool_trace;
+        std::vector<AutomationLiveTraceSegment> live_trace;
+        std::string heartbeat_at;
+        std::string heartbeat_message;
+        int queue_position = 0;
+        int queue_depth = 0;
+        int queue_active = 0;
+        int queue_max_active = 0;
+        bool cancel_requested = false;
+        unsigned long long revision = 0;
+        unsigned long long messages_revision = 0;
+        unsigned long long live_response_revision = 0;
+        unsigned long long planner_revision = 0;
+        unsigned long long heartbeat_revision = 0;
+        std::string started_at;
+        std::string updated_at;
+        std::string finished_at;
+    };
+
     // Server-owned automation jobs let the browser leave, reload, or switch
     // chats while a sequence keeps running. The worker calls StreamModel, so
     // each step inherits the normal tool loop, completion-driver continuation,
@@ -378,6 +418,7 @@ private:
     };
 
     void RunAutomationJob(std::shared_ptr<AutomationJob> job);
+    std::string SerializeActiveChatRun(const std::shared_ptr<ActiveChatRun>& run) const;
     std::string SerializeAutomationJob(const std::shared_ptr<AutomationJob>& job) const;
     bool SetChatAgenticModeForAutomation(const std::string& project_id,
                                          const std::string& chat_id,
@@ -462,6 +503,7 @@ private:
 
     mutable std::mutex                active_streams_mutex_;
     std::unordered_map<std::string, std::shared_ptr<ActiveStreamCancellation>> active_streams_;
+    std::unordered_map<std::string, std::shared_ptr<ActiveChatRun>> active_chat_runs_;
 
     mutable std::mutex                automation_jobs_mutex_;
     std::unordered_map<std::string, std::shared_ptr<AutomationJob>> automation_jobs_;

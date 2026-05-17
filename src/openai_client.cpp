@@ -38,6 +38,10 @@ bool IsOllamaLocalProvider(const ProviderConfig& provider) {
     return NormalizeProviderType(provider.provider_type) == "ollama_local";
 }
 
+bool IsOpenAICodexOAuthProvider(const ProviderConfig& provider) {
+    return NormalizeProviderType(provider.provider_type) == "openai_codex_oauth";
+}
+
 std::string LowerAscii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
         [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -1229,6 +1233,413 @@ std::vector<ChatToolCall> ExtractToolCalls(const json& message) {
     return tool_calls;
 }
 
+std::optional<ProviderAuthRecord> LoadCodexOAuthAuthRecord(const ProviderConfig& provider) {
+    if (!s_storage) {
+        return std::nullopt;
+    }
+    if (!provider.oauth_credential_id.empty()) {
+        if (auto record = s_storage->LoadProviderAuthRecord(provider.oauth_credential_id)) {
+            return record;
+        }
+    }
+    if (!provider.id.empty()) {
+        return s_storage->LoadProviderAuthRecordForProvider(provider.id);
+    }
+    return std::nullopt;
+}
+
+std::string CodexOAuthBearerToken(const ProviderConfig& provider, std::string* error) {
+    const auto record = LoadCodexOAuthAuthRecord(provider);
+    if (!record) {
+        if (error) {
+            *error = "OpenAI OAuth provider is not signed in. Use Sign In for this provider, then try again.";
+        }
+        return {};
+    }
+    if (!record->access_token.empty()) {
+        return record->access_token;
+    }
+    if (!record->api_key.empty()) {
+        return record->api_key;
+    }
+    if (error) {
+        *error = "OpenAI OAuth provider auth record does not contain an access token. Sign in again.";
+    }
+    return {};
+}
+
+json BuildCodexResponsesInputItemForMessage(const MessageRecord& message) {
+    const std::string role = message.role == "assistant" ? "assistant" : "user";
+    const std::string content = message.role == "assistant"
+        ? message_sanitizer::StripRawProviderToolCallBlocks(message.content)
+        : message.content;
+    return json{
+        {"role", role},
+        {"content", content},
+    };
+}
+
+void AppendCodexResponsesHistoryItem(const MessageRecord& message, json& input) {
+    if (message.role == "tool") {
+        if (message.tool_call_id.empty()) {
+            return;
+        }
+        input.push_back({
+            {"type", "function_call_output"},
+            {"call_id", message.tool_call_id},
+            {"output", message.content},
+        });
+        return;
+    }
+
+    if (message.role == "system") {
+        if (!message.content.empty()) {
+            input.push_back({
+                {"role", "user"},
+                {"content", "System instruction: " + message.content},
+            });
+        }
+        return;
+    }
+
+    const std::string content = message.role == "assistant"
+        ? message_sanitizer::StripRawProviderToolCallBlocks(message.content)
+        : message.content;
+    if (!content.empty() || message.role != "assistant") {
+        input.push_back(BuildCodexResponsesInputItemForMessage(message));
+    }
+
+    if (message.role != "assistant" || message.tool_calls_json.empty()) {
+        return;
+    }
+
+    try {
+        const auto tool_calls = NormalizeToolCallsForProvider(json::parse(message.tool_calls_json));
+        if (!tool_calls.is_array()) {
+            return;
+        }
+        for (const auto& item : tool_calls) {
+            if (!item.is_object() || !item.contains("function") || !item["function"].is_object()) {
+                continue;
+            }
+            const auto& function = item["function"];
+            const std::string name = function.value("name", "");
+            if (name.empty()) {
+                continue;
+            }
+            input.push_back({
+                {"type", "function_call"},
+                {"id", item.value("id", "")},
+                {"call_id", item.value("id", "")},
+                {"name", name},
+                {"arguments", function.value("arguments", "{}")},
+                {"status", "completed"},
+            });
+        }
+    } catch (...) {
+    }
+}
+
+json BuildCodexResponsesBody(const ChatRequestOptions& request,
+                             const std::vector<ChatToolDefinition>& tools) {
+    json body;
+    body["model"] = request.model.id;
+    body["instructions"] = request.system_prompt.empty()
+        ? "You are a helpful assistant."
+        : request.system_prompt;
+    body["stream"] = true;
+    body["store"] = request.provider.oauth_store_remote_history;
+    body["input"] = json::array();
+
+    for (const auto& message : request.messages) {
+        AppendCodexResponsesHistoryItem(message, body["input"]);
+    }
+    if (body["input"].empty()) {
+        body["input"].push_back({
+            {"role", "user"},
+            {"content", "Reply with a short acknowledgement."},
+        });
+    }
+
+    const std::string reasoning = LowerAscii(Trim(request.model.default_reasoning_effort));
+    if (!reasoning.empty()) {
+        body["reasoning"] = json{{"effort", reasoning}};
+        if (reasoning != "none") {
+            body["reasoning"]["summary"] = "auto";
+        }
+    }
+    const std::string verbosity = LowerAscii(Trim(request.model.default_text_verbosity));
+    if (!verbosity.empty()) {
+        body["text"] = json{{"verbosity", verbosity}};
+    }
+
+    if (!tools.empty()) {
+        body["tools"] = json::array();
+        body["tool_choice"] = "auto";
+        body["parallel_tool_calls"] = true;
+        for (const auto& tool : tools) {
+            json parameters = json{
+                {"type", "object"},
+                {"properties", json::object()},
+            };
+            if (!tool.parameters_json.empty()) {
+                try {
+                    parameters = json::parse(tool.parameters_json);
+                } catch (...) {
+                }
+            }
+
+            body["tools"].push_back({
+                {"type", "function"},
+                {"name", tool.name},
+                {"description", tool.description},
+                {"parameters", parameters},
+            });
+        }
+    }
+
+    return body;
+}
+
+struct CodexResponsesStreamState {
+    ChatCompletionResult result;
+    std::unordered_map<std::string, ChatToolCall> tool_calls_by_item;
+    std::vector<std::string> tool_call_order;
+    bool thinking_emitted = false;
+    bool thinking_closed = false;
+    std::string last_activity_status;
+};
+
+void EmitCodexActivity(CodexResponsesStreamState& state,
+                       const std::function<void(const std::string&, const std::string&)>& on_activity_status,
+                       const std::string& status,
+                       const std::string& message) {
+    if (!on_activity_status || status.empty() || status == state.last_activity_status) {
+        return;
+    }
+    state.last_activity_status = status;
+    on_activity_status(status, message);
+}
+
+void AppendCodexReasoningDelta(CodexResponsesStreamState& state,
+                               const std::string& delta,
+                               const std::function<void(const std::string&)>& on_delta) {
+    if (delta.empty()) {
+        return;
+    }
+    state.result.thinking_text += delta;
+    if (!state.thinking_emitted) {
+        const std::string tag = "<think>" + delta;
+        state.thinking_emitted = true;
+        state.result.assistant_text += tag;
+        if (on_delta) {
+            on_delta(tag);
+        }
+        return;
+    }
+    state.result.assistant_text += delta;
+    if (on_delta) {
+        on_delta(delta);
+    }
+}
+
+void AppendCodexTextDelta(CodexResponsesStreamState& state,
+                          const std::string& delta,
+                          const std::function<void(const std::string&)>& on_delta) {
+    if (delta.empty()) {
+        return;
+    }
+    std::string outbound = delta;
+    if (state.thinking_emitted && !state.thinking_closed) {
+        outbound = "</think>\n\n" + delta;
+        state.thinking_closed = true;
+    }
+    state.result.assistant_text += outbound;
+    if (on_delta) {
+        on_delta(outbound);
+    }
+}
+
+void MergeCodexFunctionCallItem(CodexResponsesStreamState& state, const json& item) {
+    if (!item.is_object() || item.value("type", "") != "function_call") {
+        return;
+    }
+
+    const std::string item_id = item.value("id", item.value("call_id", ""));
+    if (item_id.empty()) {
+        return;
+    }
+
+    ChatToolCall& tool_call = state.tool_calls_by_item[item_id];
+    if (std::find(state.tool_call_order.begin(), state.tool_call_order.end(), item_id) == state.tool_call_order.end()) {
+        state.tool_call_order.push_back(item_id);
+    }
+
+    const std::string call_id = item.value("call_id", "");
+    if (!call_id.empty()) {
+        tool_call.id = call_id;
+    } else if (tool_call.id.empty()) {
+        tool_call.id = item_id;
+    }
+    const std::string name = item.value("name", "");
+    if (!name.empty()) {
+        tool_call.name = name;
+    }
+    if (item.contains("arguments")) {
+        if (item["arguments"].is_string()) {
+            tool_call.arguments_json = item["arguments"].get<std::string>();
+        } else {
+            tool_call.arguments_json = item["arguments"].dump();
+        }
+    }
+}
+
+void AppendCodexReasoningSummaryFromItem(CodexResponsesStreamState& state,
+                                         const json& item,
+                                         const std::function<void(const std::string&)>& on_delta) {
+    if (!item.is_object() || item.value("type", "") != "reasoning" ||
+        !state.result.thinking_text.empty()) {
+        return;
+    }
+    std::string summary;
+    if (item.contains("summary")) {
+        summary = ExtractTextLikeString(item["summary"]);
+    }
+    if (summary.empty() && item.contains("content")) {
+        summary = ExtractTextLikeString(item["content"]);
+    }
+    AppendCodexReasoningDelta(state, summary, on_delta);
+}
+
+void AppendCodexFunctionCallArgumentsDelta(CodexResponsesStreamState& state, const json& chunk) {
+    const std::string item_id = chunk.value("item_id", "");
+    if (item_id.empty()) {
+        return;
+    }
+    ChatToolCall& tool_call = state.tool_calls_by_item[item_id];
+    if (std::find(state.tool_call_order.begin(), state.tool_call_order.end(), item_id) == state.tool_call_order.end()) {
+        state.tool_call_order.push_back(item_id);
+    }
+    if (tool_call.id.empty()) {
+        tool_call.id = item_id;
+    }
+    tool_call.arguments_json += chunk.value("delta", "");
+}
+
+void FinalizeCodexResponsesResult(CodexResponsesStreamState& state) {
+    if (state.thinking_emitted && !state.thinking_closed) {
+        state.result.assistant_text += "</think>\n\n";
+        state.thinking_closed = true;
+    }
+
+    state.result.tool_calls.clear();
+    for (const auto& item_id : state.tool_call_order) {
+        auto it = state.tool_calls_by_item.find(item_id);
+        if (it == state.tool_calls_by_item.end() || it->second.name.empty()) {
+            continue;
+        }
+        ChatToolCall tool_call = it->second;
+        NormalizeToolCall(tool_call);
+        state.result.tool_calls.push_back(std::move(tool_call));
+    }
+
+    json raw_message{
+        {"role", "assistant"},
+    };
+    if (!state.result.assistant_text.empty()) {
+        raw_message["content"] = state.result.assistant_text;
+    }
+    if (!state.result.thinking_text.empty()) {
+        raw_message["thinking"] = state.result.thinking_text;
+    }
+    if (!state.result.tool_calls.empty()) {
+        raw_message["tool_calls"] = SerializeToolCallsForProvider(state.result.tool_calls);
+    }
+    state.result.raw_message_json = raw_message.dump(2);
+    state.result.message.role = "assistant";
+    state.result.message.content = state.result.assistant_text;
+}
+
+std::string ExtractErrorMessage(const std::string& body);
+
+void ProcessCodexResponsesSsePayload(CodexResponsesStreamState& state,
+                                     const std::string& payload_text,
+                                     const std::function<void(const std::string&)>& on_delta,
+                                     const std::function<void(const std::string&, const std::string&)>& on_activity_status) {
+    const auto payload = json::parse(payload_text);
+    const std::string type = payload.value("type", "");
+
+    if (type == "response.created" || type == "response.in_progress") {
+        EmitCodexActivity(state, on_activity_status,
+            "chatgpt_codex_working",
+            "ChatGPT Codex accepted the request and is working...");
+        return;
+    }
+    if (type == "response.output_text.delta") {
+        EmitCodexActivity(state, on_activity_status,
+            "receiving_response",
+            "Receiving model response...");
+        AppendCodexTextDelta(state, payload.value("delta", ""), on_delta);
+        return;
+    }
+    if (type == "response.reasoning_summary_text.delta" ||
+        type == "response.reasoning_text.delta") {
+        EmitCodexActivity(state, on_activity_status,
+            "chatgpt_codex_reasoning",
+            "Receiving ChatGPT Codex reasoning summary...");
+        AppendCodexReasoningDelta(state, payload.value("delta", ""), on_delta);
+        return;
+    }
+    if (type == "response.function_call_arguments.delta") {
+        EmitCodexActivity(state, on_activity_status,
+            "preparing_tool_call",
+            "ChatGPT Codex is preparing a tool call...");
+        AppendCodexFunctionCallArgumentsDelta(state, payload);
+        return;
+    }
+    if ((type == "response.output_item.done" || type == "response.output_item.added") &&
+        payload.contains("item")) {
+        const auto& item = payload["item"];
+        const std::string item_type = item.is_object() ? item.value("type", "") : "";
+        if (item_type == "reasoning") {
+            EmitCodexActivity(state, on_activity_status,
+                "chatgpt_codex_reasoning",
+                "ChatGPT Codex is reasoning...");
+            if (type == "response.output_item.done") {
+                AppendCodexReasoningSummaryFromItem(state, item, on_delta);
+            }
+            return;
+        }
+        if (item_type == "function_call") {
+            EmitCodexActivity(state, on_activity_status,
+                "preparing_tool_call",
+                "ChatGPT Codex is preparing a tool call...");
+        }
+        MergeCodexFunctionCallItem(state, item);
+        return;
+    }
+    if (type == "response.completed") {
+        EmitCodexActivity(state, on_activity_status,
+            "response_complete",
+            "Response complete.");
+        state.result.success = true;
+        state.result.finish_reason = "stop";
+        return;
+    }
+    if (type == "response.failed" || type == "error") {
+        state.result.error = ExtractErrorMessage(payload_text);
+        if (state.result.error.empty() && payload.contains("response") && payload["response"].is_object()) {
+            const auto& response = payload["response"];
+            if (response.contains("error")) {
+                state.result.error = ExtractTextLikeString(response["error"]);
+            }
+        }
+        if (state.result.error.empty()) {
+            state.result.error = "OpenAI OAuth Responses request failed.";
+        }
+    }
+}
+
 std::string ExtractErrorMessage(const std::string& body) {
     try {
         const auto payload = json::parse(body);
@@ -1240,6 +1651,18 @@ std::string ExtractErrorMessage(const std::string& body) {
             if (error.is_object()) {
                 return error.value("message", body);
             }
+        }
+        if (payload.contains("detail")) {
+            const auto& detail = payload["detail"];
+            if (detail.is_string()) {
+                return detail.get<std::string>();
+            }
+            if (detail.is_object() || detail.is_array()) {
+                return detail.dump();
+            }
+        }
+        if (payload.contains("message") && payload["message"].is_string()) {
+            return payload["message"].get<std::string>();
         }
     } catch (...) {
     }
@@ -1300,6 +1723,224 @@ DWORD QueryStatusCode(HINTERNET request) {
     DWORD size = sizeof(status_code);
     WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status_code, &size, WINHTTP_NO_HEADER_INDEX);
     return status_code;
+}
+
+ChatCompletionResult RunOpenAICodexOAuthCompletion(
+    const ChatRequestOptions& request,
+    const std::vector<ChatToolDefinition>& tools,
+    const std::function<void(const std::string&)>& on_delta,
+    const std::function<void(const std::string&, const std::string&)>& on_activity_status,
+    const std::function<bool()>& should_cancel = {}) {
+    ChatCompletionResult final_result;
+
+    std::string token_error;
+    const std::string bearer_token = CodexOAuthBearerToken(request.provider, &token_error);
+    if (bearer_token.empty()) {
+        final_result.error = token_error.empty()
+            ? "OpenAI OAuth provider is not signed in."
+            : token_error;
+        return final_result;
+    }
+
+    constexpr const char* kCodexResponsesUrl = "https://chatgpt.com/backend-api/codex/responses";
+    const ParsedUrl parsed = CrackUrl(kCodexResponsesUrl);
+    const std::string body = DumpJsonForProviderRequest(
+        BuildCodexResponsesBody(request, tools), "OpenAI OAuth Responses request body");
+    if (on_activity_status) {
+        on_activity_status("chatgpt_codex_requesting", "Sending request to ChatGPT Codex...");
+    }
+    constexpr int kMaxAttempts = 4;
+    std::string last_error;
+
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+        if (IsCancelRequested(should_cancel)) {
+            final_result.error = "Cancelled.";
+            return final_result;
+        }
+
+        UniqueInternetHandle session(WinHttpOpen(L"AgentDesktop/0.2", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+        if (!session) {
+            last_error = FormatWinHttpError("Failed to open WinHTTP session.", GetLastError());
+            if (attempt < kMaxAttempts) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
+                continue;
+            }
+            final_result.error = last_error;
+            return final_result;
+        }
+
+        UniqueInternetHandle connection(WinHttpConnect(static_cast<HINTERNET>(session.get()), parsed.host.c_str(), parsed.port, 0));
+        if (!connection) {
+            last_error = FormatWinHttpError("Failed to connect to ChatGPT Codex backend.", GetLastError());
+            if (attempt < kMaxAttempts) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
+                continue;
+            }
+            final_result.error = last_error;
+            return final_result;
+        }
+
+        const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
+        UniqueInternetHandle request_handle(WinHttpOpenRequest(static_cast<HINTERNET>(connection.get()), L"POST", parsed.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
+        if (!request_handle) {
+            final_result.error = FormatWinHttpError("Failed to create ChatGPT Codex backend request.", GetLastError());
+            return final_result;
+        }
+        CancellableRequestWatch cancel_watch(request_handle, should_cancel);
+
+        const DWORD timeout_ms = request.model_timeout_seconds > 0
+            ? static_cast<DWORD>(request.model_timeout_seconds * 1000)
+            : 0;
+        WinHttpSetTimeouts(static_cast<HINTERNET>(request_handle.get()), 0, 0, timeout_ms, timeout_ms);
+
+        std::wstring headers =
+            L"Content-Type: application/json\r\n"
+            L"Accept: text/event-stream\r\n"
+            L"Authorization: Bearer ";
+        headers += Utf8ToWide(bearer_token);
+        headers += L"\r\n";
+
+        if (!WinHttpSendRequest(static_cast<HINTERNET>(request_handle.get()),
+                headers.c_str(),
+                static_cast<DWORD>(headers.size()),
+                reinterpret_cast<LPVOID>(const_cast<char*>(body.data())),
+                static_cast<DWORD>(body.size()),
+                static_cast<DWORD>(body.size()),
+                0)) {
+            if (IsCancelRequested(should_cancel)) {
+                final_result.error = "Cancelled.";
+                return final_result;
+            }
+            last_error = FormatWinHttpError("Failed to send ChatGPT Codex backend request.", GetLastError());
+            if (attempt < kMaxAttempts) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
+                continue;
+            }
+            final_result.error = last_error;
+            return final_result;
+        }
+
+        if (!WinHttpReceiveResponse(static_cast<HINTERNET>(request_handle.get()), nullptr)) {
+            if (IsCancelRequested(should_cancel)) {
+                final_result.error = "Cancelled.";
+                return final_result;
+            }
+            last_error = FormatWinHttpError("Failed to receive ChatGPT Codex backend response.", GetLastError());
+            if (attempt < kMaxAttempts) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
+                continue;
+            }
+            final_result.error = last_error;
+            return final_result;
+        }
+
+        const DWORD status_code = QueryStatusCode(static_cast<HINTERNET>(request_handle.get()));
+        if (status_code < 200 || status_code >= 300) {
+            const std::string error_body = ReadEntireResponse(static_cast<HINTERNET>(request_handle.get()), should_cancel);
+            if (IsCancelRequested(should_cancel)) {
+                final_result.error = "Cancelled.";
+                return final_result;
+            }
+            const std::string details = ExtractErrorMessage(error_body);
+            last_error = FormatHttpErrorMessage(status_code, details, attempt);
+            if (IsRetryableStatusCode(status_code) && attempt < kMaxAttempts) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, QueryRetryAfterSeconds(static_cast<HINTERNET>(request_handle.get())))));
+                continue;
+            }
+            final_result.error = last_error;
+            return final_result;
+        }
+
+        CodexResponsesStreamState state;
+        std::string response_buffer;
+        while (true) {
+            if (IsCancelRequested(should_cancel)) {
+                final_result.error = "Cancelled.";
+                return final_result;
+            }
+
+            DWORD available = 0;
+            if (!WinHttpQueryDataAvailable(static_cast<HINTERNET>(request_handle.get()), &available)) {
+                if (IsCancelRequested(should_cancel)) {
+                    final_result.error = "Cancelled.";
+                    return final_result;
+                }
+                last_error = FormatWinHttpError("Failed while streaming ChatGPT Codex backend response.", GetLastError());
+                if (attempt < kMaxAttempts) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
+                    break;
+                }
+                final_result.error = last_error;
+                return final_result;
+            }
+            if (available == 0) {
+                break;
+            }
+
+            std::vector<char> bytes(static_cast<size_t>(available));
+            DWORD read = 0;
+            if (!WinHttpReadData(static_cast<HINTERNET>(request_handle.get()), bytes.data(), available, &read)) {
+                if (IsCancelRequested(should_cancel)) {
+                    final_result.error = "Cancelled.";
+                    return final_result;
+                }
+                last_error = FormatWinHttpError("Failed to read ChatGPT Codex backend response chunk.", GetLastError());
+                if (attempt < kMaxAttempts) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(ComputeRetryDelayMs(attempt - 1, std::nullopt)));
+                    break;
+                }
+                final_result.error = last_error;
+                return final_result;
+            }
+
+            response_buffer.append(bytes.data(), bytes.data() + read);
+            size_t line_end = std::string::npos;
+            while ((line_end = response_buffer.find('\n')) != std::string::npos) {
+                std::string line = response_buffer.substr(0, line_end);
+                response_buffer.erase(0, line_end + 1);
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+                if (line.empty() || line.rfind("data:", 0) != 0) {
+                    continue;
+                }
+
+                const std::string payload = Trim(line.substr(5));
+                if (payload.empty() || payload == "[DONE]") {
+                    continue;
+                }
+                try {
+                    ProcessCodexResponsesSsePayload(state, payload, on_delta, on_activity_status);
+                } catch (const std::exception& ex) {
+                    final_result.error = std::string("Failed to parse ChatGPT Codex response stream: ") + ex.what();
+                    return final_result;
+                } catch (...) {
+                    final_result.error = "Failed to parse ChatGPT Codex response stream.";
+                    return final_result;
+                }
+
+                if (!state.result.error.empty()) {
+                    final_result = state.result;
+                    return final_result;
+                }
+            }
+        }
+
+        if (!last_error.empty() && !state.result.success && attempt < kMaxAttempts) {
+            continue;
+        }
+        FinalizeCodexResponsesResult(state);
+        if (!state.result.success && state.result.error.empty()) {
+            state.result.success = !state.result.assistant_text.empty() || !state.result.tool_calls.empty();
+        }
+        if (!state.result.success && state.result.error.empty()) {
+            state.result.error = "ChatGPT Codex backend ended the response without a completion event.";
+        }
+        return state.result;
+    }
+
+    final_result.error = last_error.empty() ? "The ChatGPT Codex backend request failed after multiple attempts." : last_error;
+    return final_result;
 }
 
 ChatExecutionResult RunRequest(const ChatRequestOptions& request, bool stream, const std::function<void(const std::string&)>& on_delta, const std::function<bool()>& should_cancel = {}) {
@@ -1791,17 +2432,24 @@ TestConnectionResult OpenAIClient::TestConnection(const ProviderConfig& provider
             return result;
         }
 
-        detail += "  standard OpenAI-compatible non-embedding path\r\n";
         ChatRequestOptions request;
         request.provider = provider;
         request.model = model;
         request.temperature = 0.0;
         request.max_tokens = 8;
         request.messages.push_back(MessageRecord{"user", "Reply with the single word pong.", CurrentTimestampUtc()});
-        detail += "  sending ping\r\n";
-        const ChatExecutionResult response = RunRequest(request, false, [](const std::string&) {}, {});
-        result.success = response.success;
-        result.message = response.success ? response.full_text : response.error;
+        if (IsOpenAICodexOAuthProvider(provider)) {
+            detail += "  openai_codex_oauth path, sending ping to ChatGPT Codex backend\r\n";
+            const ChatCompletionResult response = RunOpenAICodexOAuthCompletion(request, {}, [](const std::string&) {}, {}, {});
+            result.success = response.success;
+            result.message = response.success ? response.assistant_text : response.error;
+        } else {
+            detail += "  standard OpenAI-compatible non-embedding path\r\n";
+            detail += "  sending ping\r\n";
+            const ChatExecutionResult response = RunRequest(request, false, [](const std::string&) {}, {});
+            result.success = response.success;
+            result.message = response.success ? response.full_text : response.error;
+        }
         detail += "  ping result success=" + std::to_string(result.success) + " message=" + result.message + "\r\n";
     } catch (const std::exception& ex) {
         result.success = false;
@@ -1819,7 +2467,7 @@ TestConnectionResult OpenAIClient::TestConnection(const ProviderConfig& provider
 ChatExecutionResult OpenAIClient::StreamChat(const ChatRequestOptions& request,
                                            const std::function<void(const std::string&)>& on_delta,
                                            const std::function<void(const ProviderQueueStatus&)>& on_queue_status,
-                                           const std::function<void(const std::string&, const std::string&)>& /*on_activity_status*/,
+                                           const std::function<void(const std::string&, const std::string&)>& on_activity_status,
                                            const std::function<bool()>& should_cancel) {
     // Binding bypass: resolve to concrete target and acquire its gate directly
     if (request.model.is_binding_model && request.binding_depth < 8) {
@@ -1830,7 +2478,7 @@ ChatExecutionResult OpenAIClient::StreamChat(const ChatRequestOptions& request,
             for (const auto& kv : s_gate_provider_cache) all_providers.push_back(kv.second);
         }
         if (ResolveBindingTarget(all_providers, request.model, request, &resolved, on_queue_status)) {
-            return StreamChat(resolved, on_delta, on_queue_status, {}, should_cancel);
+            return StreamChat(resolved, on_delta, on_queue_status, on_activity_status, should_cancel);
         }
         ChatExecutionResult fail;
         fail.error = "Binding resolution failed: no target available for " + request.model.id;
@@ -1851,10 +2499,20 @@ ChatExecutionResult OpenAIClient::StreamChat(const ChatRequestOptions& request,
             return result;
         }
         if (IsOllamaLocalProvider(request.provider)) {
-            return RunOllamaLocalHttpChat(request, on_delta, on_queue_status, {}, should_cancel);
+            return RunOllamaLocalHttpChat(request, on_delta, on_queue_status, on_activity_status, should_cancel);
         }
         if (IsOllamaCloudProvider(request.provider)) {
-            return RunOllamaCloudHttpChat(request, on_delta, on_queue_status, {}, should_cancel);
+            return RunOllamaCloudHttpChat(request, on_delta, on_queue_status, on_activity_status, should_cancel);
+        }
+        if (IsOpenAICodexOAuthProvider(request.provider)) {
+            const ChatCompletionResult completion =
+                RunOpenAICodexOAuthCompletion(request, {}, on_delta, on_activity_status, should_cancel);
+            ChatExecutionResult result;
+            result.success = completion.success;
+            result.full_text = completion.assistant_text;
+            result.error = completion.error;
+            result.thinking_text = completion.thinking_text;
+            return result;
         }
         return RunRequest(request, true, on_delta, should_cancel);
     } catch (const std::exception& ex) {
@@ -1901,6 +2559,9 @@ ChatCompletionResult OpenAIClient::CreateToolAwareCompletion(const ChatRequestOp
     }
     if (IsOllamaCloudProvider(request.provider)) {
         return RunOllamaCloudHttpToolPrompt(request, tools, {}, on_queue_status, on_activity_status, should_cancel);
+    }
+    if (IsOpenAICodexOAuthProvider(request.provider)) {
+        return RunOpenAICodexOAuthCompletion(request, tools, {}, on_activity_status, should_cancel);
     }
 
     ChatCompletionResult result;
@@ -2083,6 +2744,9 @@ ChatCompletionResult OpenAIClient::CreateSimpleCompletion(const ChatRequestOptio
     }
     if (IsOllamaCloudProvider(request.provider)) {
         return RunOllamaCloudHttpCompletion(request, on_queue_status, on_activity_status, should_cancel);
+    }
+    if (IsOpenAICodexOAuthProvider(request.provider)) {
+        return RunOpenAICodexOAuthCompletion(request, {}, {}, on_activity_status, should_cancel);
     }
 
     ChatCompletionResult result;
@@ -2281,6 +2945,9 @@ ChatCompletionResult OpenAIClient::StreamToolAwareCompletion(const ChatRequestOp
     }
     if (IsOllamaCloudProvider(request.provider)) {
         return RunOllamaCloudHttpToolPrompt(request, tools, on_delta, on_queue_status, on_activity_status, should_cancel);
+    }
+    if (IsOpenAICodexOAuthProvider(request.provider)) {
+        return RunOpenAICodexOAuthCompletion(request, tools, on_delta, on_activity_status, should_cancel);
     }
 
     ChatCompletionResult result;

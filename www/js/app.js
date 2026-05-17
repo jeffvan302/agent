@@ -67,6 +67,8 @@ let state = {
   automationJobs: {},
   automationQuestionnaireSelections: {},
   automationStatusTimer: null,
+  streamRuns: {},
+  streamRunStatusTimer: null,
   selectedAutomationStepIndex: -1,
   webDebuggingActive: false,
   plannerEnabled: false,
@@ -817,6 +819,9 @@ function renderMessages(messages, options = {}) {
   }
   if (typeof renderAutomationLiveResponse === 'function') {
     renderAutomationLiveResponse();
+  }
+  if (typeof renderStreamRunLiveResponse === 'function') {
+    renderStreamRunLiveResponse();
   }
   if (shouldFollow) {
     scrollMessagesToBottom(true);
@@ -2777,6 +2782,9 @@ async function selectChat(projectId, chatId, chatName) {
   if (typeof refreshAutomationStatusForChat === 'function') {
     refreshAutomationStatusForChat(chatId, { reloadMessages: false });
   }
+  if (typeof refreshStreamStatusForChat === 'function') {
+    refreshStreamStatusForChat(chatId, { reloadMessages: false });
+  }
   refreshSelectedChatSendingState();
   if (isMobileLayout()) setMobileSidebarOpen(false);
 }
@@ -2828,10 +2836,26 @@ function activeControllerForChat(chatId) {
   return state.activeAbortControllers[chatId] || null;
 }
 
+function streamRunIsActive(run) {
+  return !!(run && run.active &&
+    (run.status === 'running' ||
+     run.status === 'queued' ||
+     run.status === 'cancelling'));
+}
+
+function selectedStreamRun() {
+  return state.selectedChatId && state.streamRuns
+    ? state.streamRuns[state.selectedChatId]
+    : null;
+}
+
 function refreshSelectedChatSendingState() {
-  state.activeAbortController = activeControllerForChat(state.selectedChatId);
-  state.sending = !!state.activeAbortController;
+  const controller = activeControllerForChat(state.selectedChatId);
+  const runActive = streamRunIsActive(selectedStreamRun());
+  state.activeAbortController = controller;
+  state.sending = !!(controller || runActive);
   setInputEnabled(!!state.selectedChatId && !state.sending);
+  renderCancelAgentButton();
 }
 
 function removeWebDebugBubbles() {
@@ -2877,8 +2901,10 @@ function renderCancelAgentButton() {
     ? state.automationJobs[state.selectedChatId]
     : null;
   const automationActive = !!(automationJob && automationJob.active);
-  const streamActive = !!activeControllerForChat(state.selectedChatId);
-  state.activeAbortController = streamActive ? activeControllerForChat(state.selectedChatId) : null;
+  const streamController = activeControllerForChat(state.selectedChatId);
+  const streamRunActive = streamRunIsActive(selectedStreamRun());
+  const streamActive = !!(streamController || streamRunActive);
+  state.activeAbortController = streamController || null;
   state.sending = streamActive;
   const canCancel = !!((streamActive || automationActive) && state.selectedChatId);
   cancelAgentBtn.style.display = canCancel ? '' : 'none';
@@ -2899,13 +2925,14 @@ async function cancelActiveAgent() {
     : null;
   const automationActive = !!(automationJob && automationJob.active);
   const streamController = activeControllerForChat(state.selectedChatId);
-  if (!streamController && !automationActive) return;
+  const streamRunActive = streamRunIsActive(selectedStreamRun());
+  if (!streamController && !streamRunActive && !automationActive) return;
   if (cancelAgentBtn) {
     cancelAgentBtn.disabled = true;
     cancelAgentBtn.textContent = 'Cancelling...';
   }
   try {
-    if (automationActive && !streamController) {
+    if (automationActive && !streamController && !streamRunActive) {
       await fetch(`/api/chats/${state.selectedChatId}/automation`, {
         method: 'DELETE',
         credentials: 'same-origin',
@@ -2918,6 +2945,9 @@ async function cancelActiveAgent() {
         method: 'DELETE',
         credentials: 'same-origin',
       });
+      if (typeof refreshStreamStatusForChat === 'function') {
+        await refreshStreamStatusForChat(state.selectedChatId, { reloadMessages: false });
+      }
     }
   } catch (_) {}
   try {
@@ -3379,7 +3409,8 @@ async function uploadPendingFiles(chatId) {
 async function sendMessage() {
   const sendProjectId = state.selectedProjectId;
   const sendChatId = state.selectedChatId;
-  if (!sendChatId || activeControllerForChat(sendChatId)) return;
+  if (!sendChatId || activeControllerForChat(sendChatId) ||
+      streamRunIsActive(state.streamRuns && state.streamRuns[sendChatId])) return;
   const content = messageInput.value.trim();
   if ((!content && state.pendingFiles.length === 0) || !sendChatId) return;
 
@@ -3441,6 +3472,20 @@ async function sendMessage() {
 
   const abortCtrl = new AbortController();
   state.activeAbortControllers[sendChatId] = abortCtrl;
+  if (!state.streamRuns) state.streamRuns = {};
+  state.streamRuns[sendChatId] = {
+    active: true,
+    status: 'running',
+    chat_id: sendChatId,
+    project_id: sendProjectId,
+    message: 'Chat run started.',
+    live_mode_name: assistantModeName,
+    live_started_at: assistantCreatedAt,
+    updated_at: assistantCreatedAt,
+    messages_revision: 0,
+    live_response_revision: 0,
+  };
+  scheduleStreamRunStatusPolling();
   if (isCurrentSendChat()) {
     state.activeAbortController = abortCtrl;
     renderCancelAgentButton();
@@ -3711,6 +3756,16 @@ async function sendMessage() {
     if (state.activeAbortController === abortCtrl) {
       state.activeAbortController = null;
     }
+    if (state.streamRuns && state.streamRuns[sendChatId]) {
+      state.streamRuns[sendChatId].active = false;
+      if (!state.streamRuns[sendChatId].status ||
+          state.streamRuns[sendChatId].status === 'running') {
+        state.streamRuns[sendChatId].status = 'completed';
+      }
+    }
+    try {
+      await refreshStreamStatusForChat(sendChatId, { reloadMessages: false });
+    } catch (_) {}
     if (isCurrentSendChat()) {
       if (!contextUsageText && pendingContextRow.parentNode) {
         pendingContextRow.remove();
@@ -4248,6 +4303,123 @@ function renderAutomationLiveResponse(job = selectedAutomationJob()) {
   messagesEl.appendChild(row);
   if (shouldFollow) scrollMessagesToBottom(true);
   else restoreMessagesScroll(previousTop);
+}
+
+function clearStreamRunLiveResponse() {
+  document.querySelectorAll('.stream-run-live-response').forEach(row => row.remove());
+}
+
+function renderStreamRunLiveResponse(run = selectedStreamRun()) {
+  const previousTop = messagesEl ? messagesEl.scrollTop : 0;
+  const shouldFollow = state.followChatTail && isMessagesNearBottom();
+  clearStreamRunLiveResponse();
+  if (!run ||
+      !streamRunIsActive(run) ||
+      run.chat_id !== state.selectedChatId ||
+      activeControllerForChat(run.chat_id || state.selectedChatId)) {
+    if (shouldFollow) scrollMessagesToBottom(true);
+    else restoreMessagesScroll(previousTop);
+    return;
+  }
+
+  const trace = automationLiveTrace(run);
+  if (!trace.length && !run.message && !run.activity_message && !run.heartbeat_message) {
+    return;
+  }
+
+  const row = document.createElement('div');
+  row.className = 'message-row model stream-run-live-response';
+
+  const lbl = document.createElement('div');
+  lbl.className = 'message-role-label';
+  lbl.textContent = messageRoleLabel(
+    'assistant',
+    run.live_mode_name || '',
+    run.live_started_at || run.updated_at || ''
+  );
+
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble streaming';
+  if (trace.length) {
+    renderAssistantTraceBubble(bubble, trace, {
+      streaming: true,
+      fallbackContent: run.live_response || '',
+      questionnaireChatId: run.chat_id || state.selectedChatId,
+    });
+  } else {
+    const p = document.createElement('p');
+    p.textContent = run.activity_message || run.message || run.heartbeat_message || 'Agent is still working...';
+    bubble.appendChild(p);
+    const cursor = document.createElement('span');
+    cursor.className = 'streaming-cursor';
+    bubble.appendChild(cursor);
+  }
+
+  row.appendChild(lbl);
+  row.appendChild(bubble);
+  messagesEl.appendChild(row);
+  if (shouldFollow) scrollMessagesToBottom(true);
+  else restoreMessagesScroll(previousTop);
+}
+
+async function refreshStreamStatusForChat(chatId, options = {}) {
+  if (!chatId) return null;
+  const previous = state.streamRuns ? state.streamRuns[chatId] : null;
+  const previousMessagesRevision = previous ? previous.messages_revision : 0;
+  const previousPlannerRevision = previous ? (previous.planner_revision || 0) : 0;
+  const resp = await api('GET', `/api/chats/${chatId}/stream`);
+  if (!resp || !resp.ok) return previous || null;
+
+  const data = await resp.json();
+  const run = data.run || null;
+  if (!state.streamRuns) state.streamRuns = {};
+  if (run) state.streamRuns[chatId] = run;
+  else delete state.streamRuns[chatId];
+
+  if (chatId === state.selectedChatId) {
+    if (run &&
+        typeof schedulePlannerRefresh === 'function' &&
+        (run.current_tool_name === 'project_planner' ||
+         (run.planner_revision || 0) !== previousPlannerRevision)) {
+      schedulePlannerRefresh(run.current_tool_status === 'live' ? 400 : 100);
+    }
+    if (options.reloadMessages !== false &&
+        run &&
+        run.messages_revision !== previousMessagesRevision) {
+      await loadMessages(state.selectedProjectId, chatId);
+    }
+    renderStreamRunLiveResponse(run);
+    refreshSelectedChatSendingState();
+  }
+
+  scheduleStreamRunStatusPolling();
+  return run;
+}
+
+function activeStreamRunChatIds() {
+  const ids = new Set();
+  if (state.streamRuns) {
+    for (const [chatId, run] of Object.entries(state.streamRuns)) {
+      if (streamRunIsActive(run)) ids.add(chatId);
+    }
+  }
+  if (state.selectedChatId) ids.add(state.selectedChatId);
+  return Array.from(ids);
+}
+
+function scheduleStreamRunStatusPolling() {
+  if (state.streamRunStatusTimer) return;
+  const ids = activeStreamRunChatIds();
+  if (!ids.length) return;
+  state.streamRunStatusTimer = setTimeout(async () => {
+    state.streamRunStatusTimer = null;
+    for (const chatId of activeStreamRunChatIds()) {
+      await refreshStreamStatusForChat(chatId);
+    }
+    if (activeStreamRunChatIds().some(id => streamRunIsActive(state.streamRuns[id]))) {
+      scheduleStreamRunStatusPolling();
+    }
+  }, 750);
 }
 
 async function refreshAutomationStatusForChat(chatId, options = {}) {

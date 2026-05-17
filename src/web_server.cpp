@@ -5656,13 +5656,43 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
     if (!project_id) return;
     const std::string stream_key = *project_id + ":" + chat_id;
     auto cancel_token = std::make_shared<ActiveStreamCancellation>();
+    auto active_run = std::make_shared<ActiveChatRun>();
+    active_run->id = MakeId("streamrun");
+    active_run->project_id = *project_id;
+    active_run->chat_id = chat_id;
+    active_run->cancel_token = cancel_token;
+    active_run->status = "running";
+    active_run->message = "Chat run started.";
+    active_run->live_mode_name = "Agent";
+    active_run->live_started_at = NowIso();
+    active_run->started_at = active_run->live_started_at;
+    active_run->updated_at = active_run->started_at;
+    active_run->heartbeat_at = active_run->started_at;
+    active_run->heartbeat_message = "Chat run is active.";
+    std::shared_ptr<ActiveChatRun> superseded_run;
     {
         std::lock_guard<std::mutex> lk(active_streams_mutex_);
         auto existing = active_streams_.find(stream_key);
         if (existing != active_streams_.end() && existing->second) {
             existing->second->cancelled.store(true);
         }
+        auto existing_run = active_chat_runs_.find(stream_key);
+        if (existing_run != active_chat_runs_.end() && existing_run->second) {
+            superseded_run = existing_run->second;
+        }
         active_streams_[stream_key] = cancel_token;
+        active_chat_runs_[stream_key] = active_run;
+    }
+    if (superseded_run) {
+        std::lock_guard<std::mutex> run_lk(superseded_run->mtx);
+        if (IsActiveAutomationStatus(superseded_run->status)) {
+            superseded_run->cancel_requested = true;
+            superseded_run->status = "cancelled";
+            superseded_run->message = "Superseded by a newer chat run.";
+            superseded_run->finished_at = NowIso();
+            superseded_run->updated_at = superseded_run->finished_at;
+            ++superseded_run->revision;
+        }
     }
 
     // ── Shared state between producer (model thread) and consumer (HTTP thread) ──
@@ -5685,8 +5715,26 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
     // ── Producer thread — runs the model, enqueues SSE events ─────────────────
     std::thread producer([this, pipe, proj_id, chat_id, content, sess_user,
                           encode_sse, attachments, web_debug_requested,
-                          cancel_token, stream_key]() {
+                          cancel_token, stream_key, active_run]() {
         std::string err;
+        auto update_run = [&](const std::function<void(ActiveChatRun&)>& fn) {
+            std::lock_guard<std::mutex> run_lk(active_run->mtx);
+            fn(*active_run);
+            active_run->updated_at = NowIso();
+            ++active_run->revision;
+        };
+        auto mark_run_messages_changed = [&]() {
+            update_run([](ActiveChatRun& run) {
+                ++run.messages_revision;
+            });
+        };
+        auto mark_run_heartbeat = [&](const std::string& message) {
+            update_run([&](ActiveChatRun& run) {
+                run.heartbeat_at = NowIso();
+                run.heartbeat_message = message;
+                ++run.heartbeat_revision;
+            });
+        };
         auto persist_producer_error = [&](const std::string& message) {
             if (message.empty()) return;
             try {
@@ -5709,9 +5757,53 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             }
         };
         try {
+            std::atomic<bool> model_call_running{true};
+            std::thread heartbeat_thread([&]() {
+                while (model_call_running.load() && !cancel_token->cancelled.load()) {
+                    for (int i = 0; i < 5 && model_call_running.load() && !cancel_token->cancelled.load(); ++i) {
+                        std::this_thread::sleep_for(std::chrono::seconds(1));
+                    }
+                    if (!model_call_running.load() || cancel_token->cancelled.load()) break;
+                    const std::string heartbeat_message = "Chat run is still active.";
+                    mark_run_heartbeat(heartbeat_message);
+                    {
+                        std::lock_guard<std::mutex> lk(pipe->mtx);
+                        if (!pipe->abort && !cancel_token->cancelled.load()) {
+                            json ev = {
+                                {"activity_status", "heartbeat"},
+                                {"activity_message", heartbeat_message},
+                            };
+                            pipe->pending += encode_sse(
+                                DumpJsonForWeb(ev, "chat heartbeat stream event"));
+                        }
+                    }
+                    pipe->cv.notify_one();
+                }
+            });
+            try {
             err = StreamModel(
             proj_id, chat_id, content, sess_user,
             [&](const std::string& delta) -> bool {
+                update_run([&](ActiveChatRun& run) {
+                    const std::string timestamp = NowIso();
+                    run.live_response += delta;
+                    if (!run.live_trace.empty() &&
+                        run.live_trace.back().type == "text") {
+                        run.live_trace.back().content += delta;
+                        run.live_trace.back().updated_at = timestamp;
+                    } else {
+                        AutomationLiveTraceSegment segment;
+                        segment.type = "text";
+                        segment.content = delta;
+                        segment.started_at = timestamp;
+                        segment.updated_at = timestamp;
+                        run.live_trace.push_back(std::move(segment));
+                    }
+                    run.activity_status = "receiving_response";
+                    run.activity_message = "Receiving model response...";
+                    run.message = run.activity_message;
+                    ++run.live_response_revision;
+                });
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
                     if (cancel_token->cancelled.load()) return false;
@@ -5724,6 +5816,12 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             },
             attachments,
             [&](size_t used_tokens, size_t total_tokens) {
+                mark_run_messages_changed();
+                update_run([&](ActiveChatRun& run) {
+                    run.message = "Context: " + std::to_string(used_tokens) +
+                        (total_tokens > 0 ? "/" + std::to_string(total_tokens) : "") +
+                        " tokens.";
+                });
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
                     if (pipe->abort || cancel_token->cancelled.load()) return;
@@ -5736,6 +5834,11 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 pipe->cv.notify_one();
             },
             [&](const std::string& status, const std::string& message) {
+                update_run([&](ActiveChatRun& run) {
+                    run.activity_status = status;
+                    run.activity_message = message;
+                    run.message = message;
+                });
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
                     if (pipe->abort || cancel_token->cancelled.load()) return;
@@ -5748,6 +5851,25 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 pipe->cv.notify_one();
             },
             [&](const ProviderQueueStatus& status) {
+                update_run([&](ActiveChatRun& run) {
+                    run.queue_state = status.state;
+                    run.queue_provider = status.provider_name;
+                    run.queue_position = status.queue_position;
+                    run.queue_depth = status.queue_depth;
+                    run.queue_active = status.active_requests;
+                    run.queue_max_active = status.max_active_requests;
+                    run.heartbeat_at = NowIso();
+                    ++run.heartbeat_revision;
+                    if (status.state == "queued") {
+                        run.message = "Waiting in provider queue.";
+                        run.heartbeat_message = "Still waiting for a provider slot.";
+                    } else {
+                        run.heartbeat_message = "Provider slot acquired; waiting for the model response.";
+                        if (run.message == "Waiting in provider queue.") {
+                            run.message = run.heartbeat_message;
+                        }
+                    }
+                });
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
                     if (pipe->abort || cancel_token->cancelled.load()) return;
@@ -5765,6 +5887,14 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 pipe->cv.notify_one();
             },
             [&](const std::string& status, const std::string& message) {
+                update_run([&](ActiveChatRun& run) {
+                    run.activity_status = status;
+                    run.activity_message = message;
+                    run.message = message;
+                    run.heartbeat_at = NowIso();
+                    run.heartbeat_message = message;
+                    ++run.heartbeat_revision;
+                });
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
                     if (pipe->abort || cancel_token->cancelled.load()) return;
@@ -5781,6 +5911,66 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 const std::string& tool_arguments,
                 const std::string& tool_result,
                 const std::string& tool_status) {
+                update_run([&](ActiveChatRun& run) {
+                    const std::string timestamp = NowIso();
+                    run.current_tool_name = tool_name;
+                    run.current_tool_status = tool_status;
+                    run.current_tool_at = timestamp;
+                    run.message = tool_status == "live"
+                        ? "Running tool: " + tool_name
+                        : "Tool finished: " + tool_name;
+                    auto trace_it = std::find_if(
+                        run.live_tool_trace.begin(),
+                        run.live_tool_trace.end(),
+                        [&](const AutomationToolTraceItem& item) {
+                            if (!tool_call_id.empty()) return item.tool_call_id == tool_call_id;
+                            return item.tool_name == tool_name && item.status == "live";
+                        });
+                    if (trace_it == run.live_tool_trace.end()) {
+                        AutomationToolTraceItem item;
+                        item.tool_call_id = tool_call_id;
+                        item.tool_name = tool_name;
+                        item.started_at = timestamp;
+                        run.live_tool_trace.push_back(std::move(item));
+                        trace_it = run.live_tool_trace.end();
+                        --trace_it;
+                    }
+                    trace_it->tool_call_id = tool_call_id;
+                    trace_it->tool_name = tool_name;
+                    trace_it->arguments_json = tool_arguments;
+                    trace_it->result_json = tool_result;
+                    trace_it->status = tool_status;
+                    if (trace_it->started_at.empty()) trace_it->started_at = timestamp;
+                    trace_it->updated_at = timestamp;
+
+                    auto live_it = std::find_if(
+                        run.live_trace.begin(),
+                        run.live_trace.end(),
+                        [&](const AutomationLiveTraceSegment& segment) {
+                            if (segment.type != "tool_usage" &&
+                                segment.type != "questionnaire") {
+                                return false;
+                            }
+                            if (!tool_call_id.empty()) return segment.tool.tool_call_id == tool_call_id;
+                            return segment.tool.tool_name == tool_name &&
+                                   segment.tool.status == "live";
+                        });
+                    if (live_it == run.live_trace.end()) {
+                        AutomationLiveTraceSegment segment;
+                        segment.type = "tool_usage";
+                        segment.started_at = timestamp;
+                        run.live_trace.push_back(std::move(segment));
+                        live_it = run.live_trace.end();
+                        --live_it;
+                    }
+                    live_it->tool = *trace_it;
+                    if (live_it->started_at.empty()) live_it->started_at = trace_it->started_at;
+                    live_it->updated_at = timestamp;
+                    ++run.live_response_revision;
+                    if (tool_name == built_in_tools::kPlannerToolName) {
+                        ++run.planner_revision;
+                    }
+                });
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
                     if (pipe->abort || cancel_token->cancelled.load()) return;
@@ -5827,6 +6017,35 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 const std::string& question,
                 const std::vector<std::string>& options,
                 bool allow_multiple) {
+                update_run([&](ActiveChatRun& run) {
+                    const std::string timestamp = NowIso();
+                    run.message = "Chat run is waiting for questionnaire input.";
+                    auto live_it = std::find_if(
+                        run.live_trace.begin(),
+                        run.live_trace.end(),
+                        [&](const AutomationLiveTraceSegment& segment) {
+                            return (segment.type == "tool_usage" ||
+                                    segment.type == "questionnaire") &&
+                                   segment.tool.tool_call_id == tool_call_id;
+                        });
+                    if (live_it == run.live_trace.end()) {
+                        AutomationLiveTraceSegment segment;
+                        segment.tool.tool_call_id = tool_call_id;
+                        segment.tool.tool_name = built_in_tools::kQuestionnaireToolName;
+                        segment.tool.status = "live";
+                        segment.tool.started_at = timestamp;
+                        run.live_trace.push_back(std::move(segment));
+                        live_it = run.live_trace.end();
+                        --live_it;
+                    }
+                    live_it->type = "questionnaire";
+                    live_it->question = question;
+                    live_it->options = options;
+                    live_it->allow_multiple = allow_multiple;
+                    if (live_it->started_at.empty()) live_it->started_at = timestamp;
+                    live_it->updated_at = timestamp;
+                    ++run.live_response_revision;
+                });
                 {
                     std::lock_guard<std::mutex> lk(pipe->mtx);
                     if (pipe->abort || cancel_token->cancelled.load()) return;
@@ -5847,6 +6066,13 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             [cancel_token]() {
                 return cancel_token->cancelled.load();
             });
+            } catch (...) {
+                model_call_running.store(false);
+                if (heartbeat_thread.joinable()) heartbeat_thread.join();
+                throw;
+            }
+            model_call_running.store(false);
+            if (heartbeat_thread.joinable()) heartbeat_thread.join();
 
         } catch (const std::exception& ex) {
             Logger::Error("WebModel", std::string("Producer thread exception: ") + ex.what());
@@ -5863,11 +6089,31 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             std::lock_guard<std::mutex> lk(pipe->mtx);
             if (cancel_token->cancelled.load()) {
                 pipe->pending += encode_sse(R"({"cancelled":true,"done":true})");
+                update_run([](ActiveChatRun& run) {
+                    run.status = "cancelled";
+                    run.cancel_requested = true;
+                    run.message = "Chat run cancelled.";
+                    run.finished_at = NowIso();
+                    ++run.messages_revision;
+                });
             } else if (!err.empty()) {
                 json ev = {{"error", err}};
                 pipe->pending += encode_sse(DumpJsonForWeb(ev, "stream final error event"));
+                update_run([&](ActiveChatRun& run) {
+                    run.status = "failed";
+                    run.error = err;
+                    run.message = err;
+                    run.finished_at = NowIso();
+                    ++run.messages_revision;
+                });
             } else {
                 pipe->pending += encode_sse(R"({"done":true})");
+                update_run([](ActiveChatRun& run) {
+                    run.status = "completed";
+                    run.message = "Chat run completed.";
+                    run.finished_at = NowIso();
+                    ++run.messages_revision;
+                });
             }
             pipe->done = true;
         }
@@ -5929,6 +6175,30 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
         });
 }
 
+void WebServer::HandleGetStreamStatus(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string chat_id = req->path_params.at("id");
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    std::shared_ptr<ActiveChatRun> run;
+    {
+        std::lock_guard<std::mutex> lk(active_streams_mutex_);
+        auto it = active_chat_runs_.find(*project_id + ":" + chat_id);
+        if (it != active_chat_runs_.end()) {
+            run = it->second;
+        }
+    }
+
+    SendJson(res_ptr, 200, json{
+        {"ok", true},
+        {"run", run ? json::parse(SerializeActiveChatRun(run)) : json(nullptr)}
+    }.dump());
+}
+
 void WebServer::HandleCancelStream(const void* req_ptr, void* res_ptr) {
     auto session = RequireAuth(req_ptr, res_ptr);
     if (!session) return;
@@ -5943,11 +6213,27 @@ void WebServer::HandleCancelStream(const void* req_ptr, void* res_ptr) {
     Logger::Warn("WebModel",
         "cancel-stream-request project=" + *project_id +
         " chat=" + chat_id);
+    std::shared_ptr<ActiveChatRun> run_to_cancel;
     {
         std::lock_guard<std::mutex> lk(active_streams_mutex_);
         auto it = active_streams_.find(key);
         if (it != active_streams_.end() && it->second) {
             it->second->cancelled.store(true);
+            cancelled = true;
+        }
+        auto run_it = active_chat_runs_.find(key);
+        if (run_it != active_chat_runs_.end() && run_it->second) {
+            run_to_cancel = run_it->second;
+        }
+    }
+    if (run_to_cancel) {
+        std::lock_guard<std::mutex> run_lk(run_to_cancel->mtx);
+        if (IsActiveAutomationStatus(run_to_cancel->status)) {
+            run_to_cancel->cancel_requested = true;
+            run_to_cancel->status = "cancelling";
+            run_to_cancel->message = "Cancellation requested.";
+            run_to_cancel->updated_at = NowIso();
+            ++run_to_cancel->revision;
             cancelled = true;
         }
     }
@@ -5988,6 +6274,102 @@ void WebServer::HandleCancelStream(const void* req_ptr, void* res_ptr) {
     }
 
     SendJson(res_ptr, 200, json{{"ok", true}, {"cancelled", cancelled}}.dump());
+}
+
+std::string WebServer::SerializeActiveChatRun(
+    const std::shared_ptr<ActiveChatRun>& run) const {
+    if (!run) {
+        return json{{"active", false}}.dump();
+    }
+
+    std::lock_guard<std::mutex> lk(run->mtx);
+    const bool active = IsActiveAutomationStatus(run->status);
+    json live_tool_trace = json::array();
+    for (const auto& item : run->live_tool_trace) {
+        live_tool_trace.push_back({
+            {"tool_call_id", item.tool_call_id},
+            {"tool_name", item.tool_name},
+            {"arguments", item.arguments_json},
+            {"result", item.result_json},
+            {"status", item.status},
+            {"started_at", item.started_at},
+            {"updated_at", item.updated_at},
+        });
+    }
+
+    json live_trace = json::array();
+    for (const auto& segment : run->live_trace) {
+        if (segment.type == "text") {
+            live_trace.push_back({
+                {"type", "text"},
+                {"content", segment.content},
+                {"live", active},
+                {"started_at", segment.started_at},
+                {"updated_at", segment.updated_at},
+            });
+        } else if (segment.type == "tool_usage") {
+            live_trace.push_back({
+                {"type", "tool_usage"},
+                {"tool_call_id", segment.tool.tool_call_id},
+                {"tool_name", segment.tool.tool_name},
+                {"arguments", segment.tool.arguments_json},
+                {"result", segment.tool.result_json},
+                {"status", segment.tool.status},
+                {"started_at", segment.tool.started_at},
+                {"updated_at", segment.tool.updated_at},
+            });
+        } else if (segment.type == "questionnaire") {
+            live_trace.push_back({
+                {"type", "questionnaire"},
+                {"tool_call_id", segment.tool.tool_call_id},
+                {"chat_id", run->chat_id},
+                {"question", segment.question},
+                {"options", segment.options},
+                {"allow_multiple", segment.allow_multiple},
+                {"status", segment.tool.status.empty() ? "live" : segment.tool.status},
+                {"started_at", segment.started_at.empty() ? segment.tool.started_at : segment.started_at},
+                {"updated_at", segment.updated_at.empty() ? segment.tool.updated_at : segment.updated_at},
+            });
+        }
+    }
+
+    json payload = {
+        {"id", run->id},
+        {"project_id", run->project_id},
+        {"chat_id", run->chat_id},
+        {"active", active},
+        {"status", run->status},
+        {"message", run->message},
+        {"error", run->error},
+        {"activity_status", run->activity_status},
+        {"activity_message", run->activity_message},
+        {"queue_state", run->queue_state},
+        {"queue_provider", run->queue_provider},
+        {"live_response", run->live_response},
+        {"live_mode_name", run->live_mode_name},
+        {"live_started_at", run->live_started_at},
+        {"current_tool_name", run->current_tool_name},
+        {"current_tool_status", run->current_tool_status},
+        {"current_tool_at", run->current_tool_at},
+        {"live_tool_trace", live_tool_trace},
+        {"live_trace", live_trace},
+        {"heartbeat_at", run->heartbeat_at},
+        {"heartbeat_message", run->heartbeat_message},
+        {"queue_position", run->queue_position},
+        {"queue_depth", run->queue_depth},
+        {"queue_active", run->queue_active},
+        {"queue_max_active", run->queue_max_active},
+        {"cancel_requested", run->cancel_requested},
+        {"revision", run->revision},
+        {"messages_revision", run->messages_revision},
+        {"live_response_revision", run->live_response_revision},
+        {"planner_revision", run->planner_revision},
+        {"heartbeat_revision", run->heartbeat_revision},
+        {"started_at", run->started_at},
+        {"updated_at", run->updated_at},
+        {"finished_at", run->finished_at},
+    };
+    return DumpJsonForWeb(payload, "active chat run JSON");
 }
 
 std::string WebServer::SerializeAutomationJob(
@@ -7361,6 +7743,10 @@ void WebServer::RegisterRoutes() {
         HandleStreamMessage(&req, &res);
     });
     // DELETE /api/chats/:id/stream — abort in-progress streaming (sent by stop button)
+    srv.Get(R"(/api/chats/([^/]+)/stream)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleGetStreamStatus(&req, &res);
+    });
     srv.Delete(R"(/api/chats/([^/]+)/stream)", [this](const httplib::Request& req, httplib::Response& res) {
         const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
         HandleCancelStream(&req, &res);
