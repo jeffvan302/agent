@@ -1279,6 +1279,65 @@ json BuildCodexResponsesInputItemForMessage(const MessageRecord& message) {
     };
 }
 
+bool HasPrefix(const std::string& value, const std::string& prefix) {
+    return value.rfind(prefix, 0) == 0;
+}
+
+std::string StableHexHash(const std::string& value) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (unsigned char ch : value) {
+        hash ^= ch;
+        hash *= 1099511628211ULL;
+    }
+    std::ostringstream stream;
+    stream << std::hex << hash;
+    return stream.str();
+}
+
+std::string SanitizeCodexIdSuffix(const std::string& value) {
+    std::string suffix;
+    suffix.reserve(value.size());
+    for (unsigned char ch : value) {
+        if (std::isalnum(ch) || ch == '_' || ch == '-') {
+            suffix.push_back(static_cast<char>(ch));
+        } else {
+            suffix.push_back('_');
+        }
+    }
+    while (!suffix.empty() && suffix.front() == '_') {
+        suffix.erase(suffix.begin());
+    }
+    return suffix.empty() ? StableHexHash(value) : suffix;
+}
+
+std::string CodexResponsesIdSuffix(const std::string& source_id) {
+    const std::string trimmed = Trim(source_id);
+    if (HasPrefix(trimmed, "call_")) {
+        return SanitizeCodexIdSuffix(trimmed.substr(5));
+    }
+    if (HasPrefix(trimmed, "fc_")) {
+        return SanitizeCodexIdSuffix(trimmed.substr(3));
+    }
+    const std::string sanitized = SanitizeCodexIdSuffix(trimmed);
+    return sanitized + "_" + StableHexHash(trimmed);
+}
+
+std::string CodexResponsesCallId(const std::string& source_id) {
+    const std::string trimmed = Trim(source_id);
+    if (HasPrefix(trimmed, "call_")) {
+        return trimmed;
+    }
+    return "call_" + CodexResponsesIdSuffix(trimmed);
+}
+
+std::string CodexResponsesFunctionCallItemId(const std::string& source_id) {
+    const std::string trimmed = Trim(source_id);
+    if (HasPrefix(trimmed, "fc_")) {
+        return trimmed;
+    }
+    return "fc_" + CodexResponsesIdSuffix(trimmed);
+}
+
 void AppendCodexResponsesHistoryItem(const MessageRecord& message, json& input) {
     if (message.role == "tool") {
         if (message.tool_call_id.empty()) {
@@ -1286,7 +1345,7 @@ void AppendCodexResponsesHistoryItem(const MessageRecord& message, json& input) 
         }
         input.push_back({
             {"type", "function_call_output"},
-            {"call_id", message.tool_call_id},
+            {"call_id", CodexResponsesCallId(message.tool_call_id)},
             {"output", message.content},
         });
         return;
@@ -1327,12 +1386,14 @@ void AppendCodexResponsesHistoryItem(const MessageRecord& message, json& input) 
             if (name.empty()) {
                 continue;
             }
+            const std::string arguments = function.value("arguments", "{}");
+            const std::string source_id = item.value("id", name + ":" + arguments);
             input.push_back({
                 {"type", "function_call"},
-                {"id", item.value("id", "")},
-                {"call_id", item.value("id", "")},
+                {"id", CodexResponsesFunctionCallItemId(source_id)},
+                {"call_id", CodexResponsesCallId(source_id)},
                 {"name", name},
-                {"arguments", function.value("arguments", "{}")},
+                {"arguments", arguments},
                 {"status", "completed"},
             });
         }

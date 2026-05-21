@@ -430,15 +430,48 @@ bool LooksLikeFilesystemServer(const McpServerConfig& config) {
     return false;
 }
 
-std::string AugmentFilesystemToolDescription(const McpServerConfig& config, const McpToolDefinition& tool) {
-    if (!LooksLikeFilesystemServer(config)) {
+bool LooksLikeWebResearchServer(const McpServerConfig& config) {
+    const std::string name = LowerAscii(config.name);
+    const std::string command = LowerAscii(config.command);
+    if (name.find("duckduckgo") != std::string::npos ||
+        name.find("duck duck go") != std::string::npos ||
+        name.find("web-search") != std::string::npos ||
+        name.find("web search") != std::string::npos ||
+        command.find("duckduckgo") != std::string::npos) {
+        return true;
+    }
+
+    for (const auto& argument : config.arguments) {
+        const std::string lowered = LowerAscii(argument);
+        if (lowered.find("duckduckgo") != std::string::npos ||
+            lowered.find("web-search") != std::string::npos ||
+            lowered.find("web_search") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string WebResearchUsageContextText() {
+    return
+        "Web Research MCP Instructions:\n"
+        "- A DuckDuckGo/web research MCP server is available in this chat. Use it when the answer depends on external web pages, current information, online documentation, release notes, command syntax, package behavior, or a user-provided URL/document.\n"
+        "- Prefer a web/search tool before guessing about unfamiliar or version-sensitive commands, APIs, model/provider behavior, or documentation-backed details.\n"
+        "- If the user provides a URL or asks about a specific online document/page, use the web retrieval/download/fetch-capable MCP tool when available to read the page contents before answering.\n"
+        "- If no URL is provided, search first, choose the most relevant official or primary source, then fetch/download/read the result when the exact page content matters.\n"
+        "- Summarize findings in your own words and include source URLs when the answer relies on web research.\n"
+        "- Do not use web research for purely local codebase facts that can be answered from project files or local tools.";
+}
+
+std::string AugmentToolDescription(const McpServerConfig& config, const McpToolDefinition& tool) {
+    if (!LooksLikeFilesystemServer(config) && !LooksLikeWebResearchServer(config)) {
         return tool.description;
     }
 
     std::string description = tool.description;
     const std::string tool_name = LowerAscii(tool.name);
 
-    if (tool_name == "write_file") {
+    if (LooksLikeFilesystemServer(config) && tool_name == "write_file") {
         if (!description.empty()) {
             description += " ";
         }
@@ -446,13 +479,32 @@ std::string AugmentFilesystemToolDescription(const McpServerConfig& config, cons
             "Prefer this tool for small files or for creating an initial scaffold. "
             "For large files, avoid sending the entire final file as one huge content blob unless it is comfortably small. "
             "Instead, create a compact scaffold with stable section markers or placeholders, then use edit_file to fill or revise those sections in smaller passes.";
-    } else if (tool_name == "edit_file") {
+    } else if (LooksLikeFilesystemServer(config) && tool_name == "edit_file") {
         if (!description.empty()) {
             description += " ";
         }
         description +=
             "Prefer this tool for large-file updates, revisions, or filling sections of an existing scaffold. "
             "When a file is large, use write_file only for a minimal initial scaffold if needed, then use edit_file for targeted replacements so each tool call stays smaller and more reliable.";
+    } else if (LooksLikeWebResearchServer(config)) {
+        if (!description.empty()) {
+            description += " ";
+        }
+        description +=
+            "DuckDuckGo/web research guidance: use this tool when the task depends on external web pages, current facts, online documentation, release notes, package or command behavior, or a user-provided URL/document. ";
+        if (tool_name.find("search") != std::string::npos) {
+            description +=
+                "Use search to find the relevant official or primary source; when exact details matter, follow up with a fetch/download/read-content tool if the server exposes one. ";
+        }
+        if (tool_name.find("fetch") != std::string::npos ||
+            tool_name.find("download") != std::string::npos ||
+            tool_name.find("content") != std::string::npos ||
+            tool_name.find("read") != std::string::npos) {
+            description +=
+                "Use this to retrieve the contents of a known URL or search result before answering from that page. ";
+        }
+        description +=
+            "Do not guess documentation-backed details when this tool can retrieve or verify the source.";
     }
 
     return description;
@@ -1836,7 +1888,7 @@ std::vector<McpExposedTool> McpManager::GetExposedToolsForProject(
             exposed.server_name = config.name;
             exposed.tool_name = tool.name;
             exposed.title = tool.title;
-            exposed.description = AugmentFilesystemToolDescription(config, tool);
+            exposed.description = AugmentToolDescription(config, tool);
             exposed.input_schema_json = tool.input_schema_json;
             exposed_tools.push_back(std::move(exposed));
         }
@@ -1850,6 +1902,19 @@ std::vector<McpExposedTool> McpManager::GetExposedToolsForProject(
     });
 
     return exposed_tools;
+}
+
+std::string McpManager::BuildWebResearchUsageContext(const std::string& project_id) const {
+    for (const auto& config : configs_) {
+        if (!config.enabled || !LooksLikeWebResearchServer(config)) {
+            continue;
+        }
+        if (!project_id.empty() && !IsServerSelectedForProject(project_id, config.id)) {
+            continue;
+        }
+        return WebResearchUsageContextText();
+    }
+    return {};
 }
 
 McpToolCallResult McpManager::CallExposedTool(

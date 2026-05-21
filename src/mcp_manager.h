@@ -89,6 +89,7 @@ public:
     std::vector<McpExposedTool> GetExposedToolsForProject(
         const std::string& project_id,
         const std::vector<ProjectMcpVariableValue>& runtime_variables = {}) const;
+    std::string BuildWebResearchUsageContext(const std::string& project_id) const;
     McpToolCallResult CallExposedTool(
         const std::string& project_id,
         const std::string& alias,

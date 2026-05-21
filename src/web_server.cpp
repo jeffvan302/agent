@@ -3742,6 +3742,12 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
         if (!mcp_project_context.empty()) {
             built.sections.push_back({"MCP Project Context", mcp_project_context});
         }
+        const std::string web_research_context =
+            mcp_manager->BuildWebResearchUsageContext(project_id);
+        AppendPromptSection(built.full_prompt, web_research_context);
+        if (!web_research_context.empty()) {
+            built.sections.push_back({"Web Research MCP", web_research_context});
+        }
     }
 
     if (rag_service) {

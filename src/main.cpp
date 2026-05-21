@@ -4974,6 +4974,15 @@ void MainWindow::SendCurrentMessage() {
         request.system_prompt += mcp_project_context;
         system_prompt_sections.push_back({"MCP Project Context", mcp_project_context});
     }
+    const std::string web_research_context =
+        mcp_manager_.BuildWebResearchUsageContext(active_project_id_);
+    if (!web_research_context.empty()) {
+        if (!request.system_prompt.empty()) {
+            request.system_prompt += "\n\n";
+        }
+        request.system_prompt += web_research_context;
+        system_prompt_sections.push_back({"Web Research MCP", web_research_context});
+    }
 
     const std::string rag_context = rag_tools::BuildRagProjectContext(&rag_service_, active_project_id_);
     if (!rag_context.empty()) {
