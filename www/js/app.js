@@ -64,6 +64,8 @@ let state = {
   projectUserSelectModel: false,
   projectDefaultModel: null,
   projectSelectableModels: [],
+  newChatOptions: null,
+  newChatBrowsePath: '',
   projectAllowManualCompress: false,
   projectEnableWebDebugging: false,
   projectEnableAutomation: false,
@@ -141,6 +143,22 @@ const accountNewPasswordInput = $('account-new-password');
 const accountConfirmPasswordInput = $('account-confirm-password');
 const accountSaveBtn = $('account-save-btn');
 const accountError = $('account-error');
+const newChatModal = $('new-chat-modal');
+const newChatForm = $('new-chat-form');
+const newChatCloseBtn = $('new-chat-close-btn');
+const newChatCancelBtn = $('new-chat-cancel-btn');
+const newChatNameInput = $('new-chat-name');
+const newChatFolderGroup = $('new-chat-folder-group');
+const newChatFolderInput = $('new-chat-folder');
+const newChatBrowseBtn = $('new-chat-browse-btn');
+const newChatFolderBrowser = $('new-chat-folder-browser');
+const folderRootBtn = $('folder-root-btn');
+const folderUpBtn = $('folder-up-btn');
+const folderCurrentPath = $('folder-current-path');
+const folderBrowserList = $('folder-browser-list');
+const newChatVariables = $('new-chat-variables');
+const newChatError = $('new-chat-error');
+const newChatCreateBtn = $('new-chat-create-btn');
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'agent.sidebar.width';
 const CHAT_TAIL_EPSILON_PX = 48;
@@ -3345,19 +3363,176 @@ async function loadMessages(projectId, chatId, options = {}) {
   }
 }
 
-newChatBtn.addEventListener('click', async () => {
+function showNewChatError(message) {
+  if (!newChatError) return;
+  newChatError.textContent = message || '';
+  newChatError.style.display = message ? 'block' : 'none';
+}
+
+function closeNewChatModal() {
+  if (!newChatModal) return;
+  newChatModal.hidden = true;
+  showNewChatError('');
+  if (newChatFolderBrowser) newChatFolderBrowser.hidden = true;
+}
+
+function renderNewChatVariables(variables) {
+  if (!newChatVariables) return;
+  newChatVariables.innerHTML = '';
+  for (const variable of (variables || [])) {
+    if (!variable || !variable.name) continue;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'new-chat-variable';
+
+    const label = document.createElement('label');
+    label.textContent = variable.name;
+    wrapper.appendChild(label);
+
+    if (variable.description) {
+      const description = document.createElement('div');
+      description.className = 'new-chat-variable-description';
+      description.textContent = variable.description;
+      wrapper.appendChild(description);
+    }
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.autocomplete = 'off';
+    input.value = variable.value || '';
+    input.dataset.variableName = variable.name;
+    wrapper.appendChild(input);
+
+    newChatVariables.appendChild(wrapper);
+  }
+}
+
+async function loadNewChatOptions(projectId) {
+  const resp = await api('GET', `/api/projects/${projectId}/new-chat-options`);
+  if (!resp || !resp.ok) {
+    return { can_browse_folders: false, default_project_folder: '', variables: [] };
+  }
+  return await resp.json();
+}
+
+async function loadFolderBrowser(path) {
+  if (!state.selectedProjectId || !folderBrowserList) return;
+  folderBrowserList.innerHTML = '';
+  const suffix = path ? `?path=${encodeURIComponent(path)}` : '';
+  const resp = await api('GET', `/api/projects/${state.selectedProjectId}/folders${suffix}`);
+  if (!resp || !resp.ok) {
+    const message = resp ? await resp.text() : 'Could not browse folders.';
+    showNewChatError(message || 'Could not browse folders.');
+    return;
+  }
+  const data = await resp.json();
+  state.newChatBrowsePath = data.path || '';
+  if (folderCurrentPath) folderCurrentPath.textContent = data.path || 'Drives';
+  if (folderUpBtn) {
+    folderUpBtn.disabled = !(data.parent || data.path);
+    folderUpBtn.dataset.parentPath = data.parent || '';
+  }
+  const entries = Array.isArray(data.entries) ? data.entries : [];
+  for (const entry of entries) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'folder-browser-item';
+    row.textContent = entry.name || entry.path || 'Folder';
+    row.title = entry.path || '';
+    row.addEventListener('click', () => {
+      if (newChatFolderInput) newChatFolderInput.value = entry.path || '';
+      loadFolderBrowser(entry.path || '');
+    });
+    folderBrowserList.appendChild(row);
+  }
+}
+
+async function openNewChatModal() {
   if (!state.selectedProjectId) return;
-  const name = prompt('Chat name:', 'New Chat');
-  if (!name) return;
-  const resp = await api('POST', `/api/projects/${state.selectedProjectId}/chats`,
-                         { name: name.trim() });
-  if (!resp || !resp.ok) return;
+  if (!newChatModal || !newChatNameInput) return;
+
+  showNewChatError('');
+  const options = await loadNewChatOptions(state.selectedProjectId);
+  state.newChatOptions = options;
+  newChatNameInput.value = 'New Chat';
+  if (newChatFolderGroup) newChatFolderGroup.hidden = !options.can_browse_folders;
+  if (newChatFolderInput) newChatFolderInput.value = options.default_project_folder || '';
+  if (newChatFolderBrowser) newChatFolderBrowser.hidden = true;
+  renderNewChatVariables(options.variables || []);
+
+  newChatModal.hidden = false;
+  window.setTimeout(() => {
+    newChatNameInput.focus();
+    newChatNameInput.select();
+  }, 0);
+}
+
+async function submitNewChatModal(event) {
+  event.preventDefault();
+  if (!state.selectedProjectId || !newChatNameInput) return;
+  showNewChatError('');
+  if (newChatCreateBtn) newChatCreateBtn.disabled = true;
+
+  const payload = { name: (newChatNameInput.value || 'New Chat').trim() || 'New Chat' };
+  if (state.newChatOptions && state.newChatOptions.can_browse_folders && newChatFolderInput) {
+    payload.project_folder = newChatFolderInput.value.trim();
+  }
+  const variables = [];
+  if (newChatVariables) {
+    newChatVariables.querySelectorAll('input[data-variable-name]').forEach(input => {
+      variables.push({
+        name: input.dataset.variableName || '',
+        value: input.value || '',
+      });
+    });
+  }
+  if (variables.length) payload.variables = variables;
+
+  const resp = await api('POST', `/api/projects/${state.selectedProjectId}/chats`, payload);
+  if (newChatCreateBtn) newChatCreateBtn.disabled = false;
+  if (!resp || !resp.ok) {
+    const message = resp ? await resp.text() : 'Could not create chat.';
+    showNewChatError(message || 'Could not create chat.');
+    return;
+  }
   const chat = await resp.json();
+  closeNewChatModal();
   await loadChats(state.selectedProjectId);
   const listEl = $('chats-' + state.selectedProjectId);
   if (listEl) renderChatItems(state.selectedProjectId, listEl);
   await selectChat(state.selectedProjectId, chat.id, chat.name);
-});
+}
+
+if (newChatBtn) {
+  newChatBtn.addEventListener('click', openNewChatModal);
+}
+if (newChatForm) {
+  newChatForm.addEventListener('submit', submitNewChatModal);
+}
+if (newChatCloseBtn) newChatCloseBtn.addEventListener('click', closeNewChatModal);
+if (newChatCancelBtn) newChatCancelBtn.addEventListener('click', closeNewChatModal);
+if (newChatModal) {
+  newChatModal.addEventListener('click', event => {
+    if (event.target && event.target.dataset.closeNewChatModal) {
+      closeNewChatModal();
+    }
+  });
+}
+if (newChatBrowseBtn) {
+  newChatBrowseBtn.addEventListener('click', () => {
+    if (!newChatFolderBrowser) return;
+    newChatFolderBrowser.hidden = false;
+    loadFolderBrowser(newChatFolderInput ? newChatFolderInput.value.trim() : '');
+  });
+}
+if (folderRootBtn) {
+  folderRootBtn.addEventListener('click', () => loadFolderBrowser(''));
+}
+if (folderUpBtn) {
+  folderUpBtn.addEventListener('click', () => {
+    const parent = folderUpBtn.dataset.parentPath || '';
+    loadFolderBrowser(parent);
+  });
+}
 
 async function deleteChat(projectId, chatId) {
   const resp = await api('DELETE', `/api/chats/${chatId}`);

@@ -615,6 +615,7 @@ std::vector<ProjectMcpVariableValue> BuildWebRuntimeVariables(
     const ProjectSettings& project_settings) {
     std::string project_name = Trim(project_settings.project_name);
     std::string chat_name;
+    std::vector<ProjectMcpVariableValue> chat_variables;
 
     if (storage) {
         for (const auto& project : storage->LoadProjects()) {
@@ -625,6 +626,7 @@ std::vector<ProjectMcpVariableValue> BuildWebRuntimeVariables(
             for (const auto& chat : project.chats) {
                 if (chat.id == chat_id) {
                     chat_name = Trim(chat.name);
+                    chat_variables = chat.user_variables;
                     break;
                 }
             }
@@ -665,6 +667,9 @@ std::vector<ProjectMcpVariableValue> BuildWebRuntimeVariables(
     variable_resolver::UpsertValue(values, "USER", display_name);
     variable_resolver::UpsertValue(values, "USEREMAIL", email);
     variable_resolver::UpsertValue(values, "UserName", Trim(username));
+    for (const auto& variable : chat_variables) {
+        variable_resolver::UpsertValue(values, variable);
+    }
 
     return values;
 }
@@ -830,6 +835,110 @@ std::optional<ResolvedProjectUploadFolder> ResolveProjectUploadFolder(
             return left.path.wstring().size() > right.path.wstring().size();
         });
     return ResolvedProjectUploadFolder{candidates.front().path, candidates.front().variable_name};
+}
+
+bool IsProjectFolderVariableName(const std::string& name) {
+    return variable_resolver::ToLookupKey(name) == "projectfolder";
+}
+
+std::optional<fs::path> NormalizeExistingOrCreatableFolder(
+    const std::string& value,
+    std::string* error) {
+    const std::string trimmed = Trim(value);
+    if (trimmed.empty()) {
+        if (error) *error = "Folder path is empty.";
+        return std::nullopt;
+    }
+    fs::path path(Utf8ToWide(trimmed));
+    if (!path.is_absolute()) {
+        if (error) *error = "Folder path must be absolute.";
+        return std::nullopt;
+    }
+    std::error_code ec;
+    fs::create_directories(path, ec);
+    if (ec) {
+        if (error) *error = "Could not create or access folder: " + ec.message();
+        return std::nullopt;
+    }
+    if (!fs::is_directory(path, ec) || ec) {
+        if (error) *error = "Selected path is not a folder.";
+        return std::nullopt;
+    }
+    return CanonicalOrAbsolute(path);
+}
+
+json FolderEntryJson(const fs::path& path) {
+    const std::string label = path.filename().empty()
+        ? WideToUtf8(path.wstring())
+        : WideToUtf8(path.filename().wstring());
+    return {
+        {"name", label},
+        {"path", WideToUtf8(path.wstring())},
+    };
+}
+
+json WindowsDriveEntriesJson() {
+    json entries = json::array();
+    const DWORD mask = GetLogicalDrives();
+    for (int i = 0; i < 26; ++i) {
+        if ((mask & (1u << i)) == 0) continue;
+        wchar_t root[] = {static_cast<wchar_t>(L'A' + i), L':', L'\\', L'\0'};
+        entries.push_back({
+            {"name", WideToUtf8(std::wstring(root))},
+            {"path", WideToUtf8(std::wstring(root))},
+        });
+    }
+    return entries;
+}
+
+json FolderChildrenJson(const fs::path& requested_path) {
+    std::error_code ec;
+    fs::path current = CanonicalOrAbsolute(requested_path);
+    json entries = json::array();
+    std::vector<fs::path> folders;
+    fs::directory_iterator it(
+        current,
+        fs::directory_options::skip_permission_denied,
+        ec);
+    if (!ec) {
+        for (const auto& entry : it) {
+            std::error_code item_ec;
+            if (!entry.is_directory(item_ec) || item_ec) continue;
+            folders.push_back(entry.path());
+        }
+    }
+    std::sort(folders.begin(), folders.end(),
+        [](const fs::path& left, const fs::path& right) {
+            return _wcsicmp(left.filename().c_str(), right.filename().c_str()) < 0;
+        });
+    for (const auto& folder : folders) {
+        entries.push_back(FolderEntryJson(folder));
+    }
+
+    fs::path parent;
+    if (current.has_parent_path() && current.parent_path() != current) {
+        parent = current.parent_path();
+    }
+    return {
+        {"path", WideToUtf8(current.wstring())},
+        {"parent", parent.empty() ? "" : WideToUtf8(parent.wstring())},
+        {"entries", std::move(entries)},
+    };
+}
+
+std::optional<ProjectMcpVariableValue> FindUserDefinableProjectVariable(
+    const ProjectSettings& settings,
+    const std::string& name) {
+    const std::string key = variable_resolver::ToLookupKey(name);
+    if (key.empty() || key == "projectfolder") return std::nullopt;
+    const auto it = std::find_if(settings.project_variables.begin(),
+        settings.project_variables.end(),
+        [&](const ProjectMcpVariableValue& variable) {
+            return variable.allow_user_definition &&
+                   variable_resolver::ToLookupKey(variable.name) == key;
+        });
+    if (it == settings.project_variables.end()) return std::nullopt;
+    return *it;
 }
 
 fs::path MakeUniqueChildPath(const fs::path& directory, const std::string& safe_name) {
@@ -2086,6 +2195,16 @@ bool WebServer::UserCanAccessProject(const Session& session,
     return false;
 }
 
+bool WebServer::UserCanBrowseFoldersForProject(
+    const Session& session,
+    const ProjectSettings& settings) const {
+    if (!settings.allow_privileged_user_project_folder_browse) {
+        return false;
+    }
+    const auto user = user_store_->FindUserById(session.user_id);
+    return user && user->enabled && user->allow_folder_browse;
+}
+
 bool WebServer::ChatBelongsToSessionUser(const ChatInfo& chat,
                                          const Session& session) const {
     const std::string suffix = " [" + session.username + "]";
@@ -2676,6 +2795,92 @@ void WebServer::HandleGetChats(const void* req_ptr, void* res_ptr) {
     SendJson(res_ptr, 200, arr.dump());
 }
 
+void WebServer::HandleGetNewChatOptions(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string project_id = req->path_params.at("id");
+    if (!UserCanAccessProject(*session, project_id)) {
+        SendError(res_ptr, 403, "Access denied");
+        return;
+    }
+
+    const auto project_settings = storage_->LoadProjectSettings(project_id);
+    const bool can_browse =
+        UserCanBrowseFoldersForProject(*session, project_settings);
+
+    const auto runtime_variables = BuildWebRuntimeVariables(
+        storage_, user_store_, project_id, "", session->username, project_settings);
+    const auto resolved_values = BuildResolvedProjectVariables(
+        mcp_manager_, storage_, project_id, runtime_variables);
+    const auto default_project_folder =
+        variable_resolver::FindValue(resolved_values, "ProjectFolder").value_or("");
+
+    json variables = json::array();
+    for (const auto& variable : project_settings.project_variables) {
+        if (!variable.allow_user_definition ||
+            variable.name.empty() ||
+            IsProjectFolderVariableName(variable.name)) {
+            continue;
+        }
+        const auto resolved_value =
+            variable_resolver::FindValue(resolved_values, variable.name);
+        variables.push_back({
+            {"name", variable.name},
+            {"description", variable.description},
+            {"value", resolved_value.value_or(variable.value)},
+            {"inject_into_context", variable.inject_into_context},
+        });
+    }
+
+    json resp = {
+        {"can_browse_folders", can_browse},
+        {"default_project_folder", default_project_folder},
+        {"variables", std::move(variables)},
+    };
+    SendJson(res_ptr, 200, resp.dump());
+}
+
+void WebServer::HandleBrowseProjectFolders(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string project_id = req->path_params.at("id");
+    if (!UserCanAccessProject(*session, project_id)) {
+        SendError(res_ptr, 403, "Access denied");
+        return;
+    }
+
+    const auto project_settings = storage_->LoadProjectSettings(project_id);
+    if (!UserCanBrowseFoldersForProject(*session, project_settings)) {
+        SendError(res_ptr, 403, "Folder browsing is not enabled for this project/user");
+        return;
+    }
+
+    const std::string path_value =
+        req->has_param("path") ? Trim(req->get_param_value("path")) : "";
+    if (path_value.empty()) {
+        json resp = {
+            {"path", ""},
+            {"parent", ""},
+            {"entries", WindowsDriveEntriesJson()},
+        };
+        SendJson(res_ptr, 200, resp.dump());
+        return;
+    }
+
+    fs::path path(Utf8ToWide(path_value));
+    std::error_code ec;
+    if (path.empty() || !path.is_absolute() || !fs::is_directory(path, ec) || ec) {
+        SendError(res_ptr, 400, "Folder is not accessible");
+        return;
+    }
+
+    SendJson(res_ptr, 200, FolderChildrenJson(path).dump());
+}
+
 void WebServer::HandleCreateChat(const void* req_ptr, void* res_ptr) {
     auto session = RequireAuth(req_ptr, res_ptr);
     if (!session) return;
@@ -2698,11 +2903,48 @@ void WebServer::HandleCreateChat(const void* req_ptr, void* res_ptr) {
     name += " [" + session->username + "]";
 
     const auto project_settings = storage_->LoadProjectSettings(project_id);
-    const auto chat = storage_->CreateChat(
+    ChatInfo chat = storage_->CreateChat(
         project_id,
         name,
         project_settings.preferred_provider_id,
         project_settings.preferred_model_id);
+    std::vector<ProjectMcpVariableValue> user_variables;
+    if (UserCanBrowseFoldersForProject(*session, project_settings)) {
+        const std::string requested_folder = body_j.value("project_folder", "");
+        if (!Trim(requested_folder).empty()) {
+            std::string folder_error;
+            const auto folder = NormalizeExistingOrCreatableFolder(
+                requested_folder, &folder_error);
+            if (!folder) {
+                storage_->DeleteChat(project_id, chat.id);
+                SendError(res_ptr, 400, folder_error);
+                return;
+            }
+            ProjectMcpVariableValue value;
+            value.name = "ProjectFolder";
+            value.value = WideToUtf8(folder->wstring());
+            value.description = "Selected folder for this chat";
+            value.inject_into_context = true;
+            user_variables.push_back(std::move(value));
+        }
+    }
+    if (body_j.contains("variables") && body_j["variables"].is_array()) {
+        for (const auto& item : body_j["variables"]) {
+            if (!item.is_object()) continue;
+            const std::string variable_name = item.value("name", "");
+            const auto definition =
+                FindUserDefinableProjectVariable(project_settings, variable_name);
+            if (!definition) continue;
+            ProjectMcpVariableValue value = *definition;
+            value.value = item.value("value", "");
+            value.allow_user_definition = false;
+            user_variables.push_back(std::move(value));
+        }
+    }
+    if (!user_variables.empty()) {
+        chat.user_variables = std::move(user_variables);
+        storage_->SaveChat(project_id, chat);
+    }
     AppendAuditLog(GetRemoteAddr(req_ptr), "chat_created",
                    "user=" + session->username + " project=" + project_id
                    + " chat=" + chat.id);
@@ -4030,6 +4272,8 @@ json ProjectSettingsDebugJson(
         {"enable_chat_logging", settings.enable_chat_logging},
         {"enable_web_debugging", settings.enable_web_debugging},
         {"enable_automation", settings.enable_automation},
+        {"allow_privileged_user_project_folder_browse",
+            settings.allow_privileged_user_project_folder_browse},
         {"allow_manual_context_compression", settings.allow_manual_context_compression},
         {"built_in_powershell_enabled", settings.built_in_powershell_enabled},
         {"built_in_artifact_memory_enabled", settings.built_in_artifact_memory_enabled},
@@ -7926,6 +8170,14 @@ void WebServer::RegisterRoutes() {
         // httplib captures go into req.matches; re-expose as path_params-style
         const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
         HandleGetChats(&req, &res);
+    });
+    srv.Get(R"(/api/projects/([^/]+)/new-chat-options)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleGetNewChatOptions(&req, &res);
+    });
+    srv.Get(R"(/api/projects/([^/]+)/folders)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleBrowseProjectFolders(&req, &res);
     });
     srv.Post(R"(/api/projects/([^/]+)/chats)", [this](const httplib::Request& req, httplib::Response& res) {
         const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();

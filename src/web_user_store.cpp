@@ -170,6 +170,7 @@ static json UserToJson(const WebUser& u) {
         {"password_hash",         u.password_hash},
         {"enabled",               u.enabled},
         {"force_password_reset",  u.force_password_reset},
+        {"allow_folder_browse",   u.allow_folder_browse},
         {"created_at",            u.created_at},
         {"last_login_at",         u.last_login_at},
     };
@@ -184,6 +185,7 @@ static WebUser UserFromJson(const json& j) {
     u.password_hash        = j.value("password_hash", "");
     u.enabled              = j.value("enabled", true);
     u.force_password_reset = j.value("force_password_reset", false);
+    u.allow_folder_browse  = j.value("allow_folder_browse", false);
     u.created_at           = j.value("created_at", "");
     u.last_login_at        = j.value("last_login_at", "");
     return u;

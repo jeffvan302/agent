@@ -140,6 +140,14 @@ struct ChatContextDebugEntry {
     std::string rag_working_set_json; // JSON array of RagWorkingSetEntry records injected this turn
 };
 
+struct ProjectMcpVariableValue {
+    std::string name;
+    std::string value;
+    std::string description;
+    bool inject_into_context = false;
+    bool allow_user_definition = false;
+};
+
 struct ChatInfo {
     std::string id;
     std::string name;
@@ -149,6 +157,7 @@ struct ChatInfo {
     double temperature = 0.2;
     int max_tokens = 1024;
     std::string selected_agentic_mode_id;  // per-chat override; empty means use project default
+    std::vector<ProjectMcpVariableValue> user_variables; // per-chat user-defined project variable overrides
 };
 
 struct ProjectInfo {
@@ -176,13 +185,6 @@ struct McpServerVariable {
     std::string name;
     std::string description;
     McpVariableKind kind = McpVariableKind::None;
-    bool inject_into_context = false;
-};
-
-struct ProjectMcpVariableValue {
-    std::string name;
-    std::string value;
-    std::string description;
     bool inject_into_context = false;
 };
 
@@ -669,6 +671,7 @@ struct ProjectSettings {
     bool enable_web_debugging = false;             // Allow prompt/context debugging bubbles in the web UI
     bool serve_web_links_inline = false;            // Serve /data and /rag file links inline instead of forced downloads
     bool enable_automation = false;                 // Enable automation sequence recording and playback in web UI
+    bool allow_privileged_user_project_folder_browse = false; // Allow privileged web users to pick ProjectFolder on new chats
     bool built_in_powershell_enabled = false;      // Enable high-risk built-in PowerShell execution tool
     std::string built_in_powershell_working_directory = "$ProjectFolder$";
     bool built_in_artifact_memory_enabled = false;  // Enable versioned Artifact/Code Memory tools without requiring L0 compression

@@ -3864,6 +3864,8 @@ void MainWindow::EditProjectSettings() {
     options.enable_web_debugging = project_settings.enable_web_debugging;
     options.serve_web_links_inline = project_settings.serve_web_links_inline;
     options.enable_automation = project_settings.enable_automation;
+    options.allow_privileged_user_project_folder_browse =
+        project_settings.allow_privileged_user_project_folder_browse;
     options.built_in_powershell_enabled = project_settings.built_in_powershell_enabled;
     options.built_in_powershell_working_directory = project_settings.built_in_powershell_working_directory;
     options.built_in_artifact_memory_enabled = project_settings.built_in_artifact_memory_enabled;
@@ -3930,6 +3932,8 @@ void MainWindow::EditProjectSettings() {
     saved_settings.enable_web_debugging = result->enable_web_debugging;
     saved_settings.serve_web_links_inline = result->serve_web_links_inline;
     saved_settings.enable_automation = result->enable_automation;
+    saved_settings.allow_privileged_user_project_folder_browse =
+        result->allow_privileged_user_project_folder_browse;
     saved_settings.built_in_powershell_enabled = result->built_in_powershell_enabled;
     saved_settings.built_in_powershell_working_directory = result->built_in_powershell_working_directory;
     saved_settings.built_in_artifact_memory_enabled = result->built_in_artifact_memory_enabled;

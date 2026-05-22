@@ -182,6 +182,8 @@ private:
     std::optional<Session> RequireAuth(const void* req_ptr, void* res_ptr);
     bool                UserCanAccessProject(const Session& session,
                                              const std::string& project_id) const;
+    bool                UserCanBrowseFoldersForProject(const Session& session,
+                                                       const ProjectSettings& settings) const;
     bool                ChatBelongsToSessionUser(const ChatInfo& chat,
                                                  const Session& session) const;
     std::optional<ChatInfo> FindChatInProject(const std::string& project_id,
@@ -207,6 +209,8 @@ private:
     // ── API routes (require auth) ─────────────────────────────────────────
     void HandleGetProjects    (const void* req, void* res);
     void HandleGetChats       (const void* req, void* res);
+    void HandleGetNewChatOptions(const void* req, void* res);
+    void HandleBrowseProjectFolders(const void* req, void* res);
     void HandleCreateChat     (const void* req, void* res);
     void HandleDeleteChat     (const void* req, void* res);
     void HandleGetMessages    (const void* req, void* res);

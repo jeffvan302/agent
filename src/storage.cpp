@@ -791,6 +791,7 @@ json ProjectMcpVariableValueToJson(const ProjectMcpVariableValue& variable) {
         {"value", variable.value},
         {"description", variable.description},
         {"inject_into_context", variable.inject_into_context},
+        {"allow_user_definition", variable.allow_user_definition},
     };
 }
 
@@ -800,6 +801,7 @@ ProjectMcpVariableValue ProjectMcpVariableValueFromJson(const json& item) {
     variable.value = item.value("value", "");
     variable.description = item.value("description", "");
     variable.inject_into_context = item.value("inject_into_context", false);
+    variable.allow_user_definition = item.value("allow_user_definition", false);
     return variable;
 }
 
@@ -1010,6 +1012,10 @@ std::string ProjectNameFromSettingsJson(const json& item) {
 }
 
 json ChatToJson(const ChatInfo& chat) {
+    json user_vars = json::array();
+    for (const auto& variable : chat.user_variables) {
+        user_vars.push_back(ProjectMcpVariableValueToJson(variable));
+    }
     return json{
         {"id", chat.id},
         {"name", chat.name},
@@ -1019,6 +1025,7 @@ json ChatToJson(const ChatInfo& chat) {
         {"temperature", chat.temperature},
         {"max_tokens", chat.max_tokens},
         {"selected_agentic_mode_id", chat.selected_agentic_mode_id},
+        {"user_variables", std::move(user_vars)},
     };
 }
 
@@ -1032,6 +1039,15 @@ ChatInfo ChatFromJson(const json& item, const std::string& fallback_id) {
     chat.temperature = item.value("temperature", 0.2);
     chat.max_tokens = item.value("max_tokens", 1024);
     chat.selected_agentic_mode_id = item.value("selected_agentic_mode_id", "");
+    if (item.contains("user_variables") && item["user_variables"].is_array()) {
+        for (const auto& variable_item : item["user_variables"]) {
+            if (!variable_item.is_object()) continue;
+            ProjectMcpVariableValue variable = ProjectMcpVariableValueFromJson(variable_item);
+            if (!variable.name.empty()) {
+                chat.user_variables.push_back(std::move(variable));
+            }
+        }
+    }
     return chat;
 }
 
@@ -2470,6 +2486,8 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     j["enable_web_debugging"] = settings.enable_web_debugging;
     j["serve_web_links_inline"] = settings.serve_web_links_inline;
     j["enable_automation"] = settings.enable_automation;
+    j["allow_privileged_user_project_folder_browse"] =
+        settings.allow_privileged_user_project_folder_browse;
     j["built_in_powershell_enabled"] = settings.built_in_powershell_enabled;
     j["built_in_powershell_working_directory"] = settings.built_in_powershell_working_directory;
     j["built_in_artifact_memory_enabled"] = settings.built_in_artifact_memory_enabled;
@@ -2547,11 +2565,7 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     if (j.contains("project_variables") && j["project_variables"].is_array()) {
         for (const auto& item : j["project_variables"]) {
             if (item.is_object()) {
-                ProjectMcpVariableValue pv;
-                pv.name  = item.value("name",  "");
-                pv.value = item.value("value", "");
-                pv.description = item.value("description", "");
-                pv.inject_into_context = item.value("inject_into_context", false);
+                ProjectMcpVariableValue pv = ProjectMcpVariableValueFromJson(item);
                 if (!pv.name.empty()) settings.project_variables.push_back(std::move(pv));
             }
         }
@@ -2572,6 +2586,8 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     settings.enable_web_debugging = j.value("enable_web_debugging", false);
     settings.serve_web_links_inline = j.value("serve_web_links_inline", false);
     settings.enable_automation = j.value("enable_automation", false);
+    settings.allow_privileged_user_project_folder_browse =
+        j.value("allow_privileged_user_project_folder_browse", false);
     settings.built_in_powershell_enabled = j.value("built_in_powershell_enabled", false);
     settings.built_in_powershell_working_directory = j.value(
         "built_in_powershell_working_directory", "$ProjectFolder$");

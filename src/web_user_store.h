@@ -19,6 +19,7 @@ struct WebUser {
     std::string password_hash;    // "pbkdf2:100000:<hex_salt>:<hex_key>"
     bool enabled = true;
     bool force_password_reset = false;
+    bool allow_folder_browse = false;
     std::string created_at;       // ISO 8601
     std::string last_login_at;    // ISO 8601, may be empty
 };

@@ -57,6 +57,8 @@ enum ControlId : int {
     kUserSelectModelCheck = 6419,
     kUserSelectableModelsListLabel = 6509,
     kUserSelectableModelsList = 6510,
+    kProjectFolderBrowseCheck = 6511,
+    kProjVarsUserDefinitionCheck = 6512,
 
     // Right panel - context window
     kContextWindowLabel = 6410,
@@ -219,6 +221,10 @@ struct ContextPreviewWindowState {
     HFONT font = nullptr;
     HFONT mono_font = nullptr;
 };
+
+bool IsProjectFolderVariableName(const std::string& name) {
+    return variable_resolver::ToLookupKey(name) == "projectfolder";
+}
 
 int Scale(HWND hwnd, int value) {
     return MulDiv(value, GetDpiForWindow(hwnd), 96);
@@ -720,6 +726,7 @@ private:
             &manual_context_compression_check_,
             &chat_logging_check_,
             &web_debugging_check_,
+            &project_folder_browse_check_,
             &inline_web_links_check_,
             &internal_tools_list_,
             &internal_powershell_enabled_check_,
@@ -761,6 +768,7 @@ private:
             &proj_vars_value_edit_,
             &proj_vars_description_edit_,
             &proj_vars_inject_check_,
+            &proj_vars_user_definition_check_,
             &agentic_mode_combo_,
             &agentic_modes_list_,
             &instructions_edit_,
@@ -1298,6 +1306,7 @@ private:
         proj_vars_description_label_ = CreateWindowExW(0, L"STATIC", L"Description:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsDescriptionLabel), nullptr, nullptr);
         proj_vars_description_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsDescriptionEdit), nullptr, nullptr);
         proj_vars_inject_check_ = CreateWindowExW(0, L"BUTTON", L"Inject this variable into the context window", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsInjectCheck), nullptr, nullptr);
+        proj_vars_user_definition_check_ = CreateWindowExW(0, L"BUTTON", L"Allow user definition", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjVarsUserDefinitionCheck), nullptr, nullptr);
 
         agentic_mode_label_ = CreateWindowExW(0, L"STATIC", L"Default Agentic Mode:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kAgenticModeLabel), nullptr, nullptr);
         agentic_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kAgenticModeCombo), nullptr, nullptr);
@@ -1320,6 +1329,9 @@ private:
         automation_check_ = CreateWindowExW(0, L"BUTTON", L"Enable automation sequence recording",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kAutomationCheck), nullptr, nullptr);
+        project_folder_browse_check_ = CreateWindowExW(0, L"BUTTON", L"Allow privileged users to browse new chat locations, (set ProjectFolder variable)",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kProjectFolderBrowseCheck), nullptr, nullptr);
 
         instructions_label_ = CreateWindowExW(0, L"STATIC", L"Project Instructions:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kInstructionsLabel), nullptr, nullptr);
         import_instructions_button_ = CreateWindowExW(0, L"BUTTON", L"Import Markdown", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kImportInstructions), nullptr, nullptr);
@@ -1374,8 +1386,10 @@ private:
             proj_vars_header_, proj_vars_list_, proj_vars_add_btn_, proj_vars_remove_btn_,
             proj_vars_name_label_, proj_vars_name_edit_, proj_vars_value_label_, proj_vars_value_edit_,
             proj_vars_description_label_, proj_vars_description_edit_, proj_vars_inject_check_,
+            proj_vars_user_definition_check_,
             agentic_mode_label_, agentic_mode_combo_, agentic_modes_list_label_, agentic_modes_list_,
-            chat_logging_check_, manual_context_compression_check_, web_debugging_check_, inline_web_links_check_, automation_check_,
+            chat_logging_check_, manual_context_compression_check_, web_debugging_check_,
+            inline_web_links_check_, automation_check_, project_folder_browse_check_,
             instructions_label_, import_instructions_button_, instructions_edit_,
             check_context_button_, save_button_, cancel_button_
         };
@@ -1414,6 +1428,7 @@ private:
         EnableWindow(proj_vars_value_edit_,  FALSE);
         EnableWindow(proj_vars_description_edit_, FALSE);
         EnableWindow(proj_vars_inject_check_, FALSE);
+        EnableWindow(proj_vars_user_definition_check_, FALSE);
         EnableWindow(proj_vars_remove_btn_,  FALSE);
 
         // Populate model tools checklist
@@ -1466,6 +1481,9 @@ private:
         }
         if (options_.enable_automation) {
             CheckDlgButton(scroll_content_host_, kAutomationCheck, BST_CHECKED);
+        }
+        if (options_.allow_privileged_user_project_folder_browse) {
+            CheckDlgButton(scroll_content_host_, kProjectFolderBrowseCheck, BST_CHECKED);
         }
         internal_powershell_enabled_ = options_.built_in_powershell_enabled;
         internal_artifact_memory_enabled_ = options_.built_in_artifact_memory_enabled;
@@ -1592,6 +1610,8 @@ private:
         MoveWindow(inline_web_links_check_, 0, y, right_width, Scale(hwnd_, 20), TRUE);
         y += Scale(hwnd_, 24);
         MoveWindow(automation_check_, 0, y, right_width, Scale(hwnd_, 20), TRUE);
+        y += Scale(hwnd_, 24);
+        MoveWindow(project_folder_browse_check_, 0, y, right_width, Scale(hwnd_, 20), TRUE);
 
         y += Scale(hwnd_, 26) + gutter;
         MoveWindow(internal_tools_header_, 0, y, right_width, label_height, TRUE);
@@ -1725,7 +1745,11 @@ private:
             MoveWindow(proj_vars_description_edit_, pv_lbl_w, y, inner_right_w - pv_lbl_w, pv_edit_h, TRUE);
             y += pv_row_h + gutter;
 
-            MoveWindow(proj_vars_inject_check_, pv_lbl_w, y, inner_right_w - pv_lbl_w, Scale(hwnd_, 20), TRUE);
+            const int available_checks_w = std::max(0, inner_right_w - pv_lbl_w - gutter);
+            const int pv_checks_w = available_checks_w / 2;
+            MoveWindow(proj_vars_inject_check_, pv_lbl_w, y, pv_checks_w, Scale(hwnd_, 20), TRUE);
+            MoveWindow(proj_vars_user_definition_check_, pv_lbl_w + pv_checks_w + gutter, y,
+                       std::max(0, inner_right_w - pv_lbl_w - pv_checks_w - gutter), Scale(hwnd_, 20), TRUE);
             y += Scale(hwnd_, 22) + gutter;
         }
 
@@ -1964,6 +1988,11 @@ private:
             }
             break;
         case kProjVarsInjectCheck:
+            if (notification_code == BN_CLICKED && !updating_proj_var_) {
+                OnProjVarEditChanged();
+            }
+            break;
+        case kProjVarsUserDefinitionCheck:
             if (notification_code == BN_CLICKED && !updating_proj_var_) {
                 OnProjVarEditChanged();
             }
@@ -3031,6 +3060,9 @@ private:
             if (pv.inject_into_context) {
                 text += L" [context]";
             }
+            if (pv.allow_user_definition && !IsProjectFolderVariableName(pv.name)) {
+                text += L" [user]";
+            }
             ListBox_AddString(proj_vars_list_, text.c_str());
         }
     }
@@ -3044,17 +3076,26 @@ private:
             SetWindowTextW(proj_vars_value_edit_, Utf8ToWide(project_variables_[index].value).c_str());
             SetWindowTextW(proj_vars_description_edit_, Utf8ToWide(project_variables_[index].description).c_str());
             Button_SetCheck(proj_vars_inject_check_, project_variables_[index].inject_into_context ? BST_CHECKED : BST_UNCHECKED);
+            const bool is_project_folder = IsProjectFolderVariableName(project_variables_[index].name);
+            if (is_project_folder) {
+                project_variables_[index].allow_user_definition = false;
+            }
+            Button_SetCheck(proj_vars_user_definition_check_,
+                project_variables_[index].allow_user_definition ? BST_CHECKED : BST_UNCHECKED);
         } else {
             SetWindowTextW(proj_vars_name_edit_,  L"");
             SetWindowTextW(proj_vars_value_edit_, L"");
             SetWindowTextW(proj_vars_description_edit_, L"");
             Button_SetCheck(proj_vars_inject_check_, BST_UNCHECKED);
+            Button_SetCheck(proj_vars_user_definition_check_, BST_UNCHECKED);
         }
         updating_proj_var_ = false;
         EnableWindow(proj_vars_name_edit_,  has_sel ? TRUE : FALSE);
         EnableWindow(proj_vars_value_edit_, has_sel ? TRUE : FALSE);
         EnableWindow(proj_vars_description_edit_, has_sel ? TRUE : FALSE);
         EnableWindow(proj_vars_inject_check_, has_sel ? TRUE : FALSE);
+        EnableWindow(proj_vars_user_definition_check_,
+            (has_sel && !IsProjectFolderVariableName(project_variables_[index].name)) ? TRUE : FALSE);
         EnableWindow(proj_vars_remove_btn_, has_sel ? TRUE : FALSE);
     }
 
@@ -3067,6 +3108,9 @@ private:
         pv.value = WideToUtf8(GetWindowTextString(proj_vars_value_edit_));
         pv.description = WideToUtf8(GetWindowTextString(proj_vars_description_edit_));
         pv.inject_into_context = Button_GetCheck(proj_vars_inject_check_) == BST_CHECKED;
+        pv.allow_user_definition =
+            !IsProjectFolderVariableName(pv.name) &&
+            Button_GetCheck(proj_vars_user_definition_check_) == BST_CHECKED;
     }
 
     void OnProjVarsSelChange() {
@@ -3112,6 +3156,15 @@ private:
         pv.value = WideToUtf8(GetWindowTextString(proj_vars_value_edit_));
         pv.description = WideToUtf8(GetWindowTextString(proj_vars_description_edit_));
         pv.inject_into_context = Button_GetCheck(proj_vars_inject_check_) == BST_CHECKED;
+        pv.allow_user_definition =
+            !IsProjectFolderVariableName(pv.name) &&
+            Button_GetCheck(proj_vars_user_definition_check_) == BST_CHECKED;
+        if (IsProjectFolderVariableName(pv.name)) {
+            Button_SetCheck(proj_vars_user_definition_check_, BST_UNCHECKED);
+            EnableWindow(proj_vars_user_definition_check_, FALSE);
+        } else {
+            EnableWindow(proj_vars_user_definition_check_, TRUE);
+        }
         // Refresh label in-place (delete+reinsert keeps selection).
         updating_proj_var_ = true;
         std::wstring text = Utf8ToWide(pv.name.empty() ? std::string("(unnamed)") : pv.name);
@@ -3119,6 +3172,9 @@ private:
         text += Utf8ToWide(pv.value);
         if (pv.inject_into_context) {
             text += L" [context]";
+        }
+        if (pv.allow_user_definition) {
+            text += L" [user]";
         }
         ListBox_DeleteString(proj_vars_list_, selected_proj_var_index_);
         ListBox_InsertString(proj_vars_list_, selected_proj_var_index_, text.c_str());
@@ -3277,6 +3333,11 @@ private:
         }
         result.model_tool_ids = std::move(model_tool_ids);
         result.project_variables = project_variables_;
+        for (auto& variable : result.project_variables) {
+            if (IsProjectFolderVariableName(variable.name)) {
+                variable.allow_user_definition = false;
+            }
+        }
         result.selected_agentic_mode_id = std::move(selected_agentic_mode_id);
         result.enabled_agentic_mode_ids = std::move(enabled_agentic_mode_ids);
         result.enable_chat_logging = (IsDlgButtonChecked(scroll_content_host_, kChatLoggingCheck) == BST_CHECKED);
@@ -3284,6 +3345,8 @@ private:
         result.enable_web_debugging = (IsDlgButtonChecked(scroll_content_host_, kWebDebuggingCheck) == BST_CHECKED);
         result.serve_web_links_inline = (IsDlgButtonChecked(scroll_content_host_, kInlineWebLinksCheck) == BST_CHECKED);
         result.enable_automation = (IsDlgButtonChecked(scroll_content_host_, kAutomationCheck) == BST_CHECKED);
+        result.allow_privileged_user_project_folder_browse =
+            (IsDlgButtonChecked(scroll_content_host_, kProjectFolderBrowseCheck) == BST_CHECKED);
         result.built_in_powershell_enabled = internal_powershell_enabled_;
         result.built_in_powershell_working_directory = workdir_;
         if (result.built_in_powershell_working_directory.empty()) {
@@ -3904,6 +3967,7 @@ private:
     HWND web_debugging_check_ = nullptr;
     HWND inline_web_links_check_ = nullptr;
     HWND automation_check_ = nullptr;
+    HWND project_folder_browse_check_ = nullptr;
     HWND internal_tools_header_ = nullptr;
     HWND internal_tools_list_ = nullptr;
     WNDPROC internal_tools_list_prev_proc_ = nullptr;
@@ -3992,6 +4056,7 @@ private:
     HWND proj_vars_description_label_ = nullptr;
     HWND proj_vars_description_edit_ = nullptr;
     HWND proj_vars_inject_check_ = nullptr;
+    HWND proj_vars_user_definition_check_ = nullptr;
 };
 
 }  // namespace

@@ -1021,6 +1021,13 @@ static bool ShowUserEditDialog(HWND owner, UserEditState& ues)
                 SendMessageW(chk2, WM_SETFONT, (WPARAM)f, TRUE);
                 Button_SetCheck(chk2,
                     st->user.force_password_reset ? BST_CHECKED : BST_UNCHECKED);
+                y += 30;
+                HWND chk3 = CreateWindowExW(0, L"BUTTON", L"Allow browsing folders",
+                    WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,
+                    126, y, 240, 20, hw, (HMENU)107, nullptr, nullptr);
+                SendMessageW(chk3, WM_SETFONT, (WPARAM)f, TRUE);
+                Button_SetCheck(chk3,
+                    st->user.allow_folder_browse ? BST_CHECKED : BST_UNCHECKED);
                 y += 36;
                 // OK / Cancel
                 HWND btnOk = CreateWindowExW(0, L"BUTTON", L"OK",
@@ -1049,6 +1056,8 @@ static bool ShowUserEditDialog(HWND owner, UserEditState& ues)
                     st->user.enabled = (Button_GetCheck(GetDlgItem(hw, 105)) == BST_CHECKED);
                     st->user.force_password_reset =
                         (Button_GetCheck(GetDlgItem(hw, 106)) == BST_CHECKED);
+                    st->user.allow_folder_browse =
+                        (Button_GetCheck(GetDlgItem(hw, 107)) == BST_CHECKED);
                     st->ok = true;
                     DestroyWindow(hw);
                 } else if (id == IDCANCEL) {
@@ -1070,7 +1079,7 @@ static bool ShowUserEditDialog(HWND owner, UserEditState& ues)
 
     RECT or_ = {};
     if (owner) GetWindowRect(owner, &or_);
-    int h = ues.is_new ? 320 : 290;
+    int h = ues.is_new ? 350 : 320;
     int ox = or_.left + (or_.right  - or_.left - 380) / 2;
     int oy = or_.top  + (or_.bottom - or_.top  - h)   / 2;
 
