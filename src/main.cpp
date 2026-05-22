@@ -3845,6 +3845,8 @@ void MainWindow::EditProjectSettings() {
     options.providers = providers_;
     options.preferred_provider_id = project_settings.preferred_provider_id;
     options.preferred_model_id = project_settings.preferred_model_id;
+    options.user_select_model_enabled = project_settings.user_select_model_enabled;
+    options.user_selectable_models = project_settings.user_selectable_models;
 
     // Model tools
     options.model_tools = storage_.LoadModelTools();
@@ -3917,6 +3919,8 @@ void MainWindow::EditProjectSettings() {
     saved_settings.rag_bindings = result->rag_bindings;
     saved_settings.preferred_provider_id = result->preferred_provider_id;
     saved_settings.preferred_model_id = result->preferred_model_id;
+    saved_settings.user_select_model_enabled = result->user_select_model_enabled;
+    saved_settings.user_selectable_models = result->user_selectable_models;
     saved_settings.model_tool_ids = result->model_tool_ids;
     saved_settings.project_variables = result->project_variables;
     saved_settings.selected_agentic_mode_id = result->selected_agentic_mode_id;

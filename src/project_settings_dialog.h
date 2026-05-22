@@ -26,6 +26,8 @@ struct ProjectSettingsOptions {
     std::vector<ProviderConfig> providers;      // all configured providers+models
     std::string preferred_provider_id;          // currently selected project model
     std::string preferred_model_id;
+    bool user_select_model_enabled = false;     // allow web users to select approved models
+    std::vector<ProjectModelSelection> user_selectable_models;
     std::vector<ModelToolConfig> model_tools;          // all configured model tools
     std::vector<std::string> initial_model_tool_ids;   // currently enabled tool IDs for this project
     std::vector<ProjectMcpVariableValue> initial_project_variables;  // existing project-level variables
@@ -67,6 +69,8 @@ struct ProjectSettingsResult {
     std::vector<ProjectRagBinding> rag_bindings;
     std::string preferred_provider_id;
     std::string preferred_model_id;
+    bool user_select_model_enabled = false;
+    std::vector<ProjectModelSelection> user_selectable_models;
     std::vector<std::string> model_tool_ids;   // enabled tool IDs after editing
     std::vector<ProjectMcpVariableValue> project_variables;  // project-level variables after editing
     std::string selected_agentic_mode_id;       // selected default agentic mode

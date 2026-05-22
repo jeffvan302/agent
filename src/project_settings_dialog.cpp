@@ -54,6 +54,9 @@ enum ControlId : int {
     kModelCombo = 6416,
     kModelTimeoutLabel = 6417,
     kModelTimeoutEdit = 6418,
+    kUserSelectModelCheck = 6419,
+    kUserSelectableModelsListLabel = 6509,
+    kUserSelectableModelsList = 6510,
 
     // Right panel - context window
     kContextWindowLabel = 6410,
@@ -199,6 +202,14 @@ struct RagRow {
     double default_min_confidence = 0.0;
     double default_max_confidence = 1.0;
     RagRetrievalMode retrieval_mode = RagRetrievalMode::Both;
+};
+
+struct ModelEntry {
+    std::string provider_id;
+    std::string model_id;
+    std::wstring label;
+    bool supports_streaming = false;
+    bool supports_tools = false;
 };
 
 struct ContextPreviewWindowState {
@@ -703,6 +714,8 @@ private:
         static const std::vector<HWND*> kTabOrder = {
             &model_combo_,
             &model_timeout_edit_,
+            &user_select_model_check_,
+            &user_selectable_models_list_,
             &context_window_combo_,
             &manual_context_compression_check_,
             &chat_logging_check_,
@@ -857,6 +870,46 @@ private:
         }
         if (self && self->agentic_modes_list_prev_proc_) {
             return CallWindowProcW(self->agentic_modes_list_prev_proc_, hwnd, message, w_param, l_param);
+        }
+        return DefWindowProcW(hwnd, message, w_param, l_param);
+    }
+
+    static LRESULT CALLBACK UserSelectableModelsListProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+        auto* self = reinterpret_cast<ProjectSettingsDialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (self) {
+            switch (message) {
+            case WM_LBUTTONDOWN: {
+                const int x = GET_X_LPARAM(l_param);
+                const int y = GET_Y_LPARAM(l_param);
+                const LRESULT item_info = SendMessageW(hwnd, LB_ITEMFROMPOINT, 0, MAKELPARAM(x, y));
+                const int index = LOWORD(item_info);
+                const bool outside = HIWORD(item_info) != 0;
+                if (!outside && index >= 0 && index < static_cast<int>(self->user_model_enabled_.size())) {
+                    SetFocus(hwnd);
+                    ListBox_SetCurSel(hwnd, index);
+                    if (x <= Scale(hwnd, 42)) {
+                        self->ToggleUserSelectableModel(index);
+                        return 0;
+                    }
+                    return 0;
+                }
+                break;
+            }
+            case WM_KEYDOWN:
+                if (w_param == VK_SPACE) {
+                    const int index = ListBox_GetCurSel(hwnd);
+                    if (index >= 0 && index < static_cast<int>(self->user_model_enabled_.size())) {
+                        self->ToggleUserSelectableModel(index);
+                        return 0;
+                    }
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        if (self && self->user_selectable_models_list_prev_proc_) {
+            return CallWindowProcW(self->user_selectable_models_list_prev_proc_, hwnd, message, w_param, l_param);
         }
         return DefWindowProcW(hwnd, message, w_param, l_param);
     }
@@ -1062,6 +1115,18 @@ private:
 
     model_timeout_label_ = CreateWindowExW(0, L"STATIC", L"Model timeout (seconds, 0 = infinite):", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kModelTimeoutLabel), nullptr, nullptr);
     model_timeout_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kModelTimeoutEdit), nullptr, nullptr);
+    user_select_model_check_ = CreateWindowExW(0, L"BUTTON", L"User Select Model",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kUserSelectModelCheck), nullptr, nullptr);
+    user_selectable_models_list_label_ = CreateWindowExW(0, L"STATIC", L"User Selectable Models (stream + tools):",
+        WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_,
+        reinterpret_cast<HMENU>(kUserSelectableModelsListLabel), nullptr, nullptr);
+    user_selectable_models_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY,
+        0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kUserSelectableModelsList), nullptr, nullptr);
+    SetWindowLongPtrW(user_selectable_models_list_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    user_selectable_models_list_prev_proc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+        user_selectable_models_list_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&ProjectSettingsDialog::UserSelectableModelsListProc)));
 
         // Context window section
         context_window_label_ = CreateWindowExW(0, L"STATIC", L"Context Window Compression:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kContextWindowLabel), nullptr, nullptr);
@@ -1284,6 +1349,7 @@ private:
             model_tools_header_, model_tools_list_,
             variables_header_,
             model_label_, model_combo_, model_timeout_label_, model_timeout_edit_,
+            user_select_model_check_, user_selectable_models_list_label_, user_selectable_models_list_,
             context_window_label_, context_window_combo_, manual_context_compression_check_,
             internal_tools_header_, internal_tools_list_, internal_tool_settings_panel_,
             internal_powershell_enabled_check_, internal_powershell_workdir_label_,
@@ -1327,6 +1393,10 @@ private:
 
         // Populate model combo
         PopulateModelCombo();
+        if (options_.user_select_model_enabled) {
+            CheckDlgButton(scroll_content_host_, kUserSelectModelCheck, BST_CHECKED);
+        }
+        RefreshUserSelectableModelList();
 
         // Populate compression config dropdown
         RefreshCompressionCombo();
@@ -1500,7 +1570,13 @@ private:
         const int model_timeout_label_w = Scale(hwnd_, 260);
         MoveWindow(model_timeout_label_, 0, y, model_timeout_label_w, Scale(hwnd_, 20), TRUE);
         MoveWindow(model_timeout_edit_, model_timeout_label_w + gutter, y, Scale(hwnd_, 64), Scale(hwnd_, 22), TRUE);
-        y += Scale(hwnd_, 24) + gutter * 2;
+        y += Scale(hwnd_, 24) + gutter;
+        MoveWindow(user_select_model_check_, 0, y, right_width, Scale(hwnd_, 20), TRUE);
+        y += Scale(hwnd_, 24) + gutter;
+        MoveWindow(user_selectable_models_list_label_, 0, y, right_width, label_height, TRUE);
+        y += label_height + gutter;
+        MoveWindow(user_selectable_models_list_, 0, y, right_width, Scale(hwnd_, 118), TRUE);
+        y += Scale(hwnd_, 118) + gutter * 2;
 
         // Context window section
         MoveWindow(context_window_label_, 0, y, right_width, label_height, TRUE);
@@ -1665,7 +1741,7 @@ private:
         MoveWindow(agentic_modes_list_label_, am_half + gutter, am_top,       am_half, am_label_h, TRUE);
         MoveWindow(agentic_modes_list_,       am_half + gutter, am_top + am_label_h + gutter,
                                               am_half,              am_control_h, TRUE);
-        y = am_top + am_label_h + gutter + Scale(hwnd_, 28) + gutter;
+        y = am_top + am_label_h + gutter + std::max(Scale(hwnd_, 28), am_control_h) + gutter;
 
         const int import_width = Scale(hwnd_, 130);
         MoveWindow(instructions_label_, 0, y + Scale(hwnd_, 5), right_width - import_width - gutter, label_height, TRUE);
@@ -1723,6 +1799,18 @@ private:
             break;
         case kServerEnabled:
             OnServerEnabledChanged();
+            break;
+        case kModelCombo:
+            if (notification_code == CBN_SELCHANGE) {
+                RefreshUserSelectableModelList();
+            }
+            break;
+        case kUserSelectModelCheck:
+            if (notification_code == BN_CLICKED) {
+                RefreshUserSelectableModelList();
+            }
+            break;
+        case kUserSelectableModelsList:
             break;
         case kContextWindowCombo:
             if (notification_code == CBN_SELCHANGE) {
@@ -2089,6 +2177,8 @@ private:
                 ModelEntry entry;
                 entry.provider_id = provider.id;
                 entry.model_id = model.id;
+                entry.supports_streaming = model.supports_streaming;
+                entry.supports_tools = model.supports_tools;
 
                 std::wstring label = Utf8ToWide(provider.name + " / " + model.display_name);
                 if (model.context_window > 0) {
@@ -2099,6 +2189,7 @@ private:
                 if (model.supports_vision)    label += L" [vision]";
                 if (model.supports_embedding) label += L" [embed]";
                 if (model.supports_thinking)  label += L" [think]";
+                entry.label = label;
 
                 if (entry.provider_id == options_.preferred_provider_id &&
                     entry.model_id == options_.preferred_model_id) {
@@ -2110,6 +2201,136 @@ private:
         }
         ComboBox_SetCurSel(model_combo_, preferred);
         EnableWindow(model_combo_, model_entries_.size() > 1);
+    }
+
+    static bool SameModelEntry(const ModelEntry& entry, const ProjectModelSelection& selection) {
+        return entry.provider_id == selection.provider_id &&
+               entry.model_id == selection.model_id;
+    }
+
+    bool SameModelEntry(const ModelEntry& left, const ModelEntry& right) const {
+        return left.provider_id == right.provider_id &&
+               left.model_id == right.model_id;
+    }
+
+    ModelEntry CurrentDefaultModelEntry() const {
+        if (model_combo_) {
+            const int sel = ComboBox_GetCurSel(model_combo_);
+            if (sel > 0 && static_cast<size_t>(sel) < model_entries_.size()) {
+                return model_entries_[static_cast<size_t>(sel)];
+            }
+        }
+        for (const auto& entry : model_entries_) {
+            if (!entry.provider_id.empty() && !entry.model_id.empty()) {
+                return entry;
+            }
+        }
+        return {};
+    }
+
+    bool ModelInitiallyUserSelectable(const ModelEntry& entry) const {
+        if (entry.provider_id.empty() || entry.model_id.empty()) return false;
+        return std::find_if(
+            options_.user_selectable_models.begin(),
+            options_.user_selectable_models.end(),
+            [&](const ProjectModelSelection& selection) {
+                return SameModelEntry(entry, selection);
+            }) != options_.user_selectable_models.end();
+    }
+
+    bool IsCurrentDefaultUserModelIndex(int index) const {
+        if (index < 0 || index >= static_cast<int>(user_selectable_model_entries_.size())) {
+            return false;
+        }
+        const ModelEntry default_entry = CurrentDefaultModelEntry();
+        return !default_entry.provider_id.empty() &&
+               SameModelEntry(user_selectable_model_entries_[static_cast<size_t>(index)], default_entry);
+    }
+
+    void RefreshUserSelectableModelList(int select_index = -1) {
+        if (!user_selectable_models_list_) return;
+
+        std::vector<ProjectModelSelection> previously_enabled;
+        for (size_t i = 0; i < user_selectable_model_entries_.size() && i < user_model_enabled_.size(); ++i) {
+            if (user_model_enabled_[i]) {
+                previously_enabled.push_back({
+                    user_selectable_model_entries_[i].provider_id,
+                    user_selectable_model_entries_[i].model_id,
+                });
+            }
+        }
+        if (previously_enabled.empty()) {
+            previously_enabled = options_.user_selectable_models;
+        }
+
+        const int current = select_index >= 0 ? select_index : ListBox_GetCurSel(user_selectable_models_list_);
+        const ModelEntry default_entry = CurrentDefaultModelEntry();
+        user_selectable_model_entries_.clear();
+        user_model_enabled_.clear();
+        ListBox_ResetContent(user_selectable_models_list_);
+
+        auto add_entry = [&](const ModelEntry& entry, bool allow_default) {
+            if (entry.provider_id.empty() || entry.model_id.empty()) return;
+            if (!allow_default && (!entry.supports_streaming || !entry.supports_tools)) return;
+            const bool duplicate = std::find_if(
+                user_selectable_model_entries_.begin(),
+                user_selectable_model_entries_.end(),
+                [&](const ModelEntry& existing) { return SameModelEntry(existing, entry); }) !=
+                user_selectable_model_entries_.end();
+            if (duplicate) return;
+            const bool is_default = SameModelEntry(entry, default_entry);
+            const bool enabled = is_default ||
+                std::find_if(
+                    previously_enabled.begin(),
+                    previously_enabled.end(),
+                    [&](const ProjectModelSelection& selection) {
+                        return SameModelEntry(entry, selection);
+                    }) != previously_enabled.end() ||
+                ModelInitiallyUserSelectable(entry);
+            user_selectable_model_entries_.push_back(entry);
+            user_model_enabled_.push_back(enabled);
+        };
+
+        add_entry(default_entry, true);
+        for (const auto& entry : model_entries_) {
+            add_entry(entry, false);
+        }
+
+        for (size_t i = 0; i < user_selectable_model_entries_.size(); ++i) {
+            const bool enabled = user_model_enabled_[i];
+            std::wstring label = (enabled ? L"[x] " : L"[ ] ") + user_selectable_model_entries_[i].label;
+            if (SameModelEntry(user_selectable_model_entries_[i], default_entry)) {
+                label += L" (default)";
+            }
+            if (!user_selectable_model_entries_[i].supports_streaming ||
+                !user_selectable_model_entries_[i].supports_tools) {
+                label += L" (default only: missing stream/tools)";
+            }
+            ListBox_AddString(user_selectable_models_list_, label.c_str());
+        }
+        if (!user_selectable_model_entries_.empty()) {
+            const int bounded = std::clamp(current, 0, static_cast<int>(user_selectable_model_entries_.size()) - 1);
+            ListBox_SetCurSel(user_selectable_models_list_, bounded);
+        }
+
+        const BOOL enabled = IsDlgButtonChecked(scroll_content_host_, kUserSelectModelCheck) == BST_CHECKED;
+        EnableWindow(user_selectable_models_list_label_, enabled);
+        EnableWindow(user_selectable_models_list_, enabled);
+    }
+
+    void ToggleUserSelectableModel(int index) {
+        if (index < 0 || index >= static_cast<int>(user_model_enabled_.size()) ||
+            index >= static_cast<int>(user_selectable_model_entries_.size())) {
+            return;
+        }
+        if (IsCurrentDefaultUserModelIndex(index)) {
+            user_model_enabled_[static_cast<size_t>(index)] = true;
+            RefreshUserSelectableModelList(index);
+            return;
+        }
+        user_model_enabled_[static_cast<size_t>(index)] =
+            !user_model_enabled_[static_cast<size_t>(index)];
+        RefreshUserSelectableModelList(index);
     }
 
     void RefreshCompressionCombo() {
@@ -3041,6 +3262,19 @@ private:
         result.selected_compression_config_id = selected_compression_config_id_;
         result.preferred_provider_id = preferred_provider_id;
         result.preferred_model_id = preferred_model_id;
+        result.user_select_model_enabled =
+            (IsDlgButtonChecked(scroll_content_host_, kUserSelectModelCheck) == BST_CHECKED);
+        {
+            const ModelEntry default_entry = CurrentDefaultModelEntry();
+            for (size_t i = 0; i < user_selectable_model_entries_.size() && i < user_model_enabled_.size(); ++i) {
+                const auto& entry = user_selectable_model_entries_[i];
+                const bool is_default = !default_entry.provider_id.empty() &&
+                    SameModelEntry(entry, default_entry);
+                if (!user_model_enabled_[i] && !is_default) continue;
+                if (entry.provider_id.empty() || entry.model_id.empty()) continue;
+                result.user_selectable_models.push_back({entry.provider_id, entry.model_id});
+            }
+        }
         result.model_tool_ids = std::move(model_tool_ids);
         result.project_variables = project_variables_;
         result.selected_agentic_mode_id = std::move(selected_agentic_mode_id);
@@ -3614,11 +3848,8 @@ private:
     HWND variables_header_ = nullptr;
 
     // Model selection entries (mirrors provider list)
-    struct ModelEntry {
-        std::string provider_id;
-        std::string model_id;
-    };
     std::vector<ModelEntry> model_entries_;
+    std::vector<ModelEntry> user_selectable_model_entries_;
 
     // Compression configs
     std::string selected_compression_config_id_;
@@ -3631,6 +3862,10 @@ private:
     HWND model_combo_ = nullptr;
     HWND model_timeout_label_ = nullptr;
     HWND model_timeout_edit_ = nullptr;
+    HWND user_select_model_check_ = nullptr;
+    HWND user_selectable_models_list_label_ = nullptr;
+    HWND user_selectable_models_list_ = nullptr;
+    WNDPROC user_selectable_models_list_prev_proc_ = nullptr;
     HWND context_window_label_ = nullptr;
     HWND context_window_combo_ = nullptr;
     HWND rag_services_header_ = nullptr;
@@ -3717,6 +3952,7 @@ private:
     int sleep_max_seconds_ = 0;
     bool toggling_internal_tool_ = false;
     std::vector<bool> agentic_mode_enabled_;
+    std::vector<bool> user_model_enabled_;
     std::vector<bool> completion_driver_mode_allowed_;
     bool toggling_agentic_mode_ = false;
 

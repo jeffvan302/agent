@@ -79,6 +79,7 @@
         <div id="compose-top">
           <div id="compose-top-left">
             <span id="agentic-mode-label" class="agentic-mode-none">Mode: None</span>
+            <span id="model-select-label" class="model-select-label" style="display:none">Model: Default</span>
             <span id="compress-btn" title="Compress context window" style="display:none; margin-left:8px; cursor:pointer; font-size:var(--font-size-small); color:var(--color-accent-primary); user-select:none;">Compress</span>
           </div>
           <div id="compose-top-actions">
@@ -93,6 +94,7 @@
               <span id="automation-status">0 step(s)</span>
               <label class="automation-field">Repeat:<input id="automation-repeat" type="number" min="1" max="50" value="1"></label>
               <label class="automation-field"><input id="automation-compress" type="checkbox">Compress</label>
+              <label id="automation-model-field" class="automation-field automation-model-field" style="display:none">Model:<select id="automation-model"></select></label>
               <div class="automation-toolbar-actions">
                 <button id="automation-add-step-btn" type="button">+ Step</button>
                 <button id="automation-clear-btn" type="button">Clear</button>
@@ -170,7 +172,6 @@
 <script src="/js/app.js"></script>
 </body>
 </html>
-
 
 
 

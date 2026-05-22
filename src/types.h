@@ -636,6 +636,11 @@ struct ModelToolConfig {
     std::vector<ProjectRagBinding> rag_bindings;        // which RAG libraries this tool may use
 };
 
+struct ProjectModelSelection {
+    std::string provider_id;
+    std::string model_id;
+};
+
 struct AgenticModeConfig {
     std::string id;
     std::string name;
@@ -653,6 +658,8 @@ struct ProjectSettings {
     std::vector<ProjectRagBinding> rag_bindings;
     std::string preferred_provider_id;
     std::string preferred_model_id;
+    bool user_select_model_enabled = false;          // Allow web users to switch among approved models
+    std::vector<ProjectModelSelection> user_selectable_models; // provider/model pairs web users may choose
     std::vector<std::string> model_tool_ids;  // IDs of model tools enabled for this project
     std::vector<ProjectMcpVariableValue> project_variables;  // Project-level key-value variables
     std::string selected_agentic_mode_id;       // ID of the default agentic mode for this project

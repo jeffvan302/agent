@@ -2428,6 +2428,17 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     j["selected_compression_config_id"] = settings.selected_compression_config_id;
     j["preferred_provider_id"] = settings.preferred_provider_id;
     j["preferred_model_id"] = settings.preferred_model_id;
+    j["user_select_model_enabled"] = settings.user_select_model_enabled;
+
+    json user_model_arr = json::array();
+    for (const auto& model : settings.user_selectable_models) {
+        if (model.provider_id.empty() || model.model_id.empty()) continue;
+        user_model_arr.push_back({
+            {"provider_id", model.provider_id},
+            {"model_id", model.model_id},
+        });
+    }
+    j["user_selectable_models"] = std::move(user_model_arr);
 
     json rag_arr = json::array();
     for (const auto& binding : settings.rag_bindings) {
@@ -2493,6 +2504,19 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     settings.selected_compression_config_id = j.value("selected_compression_config_id", "");
     settings.preferred_provider_id = j.value("preferred_provider_id", "");
     settings.preferred_model_id = j.value("preferred_model_id", "");
+    settings.user_select_model_enabled = j.value("user_select_model_enabled", false);
+
+    if (j.contains("user_selectable_models") && j["user_selectable_models"].is_array()) {
+        for (const auto& item : j["user_selectable_models"]) {
+            if (!item.is_object()) continue;
+            ProjectModelSelection model;
+            model.provider_id = item.value("provider_id", "");
+            model.model_id = item.value("model_id", "");
+            if (!model.provider_id.empty() && !model.model_id.empty()) {
+                settings.user_selectable_models.push_back(std::move(model));
+            }
+        }
+    }
 
     if (j.contains("mcp_bindings") && j["mcp_bindings"].is_array()) {
         for (const auto& item : j["mcp_bindings"]) {

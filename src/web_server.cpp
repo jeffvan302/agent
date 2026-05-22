@@ -169,6 +169,109 @@ int ResolveModelMaxOutputTokens(const ModelConfig& model) {
         : kDefaultModelMaxOutputTokens;
 }
 
+struct ProviderModelRef {
+    ProviderConfig provider;
+    ModelConfig model;
+    bool found = false;
+};
+
+bool SameModelPair(const std::string& provider_id,
+                   const std::string& model_id,
+                   const ProjectModelSelection& selection) {
+    return provider_id == selection.provider_id && model_id == selection.model_id;
+}
+
+std::string ModelDisplayLabel(const ProviderConfig& provider, const ModelConfig& model) {
+    const std::string provider_name = provider.name.empty() ? provider.id : provider.name;
+    const std::string model_name = model.display_name.empty() ? model.id : model.display_name;
+    if (provider_name.empty()) return model_name;
+    return provider_name + " / " + model_name;
+}
+
+ProviderModelRef FindProviderModel(const std::vector<ProviderConfig>& providers,
+                                   const std::string& provider_id,
+                                   const std::string& model_id) {
+    if (provider_id.empty() || model_id.empty()) return {};
+    for (const auto& provider : providers) {
+        if (provider.id != provider_id) continue;
+        for (const auto& model : provider.models) {
+            if (model.id == model_id) {
+                return {provider, model, true};
+            }
+        }
+    }
+    return {};
+}
+
+ProviderModelRef FirstAvailableProviderModel(const std::vector<ProviderConfig>& providers) {
+    for (const auto& provider : providers) {
+        if (!provider.models.empty()) {
+            return {provider, provider.models.front(), true};
+        }
+    }
+    return {};
+}
+
+ProviderModelRef DefaultProviderModel(const std::vector<ProviderConfig>& providers,
+                                      const ProjectSettings& settings) {
+    auto selected = FindProviderModel(
+        providers, settings.preferred_provider_id, settings.preferred_model_id);
+    return selected.found ? selected : FirstAvailableProviderModel(providers);
+}
+
+std::vector<ProviderModelRef> WebSelectableModels(const std::vector<ProviderConfig>& providers,
+                                                  const ProjectSettings& settings) {
+    std::vector<ProviderModelRef> models;
+    const auto add_unique = [&](ProviderModelRef ref, bool require_stream_tools) {
+        if (!ref.found) return;
+        if (require_stream_tools && (!ref.model.supports_streaming || !ref.model.supports_tools)) {
+            return;
+        }
+        const auto duplicate = std::find_if(
+            models.begin(), models.end(),
+            [&](const ProviderModelRef& existing) {
+                return existing.provider.id == ref.provider.id &&
+                       existing.model.id == ref.model.id;
+            });
+        if (duplicate == models.end()) {
+            models.push_back(std::move(ref));
+        }
+    };
+
+    add_unique(DefaultProviderModel(providers, settings), false);
+    for (const auto& selection : settings.user_selectable_models) {
+        add_unique(FindProviderModel(providers, selection.provider_id, selection.model_id), true);
+    }
+    return models;
+}
+
+bool IsAllowedWebSelectedModel(const std::vector<ProviderConfig>& providers,
+                               const ProjectSettings& settings,
+                               const std::string& provider_id,
+                               const std::string& model_id) {
+    if (provider_id.empty() || model_id.empty()) return false;
+    const auto selectable = WebSelectableModels(providers, settings);
+    return std::find_if(
+        selectable.begin(),
+        selectable.end(),
+        [&](const ProviderModelRef& ref) {
+            return ref.provider.id == provider_id && ref.model.id == model_id;
+        }) != selectable.end();
+}
+
+ProviderModelRef ResolveProviderModelForChat(const std::vector<ProviderConfig>& providers,
+                                             const ProjectSettings& settings,
+                                             const std::optional<ChatInfo>& chat_info) {
+    const ProviderModelRef fallback = DefaultProviderModel(providers, settings);
+    if (settings.user_select_model_enabled && chat_info &&
+        !chat_info->provider_id.empty() && !chat_info->model_id.empty() &&
+        IsAllowedWebSelectedModel(providers, settings, chat_info->provider_id, chat_info->model_id)) {
+        auto selected = FindProviderModel(providers, chat_info->provider_id, chat_info->model_id);
+        if (selected.found) return selected;
+    }
+    return fallback;
+}
+
 bool HasPathSeparator(const std::string& value) {
     return value.find('/') != std::string::npos ||
            value.find('\\') != std::string::npos;
@@ -2559,7 +2662,13 @@ void WebServer::HandleGetChats(const void* req_ptr, void* res_ptr) {
             if (chat.name.size() >= suffix.size() &&
                 chat.name.compare(chat.name.size() - suffix.size(),
                                   suffix.size(), suffix) == 0) {
-                arr.push_back({{"id", chat.id}, {"name", chat.name}, {"selected_agentic_mode_id", chat.selected_agentic_mode_id}});
+                arr.push_back({
+                    {"id", chat.id},
+                    {"name", chat.name},
+                    {"selected_agentic_mode_id", chat.selected_agentic_mode_id},
+                    {"provider_id", chat.provider_id},
+                    {"model_id", chat.model_id},
+                });
             }
         }
         break;
@@ -2588,12 +2697,22 @@ void WebServer::HandleCreateChat(const void* req_ptr, void* res_ptr) {
     // Append [username] suffix unconditionally
     name += " [" + session->username + "]";
 
-    const auto chat = storage_->CreateChat(project_id, name, "", "");
+    const auto project_settings = storage_->LoadProjectSettings(project_id);
+    const auto chat = storage_->CreateChat(
+        project_id,
+        name,
+        project_settings.preferred_provider_id,
+        project_settings.preferred_model_id);
     AppendAuditLog(GetRemoteAddr(req_ptr), "chat_created",
                    "user=" + session->username + " project=" + project_id
                    + " chat=" + chat.id);
     NotifyContentChanged();
-    json resp = {{"id", chat.id}, {"name", chat.name}};
+    json resp = {
+        {"id", chat.id},
+        {"name", chat.name},
+        {"provider_id", chat.provider_id},
+        {"model_id", chat.model_id},
+    };
     SendJson(res_ptr, 201, resp.dump());
 }
 
@@ -2644,16 +2763,51 @@ void WebServer::HandleGetProjectAgenticModes(const void* req_ptr, void* res_ptr)
 
     const auto proj_settings = storage_->LoadProjectSettings(project_id);
     const auto modes = storage_->LoadAgenticModes();
+    const auto providers = storage_->LoadProviders();
+    const auto default_model = DefaultProviderModel(providers, proj_settings);
+    const auto selectable_models = WebSelectableModels(providers, proj_settings);
 
     json modes_arr = json::array();
     for (const auto& m : modes) {
         modes_arr.push_back({{"id", m.id}, {"name", m.name}});
+    }
+    json selectable_models_arr = json::array();
+    for (const auto& ref : selectable_models) {
+        selectable_models_arr.push_back({
+            {"provider_id", ref.provider.id},
+            {"model_id", ref.model.id},
+            {"provider_name", ref.provider.name},
+            {"model_name", ref.model.display_name.empty() ? ref.model.id : ref.model.display_name},
+            {"label", ModelDisplayLabel(ref.provider, ref.model)},
+            {"supports_streaming", ref.model.supports_streaming},
+            {"supports_tools", ref.model.supports_tools},
+            {"supports_thinking", ref.model.supports_thinking},
+            {"context_window", ref.model.context_window},
+            {"is_default", default_model.found &&
+                ref.provider.id == default_model.provider.id &&
+                ref.model.id == default_model.model.id},
+        });
+    }
+    json default_model_json = nullptr;
+    if (default_model.found) {
+        default_model_json = {
+            {"provider_id", default_model.provider.id},
+            {"model_id", default_model.model.id},
+            {"provider_name", default_model.provider.name},
+            {"model_name", default_model.model.display_name.empty()
+                ? default_model.model.id
+                : default_model.model.display_name},
+            {"label", ModelDisplayLabel(default_model.provider, default_model.model)},
+        };
     }
 
     json resp = {
         {"default_id", proj_settings.selected_agentic_mode_id},
         {"enabled_ids", proj_settings.enabled_agentic_mode_ids},
         {"modes", modes_arr},
+        {"user_select_model_enabled", proj_settings.user_select_model_enabled},
+        {"default_model", default_model_json},
+        {"selectable_models", selectable_models_arr},
         {"allow_manual_context_compression", proj_settings.allow_manual_context_compression},
         {"enable_web_debugging", proj_settings.enable_web_debugging},
         {"enable_automation", proj_settings.enable_automation},
@@ -2703,6 +2857,34 @@ void WebServer::HandleSetChatAgenticMode(const void* req_ptr, void* res_ptr) {
 // HandleQuestionnaireResponse — POST /api/questionnaire-response
 // Body: { chat_id, tool_call_id, selected_indices: [int] }
 // ──────────────────────────────────────────────────────────────────────────────
+void WebServer::HandleSetChatModel(const void* req_ptr, void* res_ptr) {
+    auto session = RequireAuth(req_ptr, res_ptr);
+    if (!session) return;
+
+    const auto* req = static_cast<const httplib::Request*>(req_ptr);
+    const std::string chat_id = req->path_params.at("id");
+
+    json body_j;
+    try { body_j = json::parse(req->body); } catch (...) {
+        SendError(res_ptr, 400, "Invalid JSON"); return;
+    }
+
+    const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
+    if (!project_id) return;
+
+    std::string error;
+    if (!SetChatModelForAutomation(
+            *project_id,
+            chat_id,
+            body_j.value("provider_id", ""),
+            body_j.value("model_id", ""),
+            &error)) {
+        SendError(res_ptr, 400, error.empty() ? "Could not set chat model" : error);
+        return;
+    }
+    SendJson(res_ptr, 200, R"({"ok":true})");
+}
+
 void WebServer::HandleQuestionnaireResponse(const void* req_ptr, void* res_ptr) {
     auto session = RequireAuth(req_ptr, res_ptr);
     if (!session) return;
@@ -3838,6 +4020,8 @@ json ProjectSettingsDebugJson(
         {"project_name", settings.project_name},
         {"preferred_provider_id", settings.preferred_provider_id},
         {"preferred_model_id", settings.preferred_model_id},
+        {"user_select_model_enabled", settings.user_select_model_enabled},
+        {"user_selectable_models", settings.user_selectable_models.size()},
         {"selected_compression_config_id", settings.selected_compression_config_id},
         {"default_agentic_mode_id", settings.selected_agentic_mode_id},
         {"chat_agentic_mode_id", chat_selected_agentic_mode_id},
@@ -3919,31 +4103,11 @@ WebServer::CallModel(const std::string& project_id,
     const auto resolved_prompt_variables = BuildResolvedProjectVariables(
         mcp_manager_, storage_, project_id, runtime_variables);
 
-    // Select provider and model
-    ProviderConfig selected_provider;
-    ModelConfig    selected_model;
-    bool found = false;
-
-    if (!proj_settings.preferred_provider_id.empty() &&
-        !proj_settings.preferred_model_id.empty()) {
-        for (const auto& p : providers) {
-            if (p.id != proj_settings.preferred_provider_id) continue;
-            for (const auto& m : p.models) {
-                if (m.id == proj_settings.preferred_model_id) {
-                    selected_provider = p;
-                    selected_model    = m;
-                    found = true;
-                    break;
-                }
-            }
-            if (found) break;
-        }
-    }
-    if (!found && !providers.empty()) {
-        selected_provider = providers.front();
-        if (!selected_provider.models.empty())
-            selected_model = selected_provider.models.front();
-    }
+    const auto chat_info = FindChatInProject(project_id, chat_id);
+    const auto model_resolution =
+        ResolveProviderModelForChat(providers, proj_settings, chat_info);
+    ProviderConfig selected_provider = model_resolution.provider;
+    ModelConfig    selected_model = model_resolution.model;
     if (selected_model.id.empty()) {
         result.error = "No AI model configured.";
         return result;
@@ -3951,7 +4115,6 @@ WebServer::CallModel(const std::string& project_id,
 
     // Determine per-chat mode override
     std::string chat_selected_agentic_mode_id;
-    const auto chat_info = FindChatInProject(project_id, chat_id);
     if (chat_info) chat_selected_agentic_mode_id = chat_info->selected_agentic_mode_id;
     const std::string effective_agentic_mode_id = chat_selected_agentic_mode_id.empty()
         ? proj_settings.selected_agentic_mode_id
@@ -4443,6 +4606,16 @@ void WebServer::HandleSendMessage(const void* req_ptr, void* res_ptr) {
 
     const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
     if (!project_id) return;
+    const std::string selected_provider_id = body_j.value("selected_provider_id", "");
+    const std::string selected_model_id = body_j.value("selected_model_id", "");
+    if (!selected_provider_id.empty() && !selected_model_id.empty()) {
+        std::string model_error;
+        if (!SetChatModelForAutomation(
+                *project_id, chat_id, selected_provider_id, selected_model_id, &model_error)) {
+            SendError(res_ptr, 400, model_error.empty() ? "Could not set chat model" : model_error);
+            return;
+        }
+    }
 
     // Call model (may block for several seconds)
     WebServer::ModelCallResult model_result;
@@ -4510,26 +4683,11 @@ std::string WebServer::StreamModel(const std::string& project_id,
     const auto resolved_prompt_variables = BuildResolvedProjectVariables(
         mcp_manager_, storage_, project_id, runtime_variables);
 
-    // Select provider/model (same logic as CallModel)
-    ProviderConfig selected_provider;
-    ModelConfig    selected_model;
-    bool found = false;
-    if (!proj_settings.preferred_provider_id.empty() &&
-        !proj_settings.preferred_model_id.empty()) {
-        for (const auto& p : providers) {
-            if (p.id != proj_settings.preferred_provider_id) continue;
-            for (const auto& m : p.models) {
-                if (m.id == proj_settings.preferred_model_id) {
-                    selected_provider = p; selected_model = m; found = true; break;
-                }
-            }
-            if (found) break;
-        }
-    }
-    if (!found && !providers.empty()) {
-        selected_provider = providers.front();
-        if (!selected_provider.models.empty()) selected_model = selected_provider.models.front();
-    }
+    const auto chat_info2 = FindChatInProject(project_id, chat_id);
+    const auto model_resolution =
+        ResolveProviderModelForChat(providers, proj_settings, chat_info2);
+    ProviderConfig selected_provider = model_resolution.provider;
+    ModelConfig    selected_model = model_resolution.model;
     if (selected_model.id.empty()) return "No AI model configured.";
 
     // Load history, persist the user message immediately, then build the
@@ -4549,7 +4707,6 @@ std::string WebServer::StreamModel(const std::string& project_id,
 
     // Determine per-chat mode override
     std::string chat_selected_agentic_mode_id;
-    const auto chat_info2 = FindChatInProject(project_id, chat_id);
     if (chat_info2) chat_selected_agentic_mode_id = chat_info2->selected_agentic_mode_id;
     const std::string effective_agentic_mode_id = chat_selected_agentic_mode_id.empty()
         ? proj_settings.selected_agentic_mode_id
@@ -5630,6 +5787,16 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
 
     const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
     if (!project_id) return;
+    const std::string selected_provider_id = body_j.value("selected_provider_id", "");
+    const std::string selected_model_id = body_j.value("selected_model_id", "");
+    if (!selected_provider_id.empty() && !selected_model_id.empty()) {
+        std::string model_error;
+        if (!SetChatModelForAutomation(
+                *project_id, chat_id, selected_provider_id, selected_model_id, &model_error)) {
+            SendError(res_ptr, 400, model_error.empty() ? "Could not set chat model" : model_error);
+            return;
+        }
+    }
     const std::string stream_key = *project_id + ":" + chat_id;
     auto cancel_token = std::make_shared<ActiveStreamCancellation>();
     auto active_run = std::make_shared<ActiveChatRun>();
@@ -6497,6 +6664,46 @@ bool WebServer::SetChatAgenticModeForAutomation(
     return false;
 }
 
+bool WebServer::SetChatModelForAutomation(
+    const std::string& project_id,
+    const std::string& chat_id,
+    const std::string& provider_id,
+    const std::string& model_id,
+    std::string* error) {
+    const auto proj_settings = storage_->LoadProjectSettings(project_id);
+    if (!proj_settings.user_select_model_enabled) {
+        if (error) *error = "User model selection is not enabled for this project";
+        return false;
+    }
+    const auto providers = storage_->LoadProviders();
+    if (!IsAllowedWebSelectedModel(providers, proj_settings, provider_id, model_id)) {
+        if (error) *error = "The selected model is not approved for this project";
+        return false;
+    }
+    const auto selected = FindProviderModel(providers, provider_id, model_id);
+    if (!selected.found) {
+        if (error) *error = "The selected model is not configured";
+        return false;
+    }
+
+    const auto all_projects = storage_->LoadProjects();
+    for (const auto& proj : all_projects) {
+        if (proj.info.id != project_id) continue;
+        for (const auto& chat : proj.chats) {
+            if (chat.id != chat_id) continue;
+            ChatInfo updated = chat;
+            updated.provider_id = provider_id;
+            updated.model_id = model_id;
+            storage_->SaveChat(project_id, updated);
+            NotifyContentChanged();
+            return true;
+        }
+        break;
+    }
+    if (error) *error = "Chat not found";
+    return false;
+}
+
 bool WebServer::CompressChatForAutomation(const std::string& project_id,
                                           const std::string& chat_id,
                                           const std::string& username,
@@ -6691,6 +6898,11 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                     j.live_mode_name = !step.mode_name.empty()
                         ? step.mode_name
                         : (!step.mode_id.empty() ? step.mode_id : "Default");
+                    if (!step.model_name.empty()) {
+                        j.live_mode_name += " / " + step.model_name;
+                    } else if (!step.model_id.empty()) {
+                        j.live_mode_name += " / " + step.model_id;
+                    }
                     j.live_started_at = NowIso();
                     j.current_tool_name.clear();
                     j.current_tool_status.clear();
@@ -6722,6 +6934,20 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                         goto automation_finished;
                     }
                 }
+                if (!step.provider_id.empty() && !step.model_id.empty()) {
+                    std::string model_error;
+                    if (!SetChatModelForAutomation(
+                            job->project_id, job->chat_id, step.provider_id, step.model_id, &model_error)) {
+                        update([&](AutomationJob& j) {
+                            j.status = "failed";
+                            j.error = model_error.empty()
+                                ? "Could not set the automation step model."
+                                : model_error;
+                            j.message = j.error;
+                        });
+                        goto automation_finished;
+                    }
+                }
 
                 bool user_message_observed = false;
                 auto observe_user_message = [&]() {
@@ -6736,9 +6962,14 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                         !step.mode_name.empty()
                             ? step.mode_name
                             : (!step.mode_id.empty() ? step.mode_id : "default");
+                    const std::string model_label =
+                        !step.model_name.empty()
+                            ? step.model_name
+                            : (!step.model_id.empty() ? step.model_id : "");
                     j.message = "Running step " +
                         std::to_string(static_cast<int>(si) + 1) + "/" +
-                        std::to_string(j.total_steps) + " using " + mode_label + ".";
+                        std::to_string(j.total_steps) + " using " + mode_label +
+                        (model_label.empty() ? "" : " on " + model_label) + ".";
                 });
 
                 auto last_delta_update = std::chrono::steady_clock::now();
@@ -7121,6 +7352,9 @@ void WebServer::HandleStartAutomation(const void* req_ptr, void* res_ptr) {
         AutomationStep step;
         step.mode_id = item.value("mode_id", "");
         step.mode_name = item.value("mode_name", "");
+        step.provider_id = item.value("provider_id", "");
+        step.model_id = item.value("model_id", "");
+        step.model_name = item.value("model_name", "");
         step.prompt = item.value("prompt", "");
         step.compress = item.value("compress", false);
         step.repeat = std::clamp(item.value("repeat", 1), 1, 50);
@@ -7752,6 +7986,10 @@ void WebServer::RegisterRoutes() {
     srv.Post(R"(/api/chats/([^/]+)/agentic-mode)", [this](const httplib::Request& req, httplib::Response& res) {
         const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
         HandleSetChatAgenticMode(&req, &res);
+    });
+    srv.Post(R"(/api/chats/([^/]+)/model)", [this](const httplib::Request& req, httplib::Response& res) {
+        const_cast<httplib::Request&>(req).path_params["id"] = req.matches[1].str();
+        HandleSetChatModel(&req, &res);
     });
 
     srv.Post(R"(/api/chats/([^/]+)/compress)", [this](const httplib::Request& req, httplib::Response& res) {

@@ -56,9 +56,14 @@ let state = {
   email:             '',
   pendingFiles:      [],     // File objects queued for upload before send
   selectedChatAgenticModeId: null,
+  selectedChatModelProviderId: null,
+  selectedChatModelId: null,
   projectAgenticModes:       [],
   projectDefaultAgenticModeId: '',
   projectEnabledAgenticModeIds: [],
+  projectUserSelectModel: false,
+  projectDefaultModel: null,
+  projectSelectableModels: [],
   projectAllowManualCompress: false,
   projectEnableWebDebugging: false,
   projectEnableAutomation: false,
@@ -104,6 +109,8 @@ const headerUser   = $('header-username');
 const headerAccountBtn = $('header-account-btn');
 const agenticModeLabel = $('agentic-mode-label');
 let   agenticModePicker = null;
+const modelSelectLabel = $('model-select-label');
+let   modelSelectPicker = null;
 const compressBtn      = $('compress-btn');
 const debugBtn         = $('debug-btn');
 const automateBtn      = $('automate-btn');
@@ -116,6 +123,8 @@ let automationDoneBtn = null;
 let automationSendBtn = null;
 let automationRepeatEl = null;
 let automationCompressEl = null;
+let automationModelFieldEl = null;
+let automationModelSelectEl = null;
 const cancelAgentBtn   = $('cancel-agent-btn');
 const attachBtn    = $('attach-btn');
 const fileInput    = $('file-input');
@@ -2761,6 +2770,8 @@ async function selectChat(projectId, chatId, chatName) {
   state.selectedProjectId = projectId;
   state.selectedChatId    = chatId;
   state.selectedChatAgenticModeId = null;
+  state.selectedChatModelProviderId = null;
+  state.selectedChatModelId = null;
   state.plannerExpanded = {};
   if (typeof renderSelectedAutomationJobStatus === 'function') {
     renderSelectedAutomationJobStatus();
@@ -2795,14 +2806,22 @@ async function loadProjectAgenticModes(projectId) {
     state.projectAgenticModes = [];
     state.projectDefaultAgenticModeId = '';
     state.projectEnabledAgenticModeIds = [];
+    state.projectUserSelectModel = false;
+    state.projectDefaultModel = null;
+    state.projectSelectableModels = [];
     state.projectEnableWebDebugging = false;
     setWebDebuggingActive(false);
+    renderModelSelectLabel();
+    populateAutomationModelSelect();
     return;
   }
   const data = await resp.json();
   state.projectDefaultAgenticModeId = data.default_id || '';
   state.projectEnabledAgenticModeIds = data.enabled_ids || [];
   state.projectAgenticModes = data.modes || [];
+  state.projectUserSelectModel = !!data.user_select_model_enabled;
+  state.projectDefaultModel = data.default_model || null;
+  state.projectSelectableModels = Array.isArray(data.selectable_models) ? data.selectable_models : [];
   state.projectAllowManualCompress = data.allow_manual_context_compression || false;
   state.projectEnableWebDebugging = data.enable_web_debugging || false;
   state.projectEnableAutomation = data.enable_automation || false;
@@ -2814,9 +2833,18 @@ async function loadProjectAgenticModes(projectId) {
   for (const chat of (state.chats[projectId] || [])) {
     if (chat.id === state.selectedChatId) {
       state.selectedChatAgenticModeId = chat.selected_agentic_mode_id || null;
+      state.selectedChatModelProviderId = chat.provider_id || null;
+      state.selectedChatModelId = chat.model_id || null;
       break;
     }
   }
+  renderModelSelectLabel();
+  const selectedStep = state.selectedAutomationStepIndex >= 0
+    ? state.automationSequence[state.selectedAutomationStepIndex]
+    : null;
+  populateAutomationModelSelect(
+    selectedStep && selectedStep.provider_id,
+    selectedStep && selectedStep.model_id);
 }
 
 function currentAgenticModeId() {
@@ -2829,6 +2857,126 @@ function currentAgenticModeName() {
   const mode = state.projectAgenticModes.find(m => m.id === activeId);
   if (mode && mode.name) return mode.name;
   return activeId || 'Default';
+}
+
+function modelKey(providerId, modelId) {
+  return String(providerId || '') + '\n' + String(modelId || '');
+}
+
+function findSelectableModel(providerId, modelId) {
+  if (!providerId || !modelId) return null;
+  return (state.projectSelectableModels || []).find(model =>
+    model.provider_id === providerId && model.model_id === modelId) || null;
+}
+
+function currentModelSelection() {
+  const selected = findSelectableModel(
+    state.selectedChatModelProviderId,
+    state.selectedChatModelId);
+  if (selected) return selected;
+  if (state.projectDefaultModel) return state.projectDefaultModel;
+  return (state.projectSelectableModels && state.projectSelectableModels[0]) || null;
+}
+
+function currentModelLabel() {
+  const model = currentModelSelection();
+  return model ? (model.label || model.model_name || model.model_id || 'Default') : 'Default';
+}
+
+function setChatModelSelection(model) {
+  if (!model) return;
+  state.selectedChatModelProviderId = model.provider_id || '';
+  state.selectedChatModelId = model.model_id || '';
+  const chats = state.selectedProjectId ? (state.chats[state.selectedProjectId] || []) : [];
+  for (const chat of chats) {
+    if (chat.id === state.selectedChatId) {
+      chat.provider_id = state.selectedChatModelProviderId;
+      chat.model_id = state.selectedChatModelId;
+      break;
+    }
+  }
+  renderModelSelectLabel();
+  populateAutomationModelSelect();
+}
+
+function renderModelSelectLabel() {
+  if (!modelSelectLabel) return;
+  const choices = state.projectSelectableModels || [];
+  if (!state.selectedChatId || !state.projectUserSelectModel || choices.length === 0) {
+    modelSelectLabel.style.display = 'none';
+    modelSelectLabel.classList.add('disabled');
+    modelSelectLabel.style.pointerEvents = 'none';
+    return;
+  }
+  modelSelectLabel.style.display = '';
+  modelSelectLabel.textContent = 'Model: ' + currentModelLabel();
+  const canSwitch = choices.length > 1;
+  modelSelectLabel.classList.toggle('disabled', !canSwitch);
+  modelSelectLabel.style.pointerEvents = canSwitch ? '' : 'none';
+  modelSelectLabel.title = canSwitch ? 'Click to change model' : '';
+}
+
+function closeModelPicker() {
+  if (modelSelectPicker) {
+    modelSelectPicker.remove();
+    modelSelectPicker = null;
+  }
+}
+
+function openModelSelectPicker() {
+  if (agenticModePicker) { agenticModePicker.remove(); agenticModePicker = null; }
+  if (!state.projectUserSelectModel || !modelSelectLabel) return;
+  if (modelSelectPicker) { closeModelPicker(); return; }
+  const items = state.projectSelectableModels || [];
+  if (items.length < 2) return;
+  const current = currentModelSelection();
+  const currentKey = current ? modelKey(current.provider_id, current.model_id) : '';
+
+  const menu = document.createElement('div');
+  menu.id = 'model-select-picker';
+  menu.style.cssText = `
+    position:absolute; bottom:8px; left:20px; z-index:100;
+    background:var(--color-bg-main); border:1px solid var(--color-border-main);
+    border-radius:var(--radius-input); box-shadow:0 4px 12px rgba(0,0,0,0.15);
+    max-height:260px; overflow:auto; min-width:260px; max-width:min(520px, calc(100vw - 24px));
+  `;
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.style.cssText = `
+      padding:8px 12px; cursor:pointer;
+      color: var(--color-text-primary); font-size:var(--font-size-base);
+      border-bottom:1px solid var(--color-border-main);
+      white-space:normal; overflow-wrap:anywhere;
+    `;
+    row.textContent = item.label || item.model_name || item.model_id || 'Model';
+    if (modelKey(item.provider_id, item.model_id) === currentKey) {
+      row.style.fontWeight = '700';
+      row.style.color = 'var(--color-accent-primary)';
+    }
+    row.addEventListener('mouseenter', () => { row.style.background = 'var(--color-bg-sidebar-hover)'; });
+    row.addEventListener('mouseleave', () => { row.style.background = ''; });
+    row.addEventListener('click', async () => {
+      setChatModelSelection(item);
+      if (state.selectedChatId) {
+        await api('POST', `/api/chats/${state.selectedChatId}/model`, {
+          provider_id: state.selectedChatModelProviderId,
+          model_id: state.selectedChatModelId,
+        });
+      }
+      closeModelPicker();
+    });
+    menu.appendChild(row);
+  }
+  document.body.appendChild(menu);
+  modelSelectPicker = menu;
+
+  const close = e => {
+    if (!menu.contains(e.target) && e.target !== modelSelectLabel) {
+      closeModelPicker();
+      document.removeEventListener('click', close);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', close), 0);
 }
 
 function activeControllerForChat(chatId) {
@@ -3044,12 +3192,14 @@ function renderAgenticModeLabel() {
   if (compressBtn) {
     compressBtn.style.display = state.projectAllowManualCompress ? 'inline' : 'none';
   }
+  renderModelSelectLabel();
   renderDebugButton();
   renderAutomateButton();
   renderCancelAgentButton();
 }
 
 function openAgenticModePicker() {
+  closeModelPicker();
   if (agenticModePicker) { agenticModePicker.remove(); agenticModePicker = null; return; }
 
   const available = state.projectAgenticModes.filter(m =>
@@ -3119,6 +3269,10 @@ function openAgenticModePicker() {
 
 if (agenticModeLabel) {
   agenticModeLabel.addEventListener('click', openAgenticModePicker);
+}
+
+if (modelSelectLabel) {
+  modelSelectLabel.addEventListener('click', openModelSelectPicker);
 }
 
 if (compressBtn) {
@@ -3210,12 +3364,15 @@ async function deleteChat(projectId, chatId) {
   if (!resp || !resp.ok) return;
   if (state.selectedChatId === chatId) {
     state.selectedChatId   = null;
+    state.selectedChatModelProviderId = null;
+    state.selectedChatModelId = null;
     chatTitle.textContent  = 'Select or create a chat';
     messageInput.disabled  = true;
     sendBtn.disabled       = true;
     state.messages         = [];
     renderMessages([]);
     resetPlannerState();
+    renderModelSelectLabel();
   }
   await loadChats(projectId);
   const listEl = $('chats-' + projectId);
@@ -3419,6 +3576,7 @@ async function sendMessage() {
   const sendAgenticModeId = state.selectedChatAgenticModeId || '';
   const sendWebDebugRequested = isWebDebuggingEnabled();
   const sendAssistantModeName = currentAgenticModeName();
+  const sendModelSelection = state.projectUserSelectModel ? currentModelSelection() : null;
 
   state.sending      = true;
   messageInput.value = '';
@@ -3514,6 +3672,8 @@ async function sendMessage() {
         content,
         attachments: uploadedFiles,
         selected_agentic_mode_id: sendAgenticModeId,
+        selected_provider_id: sendModelSelection ? (sendModelSelection.provider_id || '') : '',
+        selected_model_id: sendModelSelection ? (sendModelSelection.model_id || '') : '',
         web_debug: sendWebDebugRequested,
       }),
       signal: abortCtrl.signal,
@@ -3900,6 +4060,8 @@ automationClearBtn   = $('automation-clear-btn');
 automationSendBtn    = $('automation-send-btn');
 automationRepeatEl   = $('automation-repeat');
 automationCompressEl = $('automation-compress');
+automationModelFieldEl = $('automation-model-field');
+automationModelSelectEl = $('automation-model');
 
 function automationJobIsActive(job) {
   return !!(job && (job.active ||
@@ -3914,10 +4076,52 @@ function selectedAutomationJob() {
     : null;
 }
 
+function populateAutomationModelSelect(selectedProviderId = '', selectedModelId = '') {
+  if (!automationModelFieldEl || !automationModelSelectEl) return;
+  const choices = state.projectUserSelectModel ? (state.projectSelectableModels || []) : [];
+  if (!state.selectedChatId || choices.length === 0) {
+    automationModelFieldEl.style.display = 'none';
+    automationModelSelectEl.innerHTML = '';
+    return;
+  }
+  const fallback = currentModelSelection();
+  const selectedKey = modelKey(
+    selectedProviderId || (fallback && fallback.provider_id),
+    selectedModelId || (fallback && fallback.model_id));
+  automationModelSelectEl.innerHTML = '';
+  for (const item of choices) {
+    const option = document.createElement('option');
+    option.value = modelKey(item.provider_id, item.model_id);
+    option.textContent = item.label || item.model_name || item.model_id || 'Model';
+    option.dataset.providerId = item.provider_id || '';
+    option.dataset.modelId = item.model_id || '';
+    option.dataset.modelName = item.label || item.model_name || item.model_id || '';
+    if (option.value === selectedKey) option.selected = true;
+    automationModelSelectEl.appendChild(option);
+  }
+  automationModelFieldEl.style.display = '';
+}
+
+function selectedAutomationModelSelection() {
+  if (!state.projectUserSelectModel) return null;
+  if (automationModelSelectEl && automationModelSelectEl.options.length) {
+    const option = automationModelSelectEl.options[automationModelSelectEl.selectedIndex];
+    if (option) {
+      return {
+        provider_id: option.dataset.providerId || '',
+        model_id: option.dataset.modelId || '',
+        label: option.dataset.modelName || option.textContent || '',
+      };
+    }
+  }
+  return currentModelSelection();
+}
+
 function renderAutomationUI() {
   if (!automationPanelEl) return;
   const activeJob = automationJobIsActive(selectedAutomationJob());
   automationPanelEl.style.display = state.automationPanelOpen ? 'block' : 'none';
+  populateAutomationModelSelect();
   if (automationStatusEl) {
     automationStatusEl.textContent = state.automationSequence.length + ' step(s)';
   }
@@ -3936,8 +4140,10 @@ function renderAutomationSteps() {
     const step = state.automationSequence[i];
     const row = document.createElement('div');
     row.className = 'automation-step' + (i === state.selectedAutomationStepIndex ? ' selected' : '');
+    const modelLabel = step.model_name || step.model_id || '';
     row.innerHTML = '<span class="step-index">' + (i + 1) + '.</span>' +
       '<span class="step-name">' + escapeHtml(step.mode_name || step.mode_id || 'default') + '</span>' +
+      (modelLabel ? '<span class="step-model">' + escapeHtml(modelLabel) + '</span>' : '') +
       '<span class="step-prompt">"' + escapeHtml(step.prompt_preview || step.prompt || '') + '"</span>' +
       '<span class="step-meta">x' + step.repeat + (step.compress ? ' | Compress' : '') + '</span>';
     row.addEventListener('click', () => {
@@ -3962,6 +4168,7 @@ function loadAutomationStepIntoComposer(index) {
   resizeTextarea();
   if (automationRepeatEl) automationRepeatEl.value = step.repeat || 1;
   if (automationCompressEl) automationCompressEl.checked = !!step.compress;
+  populateAutomationModelSelect(step.provider_id || '', step.model_id || '');
   messageInput.focus();
 }
 
@@ -3970,6 +4177,7 @@ function clearComposerForAutomation() {
   resizeTextarea();
   if (automationRepeatEl) automationRepeatEl.value = 1;
   if (automationCompressEl) automationCompressEl.checked = false;
+  populateAutomationModelSelect();
   messageInput.focus();
 }
 
@@ -3979,11 +4187,15 @@ function addOrUpdateAutomationStep() {
   const modeId = currentAgenticModeId();
   const mode = state.projectAgenticModes.find(m => m.id === modeId);
   const modeName = mode ? mode.name : (modeId || 'Default');
+  const modelSelection = selectedAutomationModelSelection();
   const repeat = Math.max(1, Math.min(50, parseInt(automationRepeatEl && automationRepeatEl.value || '1', 10)));
   const compress = automationCompressEl ? automationCompressEl.checked : false;
   const stepData = {
     mode_id: modeId || '',
     mode_name: modeName,
+    provider_id: modelSelection ? (modelSelection.provider_id || '') : '',
+    model_id: modelSelection ? (modelSelection.model_id || '') : '',
+    model_name: modelSelection ? (modelSelection.label || modelSelection.model_name || modelSelection.model_id || '') : '',
     prompt: prompt || '',
     prompt_preview: prompt ? prompt.slice(0, 60) + (prompt.length > 60 ? '...' : '') : '',
     compress: compress,
@@ -4496,6 +4708,9 @@ async function runAutomationSequence() {
   const steps = state.automationSequence.map(step => ({
     mode_id: step.mode_id || '',
     mode_name: step.mode_name || '',
+    provider_id: step.provider_id || '',
+    model_id: step.model_id || '',
+    model_name: step.model_name || '',
     prompt: step.prompt || '',
     repeat: step.repeat || 1,
     compress: !!step.compress,

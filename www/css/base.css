@@ -1113,6 +1113,8 @@ body.sidebar-resizing {
 #compose-top-left {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   min-width: 0;
 }
 #compose-top-actions {
@@ -1126,7 +1128,8 @@ body.sidebar-resizing {
   gap: 10px;
   align-items: flex-end;
 }
-#agentic-mode-label {
+#agentic-mode-label,
+.model-select-label {
   font-size: var(--font-size-small);
   font-weight: 600;
   cursor: pointer;
@@ -1134,6 +1137,19 @@ body.sidebar-resizing {
   padding: 2px 8px;
   border-radius: var(--radius-button);
   line-height: 1.3;
+}
+.model-select-label {
+  color: var(--color-accent-primary);
+  background: rgba(0,150,255,0.08);
+  max-width: min(360px, 52vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-select-label.disabled {
+  color: var(--color-text-secondary);
+  background: transparent;
+  cursor: default;
 }
 .agentic-mode-none {
   color: var(--color-accent-danger);
@@ -1198,11 +1214,22 @@ color-accent-primary);
 .automation-field input[type="number"] {
   width: 44px; padding: 2px 4px; border: 1px solid var(--color-border-input); border-radius: var(--radius-input); background: var(--color-bg-input); color: var(--color-text-primary); font-size: var(--font-size-small);
 }
+.automation-model-field select {
+  max-width: 260px;
+  min-width: 160px;
+  padding: 2px 6px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-input);
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-small);
+}
 #automation-steps { max-height: 160px; overflow-y: auto; }
 .automation-step { display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid var(--color-border-main); border-radius:var(--radius-input); margin-bottom:6px; background:var(--color-bg-main); font-size:var(--font-size-small); color:var(--color-text-primary); cursor:pointer; }
 .automation-step.selected { border-color: var(--color-accent-primary); background: var(--color-accent-primary-soft, rgba(0,0,0,0.05)); }
 .automation-step .step-index { font-weight:700; color:var(--color-accent-primary); min-width:22px; }
 .automation-step .step-name { font-weight:600; }
+.automation-step .step-model { color:var(--color-text-muted); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .automation-step .step-prompt { color:var(--color-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 240px; }
 .automation-step .step-meta { color:var(--color-text-muted); margin-left:auto; white-space:nowrap; }
 
@@ -1516,6 +1543,15 @@ color-accent-primary);
   #compose-top {
     align-items: flex-start;
     gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  #compose-top-left {
+    max-width: 100%;
+  }
+
+  .model-select-label {
+    max-width: calc(100vw - 32px);
   }
 
   #compose-top-actions {
@@ -1548,6 +1584,18 @@ color-accent-primary);
     overflow-wrap: anywhere;
   }
 
+  .automation-step .step-model {
+    width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .automation-model-field,
+  .automation-model-field select {
+    width: 100%;
+    max-width: 100%;
+  }
+
   #compose-bottom-row {
     gap: 6px;
   }
@@ -1571,6 +1619,7 @@ color-accent-primary);
   body.automation-active #automation-panel,
   body.automation-active #compose-bottom-row,
   body.automation-active #agentic-mode-label,
+  body.automation-active #model-select-label,
   body.automation-active #compress-btn,
   body.automation-active #debug-btn,
   body.automation-active #automate-btn {
@@ -1862,8 +1911,6 @@ document.getElementById('login-form').addEventListener('submit', async function(
     btn.textContent = 'Sign In';
   }
 });
-
-
 
 
 

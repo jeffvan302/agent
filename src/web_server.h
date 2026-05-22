@@ -224,6 +224,7 @@ private:
     // Agentic modes
     void HandleGetProjectAgenticModes(const void* req, void* res);
     void HandleSetChatAgenticMode   (const void* req, void* res);
+    void HandleSetChatModel         (const void* req, void* res);
     void HandleCompressChat          (const void* req, void* res); // POST /api/chats/:id/compress
     void HandleGetPlanner            (const void* req, void* res); // GET /api/chats/:id/planner
     void HandleUpdatePlannerItem     (const void* req, void* res); // PATCH /api/chats/:id/planner/items/:item_id
@@ -297,6 +298,9 @@ private:
     struct AutomationStep {
         std::string mode_id;
         std::string mode_name;
+        std::string provider_id;
+        std::string model_id;
+        std::string model_name;
         std::string prompt;
         bool compress = false;
         int repeat = 1;
@@ -421,9 +425,14 @@ private:
     std::string SerializeActiveChatRun(const std::shared_ptr<ActiveChatRun>& run) const;
     std::string SerializeAutomationJob(const std::shared_ptr<AutomationJob>& job) const;
     bool SetChatAgenticModeForAutomation(const std::string& project_id,
-                                         const std::string& chat_id,
-                                         const std::string& selected_mode_id,
-                                         std::string* error);
+                                          const std::string& chat_id,
+                                          const std::string& selected_mode_id,
+                                          std::string* error);
+    bool SetChatModelForAutomation(const std::string& project_id,
+                                   const std::string& chat_id,
+                                   const std::string& provider_id,
+                                   const std::string& model_id,
+                                   std::string* error);
     bool CompressChatForAutomation(const std::string& project_id,
                                    const std::string& chat_id,
                                    const std::string& username,
