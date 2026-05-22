@@ -1008,7 +1008,7 @@ function createFileUploadRow(input, initialStatus) {
     detail.textContent = fileUploadDetailText(record);
 
     links.innerHTML = '';
-    const download = record.absolute_download_url || record.download_url;
+    const download = record.download_url || record.absolute_download_url;
     if (download) {
       const a = document.createElement('a');
       a.href = download;

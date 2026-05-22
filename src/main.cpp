@@ -44,6 +44,7 @@
 #include <fstream>
 #include <filesystem>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -3083,6 +3084,7 @@ private:
     void RefreshTree();
     void LoadActiveMessages();
     std::string BuildMcpProjectContext() const;
+    std::wstring BuildChatDiagnosticsText() const;
     void SendCurrentMessage();
     void CompressCurrentContext();
     void ShowCurrentContextMessages();
@@ -3303,10 +3305,10 @@ void MainWindow::OnCreate() {
     setup_system_button_ = CreateWindowExW(0, L"BUTTON", L"Setup System", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kSetupSystem), nullptr, nullptr);
     transcript_ = CreateWindowExW(WS_EX_CLIENTEDGE, MSFTEDIT_CLASS, nullptr, WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kTranscript), nullptr, nullptr);
     tool_trace_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, nullptr, WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kToolTrace), nullptr, nullptr);
-    input_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInput), nullptr, nullptr);
-    send_button_ = CreateWindowExW(0, L"BUTTON", L"Send", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kSend), nullptr, nullptr);
-    compress_button_ = CreateWindowExW(0, L"BUTTON", L"Compress", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCompress), nullptr, nullptr);
-    context_messages_button_ = CreateWindowExW(0, L"BUTTON", L"Context Msgs", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextMessages), nullptr, nullptr);
+    input_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr, WS_CHILD | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kInput), nullptr, nullptr);
+    send_button_ = CreateWindowExW(0, L"BUTTON", L"Send", WS_CHILD | WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kSend), nullptr, nullptr);
+    compress_button_ = CreateWindowExW(0, L"BUTTON", L"Compress", WS_CHILD | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCompress), nullptr, nullptr);
+    context_messages_button_ = CreateWindowExW(0, L"BUTTON", L"Check Context", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextMessages), nullptr, nullptr);
     status_label_ = CreateWindowExW(0, L"STATIC", L"Initializing...", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
 
     for (HWND control : {new_project_button_, new_chat_button_, rename_button_, delete_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, agentic_modes_button_, web_config_button_, admin_config_button_, remote_ollama_setup_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
@@ -3455,8 +3457,8 @@ void MainWindow::LayoutControls(int width, int height) {
     const int button_height = Scale(hwnd_, 28);
     const int top_row_height = button_height;
     const int status_height = Scale(hwnd_, 20);
-    const int input_height = Scale(hwnd_, 130);
-    const int tool_trace_height = Scale(hwnd_, 150);
+    const int action_height = Scale(hwnd_, 34);
+    const int tool_trace_height = std::max(Scale(hwnd_, 180), height / 4);
 
     const int left_button_width = (left_width - gutter) / 2;
     MoveWindow(new_project_button_, margin, margin, left_button_width, button_height, TRUE);
@@ -3494,17 +3496,17 @@ void MainWindow::LayoutControls(int width, int height) {
     MoveWindow(setup_system_button_, bx, margin, settings_width,     top_row_height, TRUE);
 
     const int transcript_top = margin + top_row_height + gutter;
-    const int transcript_height = height - transcript_top - tool_trace_height - input_height - status_height - margin * 2 - gutter * 3;
+    const int bottom_action_y = height - margin - status_height - gutter - action_height;
+    const int transcript_height = std::max(
+        Scale(hwnd_, 220),
+        bottom_action_y - transcript_top - tool_trace_height - gutter * 2);
     MoveWindow(transcript_, right_x, transcript_top, right_width, transcript_height, TRUE);
     MoveWindow(tool_trace_, right_x, transcript_top + transcript_height + gutter, right_width, tool_trace_height, TRUE);
-    const int action_width = Scale(hwnd_, 115);
-    const int action_height = Scale(hwnd_, 34);
-    const int input_top = transcript_top + transcript_height + gutter + tool_trace_height + gutter;
-    const int action_x = right_x + right_width - action_width;
-    MoveWindow(input_, right_x, input_top, right_width - action_width - gutter, input_height, TRUE);
-    MoveWindow(send_button_, action_x, input_top, action_width, action_height, TRUE);
-    MoveWindow(compress_button_, action_x, input_top + action_height + gutter, action_width, action_height, TRUE);
-    MoveWindow(context_messages_button_, action_x, input_top + (action_height + gutter) * 2, action_width, action_height, TRUE);
+    const int action_width = Scale(hwnd_, 150);
+    MoveWindow(input_, right_x, bottom_action_y, 0, 0, TRUE);
+    MoveWindow(send_button_, right_x, bottom_action_y, 0, 0, TRUE);
+    MoveWindow(compress_button_, right_x, bottom_action_y, 0, 0, TRUE);
+    MoveWindow(context_messages_button_, right_x + right_width - action_width, bottom_action_y, action_width, action_height, TRUE);
     MoveWindow(status_label_, right_x, height - margin - status_height, right_width, status_height, TRUE);
 }
 
@@ -3560,10 +3562,10 @@ void MainWindow::OnCommand(int control_id, int notification_code) {
         RunSetupSystem();
         break;
     case kSend:
-        SendCurrentMessage();
+        // Desktop chat sending is intentionally hidden; use the web chat for live runs.
         break;
     case kCompress:
-        CompressCurrentContext();
+        // Manual compression stays available from the web workflow and automation path.
         break;
     case kContextMessages:
         ShowCurrentContextMessages();
@@ -6050,7 +6052,98 @@ void MainWindow::ShowCurrentContextMessages() {
         return;
     }
 
-    ShowContextMessagesWindow(hwnd_, &storage_, active_project_id_, active_chat_id_);
+    const auto project_settings = storage_.LoadProjectSettings(active_project_id_);
+    const auto model_visible = ModelVisibleMessages(storage_.LoadMessages(active_project_id_, active_chat_id_));
+    const auto request_entries =
+        storage_.LoadChatContextDebugEntries(active_project_id_, active_chat_id_);
+    const auto resolved_variables =
+        BuildResolvedVariablesForChat(active_project_id_, active_chat_id_, project_settings);
+
+    const ProjectRecord* project = nullptr;
+    const ChatInfo* chat = nullptr;
+    for (const auto& candidate_project : projects_) {
+        if (candidate_project.info.id != active_project_id_) continue;
+        project = &candidate_project;
+        for (const auto& candidate_chat : candidate_project.chats) {
+            if (candidate_chat.id == active_chat_id_) {
+                chat = &candidate_chat;
+                break;
+            }
+        }
+        break;
+    }
+
+    std::ostringstream preview;
+    preview << "Context Window Check\n";
+    preview << "====================\n\n";
+    preview << "Project: " << (project ? project->info.name : active_project_id_)
+            << " (" << active_project_id_ << ")\n";
+    preview << "Chat: " << (chat ? chat->name : active_chat_id_)
+            << " (" << active_chat_id_ << ")\n\n";
+
+    preview << "Selected compression config: ";
+    if (project_settings.selected_compression_config_id.empty()) {
+        preview << "(none)\n";
+    } else if (const auto config =
+                   compression_service_.GetGlobalConfig(project_settings.selected_compression_config_id)) {
+        preview << config->name << " (" << config->id << ")\n";
+    } else {
+        preview << project_settings.selected_compression_config_id << " (not found)\n";
+    }
+
+    preview << "Stored model-visible messages: " << model_visible.size() << "\n";
+    preview << "Estimated model-visible history tokens: "
+            << EstimateMessagesTokens(model_visible) << "\n";
+    if (!request_entries.empty()) {
+        const auto& latest = request_entries.back();
+        preview << "Latest captured request: " << latest.created_at << "\n";
+        preview << "Latest captured request estimated tokens: "
+                << (EstimateTokenCount(latest.system_prompt) +
+                    EstimateMessagesTokens(latest.request_messages))
+                << "\n";
+    } else {
+        preview << "Latest captured request: (none saved yet)\n";
+    }
+
+    preview << "\nResolved Project/User Variables\n";
+    if (resolved_variables.empty()) {
+        preview << "(none)\n";
+    } else {
+        for (const auto& variable : resolved_variables) {
+            preview << "- " << variable.name << " = " << variable.value << "\n";
+        }
+    }
+
+    preview << "\nInjected MCP Project Context\n";
+    const std::string mcp_context = BuildMcpProjectContext();
+    preview << (mcp_context.empty() ? "(empty)" : mcp_context) << "\n";
+
+    preview << "\nInjected Web Research Context\n";
+    const std::string web_research_context =
+        mcp_manager_.BuildWebResearchUsageContext(active_project_id_);
+    preview << (web_research_context.empty() ? "(empty)" : web_research_context) << "\n";
+
+    preview << "\nInjected RAG Project Context\n";
+    const std::string rag_context =
+        rag_tools::BuildRagProjectContext(&rag_service_, active_project_id_);
+    preview << (rag_context.empty() ? "(empty)" : rag_context) << "\n";
+
+    preview << "\nCurrent Compression State\n";
+    const auto compression_state =
+        compression_service_.LoadChatState(active_project_id_, active_chat_id_);
+    preview << "Compressed through message index: "
+            << compression_state.last_compression_message_index << "\n";
+    preview << "Compressed context tokens: "
+            << EstimateTokenCount(compression_state.current_compressed_context) << "\n";
+    preview << "\nCompressed context preview:\n";
+    std::string compressed_preview = compression_state.current_compressed_context;
+    if (compressed_preview.size() > 8000) {
+        compressed_preview.resize(8000);
+        compressed_preview += "\n... (truncated for preview) ...";
+    }
+    preview << (compressed_preview.empty() ? "(empty)" : compressed_preview) << "\n";
+
+    ShowScrollableTextWindow(hwnd_, L"Check Context Window", Utf8ToWide(preview.str()));
 }
 
 void MainWindow::OnChatDelta(ChatDeltaPayload* payload) {
@@ -6195,55 +6288,344 @@ std::vector<ProjectMcpVariableValue> MainWindow::BuildResolvedVariablesForChat(
     return resolved;
 }
 
-void MainWindow::RenderTranscript() {
-    std::wstring transcript;
-    if (active_chat_id_.empty()) {
-        transcript = L"Create or select a chat to begin.";
-    } else if (active_messages_skipped_for_size_) {
-        const double size_mb = static_cast<double>(active_messages_file_size_) / (1024.0 * 1024.0);
-        std::wostringstream message;
-        message.setf(std::ios::fixed);
-        message.precision(1);
-        message << L"This chat history is " << size_mb
-                << L" MB, so the desktop preview skipped loading it to keep startup responsive.\r\n\r\n"
-                << L"The web chat can still open the full record. Start a smaller chat or use the website for this large automation/debug transcript.";
-        transcript = message.str();
+std::wstring FormatDashboardBytes(std::uintmax_t bytes) {
+    std::wostringstream out;
+    out.setf(std::ios::fixed);
+    if (bytes < 1024) {
+        out << bytes << L" B";
+    } else if (bytes < 1024ull * 1024ull) {
+        out.precision(1);
+        out << (static_cast<double>(bytes) / 1024.0) << L" KB";
     } else {
-        for (const auto& message : active_messages_) {
-            if (message.role == "tool") {
-                continue;
-            }
-            if (message.role == "assistant" &&
-                (message.content.empty() || !message.tool_calls_json.empty())) {
-                continue;
-            }
+        out.precision(2);
+        out << (static_cast<double>(bytes) / (1024.0 * 1024.0)) << L" MB";
+    }
+    return out.str();
+}
 
-            if (message.role == "file") {
-                transcript += L"File:\r\n";
-                transcript += FormatFileUploadForTranscript(message.content);
-                transcript += L"\r\n\r\n";
-                continue;
-            }
+std::string LowerAsciiForDashboard(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
 
-            transcript += message.role == "user" ? L"You" : L"Assistant";
-            transcript += L":\r\n";
-            transcript += Utf8ToWide(message.content);
-            transcript += L"\r\n\r\n";
+std::string DashboardPreview(std::string value, size_t max_chars = 220) {
+    value = NormalizeNewlinesToLf(value);
+    for (char& ch : value) {
+        if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
+    }
+    value = Trim(value);
+    if (value.size() > max_chars) {
+        value.resize(max_chars);
+        value += "...";
+    }
+    return value;
+}
+
+std::wstring DashboardPath(const std::filesystem::path& path) {
+    return path.empty() ? L"(none)" : path.wstring();
+}
+
+std::wstring MainWindow::BuildChatDiagnosticsText() const {
+    std::wostringstream out;
+    out << L"Chat Debug Dashboard\r\n";
+    out << L"====================\r\n\r\n";
+
+    const ProjectRecord* project = nullptr;
+    const ChatInfo* chat = nullptr;
+    for (const auto& candidate_project : projects_) {
+        if (candidate_project.info.id != active_project_id_) continue;
+        project = &candidate_project;
+        for (const auto& candidate_chat : candidate_project.chats) {
+            if (candidate_chat.id == active_chat_id_) {
+                chat = &candidate_chat;
+                break;
+            }
         }
+        break;
+    }
 
-        if (IsChatInFlight(active_chat_id_)) {
-            transcript += L"Assistant:\r\n";
-            auto preview_it = streaming_previews_by_chat_.find(active_chat_id_);
-            if (preview_it != streaming_previews_by_chat_.end()) {
-                transcript += preview_it->second;
+    if (!project || active_project_id_.empty()) {
+        out << L"Select a project to inspect its chats, files, web sessions, and logs.\r\n";
+        return out.str();
+    }
+
+    out << L"Selection\r\n";
+    out << L"- Project: " << Utf8ToWide(project->info.name) << L" (" << Utf8ToWide(active_project_id_) << L")\r\n";
+    if (chat) {
+        out << L"- Chat: " << Utf8ToWide(chat->name) << L" (" << Utf8ToWide(active_chat_id_) << L")\r\n";
+    } else {
+        out << L"- Chat: (none selected)\r\n";
+    }
+    out << L"\r\n";
+
+    const auto settings_path = ResolveWebSettingsPath(storage_.runtime_paths());
+    const auto web_cfg = WebServerConfig::LoadFromFile(settings_path);
+    const bool web_created = static_cast<bool>(web_server_);
+    const bool web_running = web_created && web_server_->IsRunning();
+    const bool tls_enabled = !web_cfg.tls_mode.empty();
+    const std::wstring scheme_text = tls_enabled
+        ? (L"HTTPS (" + Utf8ToWide(web_cfg.tls_mode) + L")")
+        : L"HTTP";
+    out << L"Web Server\r\n";
+    out << L"- Status: " << (web_running ? L"running" : (web_created ? L"stopped" : L"not created")) << L"\r\n";
+    out << L"- Bind: " << Utf8ToWide(web_cfg.bind_address) << L"\r\n";
+    out << L"- Main port: " << web_cfg.port << L"\r\n";
+    out << L"- Scheme/TLS: " << scheme_text << L"\r\n";
+    out << L"- Redirect port: " << (web_cfg.http_redirect_port > 0 ? std::to_wstring(web_cfg.http_redirect_port) : L"(disabled)") << L"\r\n";
+    out << L"- Configured base URL: " << (web_cfg.base_url.empty() ? L"(none; prefer relative /data and /rag links in chat)" : Utf8ToWide(web_cfg.base_url)) << L"\r\n";
+    out << L"- Active sessions: " << (web_created ? std::to_wstring(web_server_->ActiveSessions()) : L"0") << L"\r\n";
+    if (web_created) {
+        const auto sessions = web_server_->GetActiveSessions();
+        const auto groups = user_store_.GetGroups();
+        for (const auto& session : sessions) {
+            std::vector<std::string> group_names;
+            for (const auto& group : groups) {
+                if (std::find(group.user_ids.begin(), group.user_ids.end(), session.user_id) != group.user_ids.end()) {
+                    group_names.push_back(group.name);
+                }
+            }
+            out << L"  - " << Utf8ToWide(session.username)
+                << L" from " << Utf8ToWide(session.remote_addr)
+                << L"; groups: ";
+            if (group_names.empty()) {
+                out << L"(none)";
+            } else {
+                for (size_t i = 0; i < group_names.size(); ++i) {
+                    if (i) out << L", ";
+                    out << Utf8ToWide(group_names[i]);
+                }
+            }
+            out << L"; idle " << session.idle_seconds << L"s\r\n";
+        }
+    }
+    out << L"\r\n";
+
+    if (active_chat_id_.empty()) {
+        out << L"Select a chat for chat-directory files, message stats, errors, and tool usage.\r\n";
+        return out.str();
+    }
+
+    const auto chat_dir = storage_.data_root() / "projects" /
+        active_project_id_ / "chats" / active_chat_id_;
+    out << L"Chat Files\r\n";
+    out << L"- Chat directory: " << DashboardPath(chat_dir) << L"\r\n";
+    out << L"- Project chat log: " << DashboardPath(storage_.data_root() / (active_project_id_ + ".chatlog")) << L"\r\n";
+    const auto project_settings = storage_.LoadProjectSettings(active_project_id_);
+    const auto resolved_variables = BuildResolvedVariablesForChat(active_project_id_, active_chat_id_, project_settings);
+    for (const auto& variable : resolved_variables) {
+        const std::string key = variable_resolver::ToLookupKey(variable.name);
+        if (key == "projectfolder") {
+            out << L"- Resolved ProjectFolder: " << Utf8ToWide(variable.value) << L"\r\n";
+            break;
+        }
+    }
+    out << L"\r\n";
+    out << L"Files in chat directory\r\n";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(chat_dir, ec) || ec) {
+        out << L"- (chat directory does not exist yet)\r\n";
+    } else {
+        std::vector<std::filesystem::directory_entry> entries;
+        for (const auto& entry : std::filesystem::directory_iterator(chat_dir, ec)) {
+            if (!ec) entries.push_back(entry);
+        }
+        std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+            return left.path().filename().wstring() < right.path().filename().wstring();
+        });
+        if (entries.empty()) {
+            out << L"- (empty)\r\n";
+        } else {
+            size_t shown = 0;
+            for (const auto& entry : entries) {
+                if (shown++ >= 80) {
+                    out << L"- ... " << (entries.size() - shown + 1) << L" more\r\n";
+                    break;
+                }
+                std::error_code item_ec;
+                const bool is_dir = entry.is_directory(item_ec);
+                const auto size = is_dir ? 0 : entry.file_size(item_ec);
+                out << L"- " << entry.path().filename().wstring()
+                    << (is_dir ? L" [dir]" : L" [" + FormatDashboardBytes(item_ec ? 0 : size) + L"]")
+                    << L"\r\n";
+            }
+        }
+    }
+    out << L"\r\n";
+
+    if (active_messages_skipped_for_size_) {
+        out << L"Messages\r\n";
+        out << L"- messages.json is " << FormatDashboardBytes(active_messages_file_size_)
+            << L"; desktop message parsing was skipped to keep the UI responsive.\r\n";
+        out << L"- Use the web chat or inspect the files above for this very large transcript.\r\n";
+        return out.str();
+    }
+
+    const auto model_visible = ModelVisibleMessages(active_messages_);
+    std::map<std::string, int> role_counts;
+    std::map<std::string, int> requested_tools;
+    std::map<std::string, int> completed_tools;
+    std::vector<std::string> errors;
+    size_t assistant_output_tokens = 0;
+    size_t user_prompt_tokens = 0;
+    size_t tool_result_tokens = 0;
+    size_t latest_context_used = 0;
+    size_t latest_context_total = 0;
+
+    for (const auto& message : active_messages_) {
+        ++role_counts[message.role.empty() ? "(empty)" : message.role];
+        if (message.role == "assistant") {
+            assistant_output_tokens += EstimateTokenCount(message.content);
+            const std::string lowered = LowerAsciiForDashboard(message.content);
+            if (lowered.find("[system error]") != std::string::npos ||
+                lowered.find("http 4") != std::string::npos ||
+                lowered.find("http 5") != std::string::npos) {
+                errors.push_back("assistant: " + DashboardPreview(message.content));
+            }
+            if (!message.tool_calls_json.empty()) {
+                try {
+                    const auto parsed = nlohmann::json::parse(message.tool_calls_json);
+                    if (parsed.is_array()) {
+                        for (const auto& call : parsed) {
+                            std::string name;
+                            if (call.contains("function") && call["function"].is_object()) {
+                                name = call["function"].value("name", "");
+                            }
+                            if (name.empty()) name = call.value("name", "");
+                            ++requested_tools[name.empty() ? "(unnamed tool)" : name];
+                        }
+                    }
+                } catch (...) {
+                    ++requested_tools["(unparseable tool calls)"];
+                }
+            }
+        } else if (message.role == "user") {
+            user_prompt_tokens += EstimateTokenCount(message.content);
+        } else if (message.role == "tool") {
+            tool_result_tokens += EstimateTokenCount(message.content);
+            ++completed_tools[message.name.empty() ? "(unnamed tool)" : message.name];
+            const std::string lowered = LowerAsciiForDashboard(message.content);
+            if (lowered.find("\"success\":false") != std::string::npos ||
+                lowered.find("error") != std::string::npos ||
+                lowered.find("failed") != std::string::npos) {
+                errors.push_back("tool " + (message.name.empty() ? "(unnamed)" : message.name) + ": " +
+                                 DashboardPreview(message.content));
+            }
+        } else if (message.role == "error") {
+            errors.push_back("chat error: " + DashboardPreview(message.content));
+        } else if (message.role == "context") {
+            try {
+                const auto ctx = nlohmann::json::parse(message.content);
+                latest_context_used = ctx.value("used_tokens", latest_context_used);
+                latest_context_total = ctx.value("total_tokens", latest_context_total);
+            } catch (...) {}
+        }
+    }
+
+    const auto request_entries =
+        storage_.LoadChatContextDebugEntries(active_project_id_, active_chat_id_);
+    size_t estimated_sent_tokens_total = 0;
+    size_t latest_request_tokens = 0;
+    for (const auto& entry : request_entries) {
+        const size_t request_tokens =
+            EstimateTokenCount(entry.system_prompt) + EstimateMessagesTokens(entry.request_messages);
+        estimated_sent_tokens_total += request_tokens;
+        latest_request_tokens = request_tokens;
+    }
+
+    const auto chat_log_path = storage_.data_root() / (active_project_id_ + ".chatlog");
+    size_t logged_model_errors = 0;
+    if (std::filesystem::is_regular_file(chat_log_path, ec) && !ec) {
+        const auto log_size = std::filesystem::file_size(chat_log_path, ec);
+        if (!ec && log_size <= 4ull * 1024ull * 1024ull) {
+            std::ifstream input(chat_log_path, std::ios::binary);
+            const std::string log_text{
+                std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>()};
+            size_t pos = 0;
+            const std::string chat_marker = "chat=" + active_chat_id_;
+            while ((pos = log_text.find("=== Model Error ===", pos)) != std::string::npos) {
+                const size_t block_start = log_text.rfind("========", pos);
+                const size_t block_end = log_text.find("========", pos + 1);
+                const std::string block = log_text.substr(
+                    block_start == std::string::npos ? pos : block_start,
+                    (block_end == std::string::npos ? log_text.size() : block_end) -
+                    (block_start == std::string::npos ? pos : block_start));
+                if (block.find(chat_marker) != std::string::npos) {
+                    ++logged_model_errors;
+                }
+                pos += 18;
             }
         }
     }
 
+    out << L"Messages and Token Estimates\r\n";
+    out << L"- Stored records: " << active_messages_.size() << L"\r\n";
+    out << L"- Model-visible records: " << model_visible.size() << L"\r\n";
+    out << L"- Estimated current model-visible history: " << EstimateMessagesTokens(model_visible) << L" tokens\r\n";
+    out << L"- Estimated user prompt tokens in stored chat: " << user_prompt_tokens << L"\r\n";
+    out << L"- Estimated assistant output tokens in stored chat: " << assistant_output_tokens << L"\r\n";
+    out << L"- Estimated tool-result tokens in stored chat: " << tool_result_tokens << L"\r\n";
+    out << L"- Request debug entries: " << request_entries.size() << L"\r\n";
+    out << L"- Estimated sent tokens across captured requests: " << estimated_sent_tokens_total << L"\r\n";
+    out << L"- Latest captured request estimate: " << latest_request_tokens << L" tokens\r\n";
+    if (latest_context_used > 0 || latest_context_total > 0) {
+        out << L"- Latest context check: " << latest_context_used;
+        if (latest_context_total > 0) out << L" / " << latest_context_total;
+        out << L" tokens\r\n";
+    }
+    out << L"- Note: provider-reported exact usage is not currently persisted; these are local estimates.\r\n\r\n";
+
+    out << L"Role Counts\r\n";
+    for (const auto& [role, count] : role_counts) {
+        out << L"- " << Utf8ToWide(role) << L": " << count << L"\r\n";
+    }
+    out << L"\r\n";
+
+    out << L"Tool Usage\r\n";
+    if (requested_tools.empty() && completed_tools.empty()) {
+        out << L"- No stored tool calls found for this chat.\r\n";
+    } else {
+        if (!requested_tools.empty()) {
+            out << L"- Requested tools:\r\n";
+            for (const auto& [name, count] : requested_tools) {
+                out << L"  - " << Utf8ToWide(name) << L": " << count << L"\r\n";
+            }
+        }
+        if (!completed_tools.empty()) {
+            out << L"- Completed tool results:\r\n";
+            for (const auto& [name, count] : completed_tools) {
+                out << L"  - " << Utf8ToWide(name) << L": " << count << L"\r\n";
+            }
+        }
+    }
+    out << L"\r\n";
+
+    out << L"Errors\r\n";
+    out << L"- Logged model-error blocks for this chat: " << logged_model_errors << L"\r\n";
+    if (errors.empty()) {
+        out << L"- No obvious stored error records found.\r\n";
+    } else {
+        size_t shown = 0;
+        for (const auto& error : errors) {
+            if (shown++ >= 20) {
+                out << L"- ... " << (errors.size() - shown + 1) << L" more\r\n";
+                break;
+            }
+            out << L"- " << Utf8ToWide(error) << L"\r\n";
+        }
+    }
+
+    return out.str();
+}
+
+void MainWindow::RenderTranscript() {
+    const std::wstring transcript = BuildChatDiagnosticsText();
+
     SetWindowTextW(transcript_, transcript.c_str());
-    SendMessageW(transcript_, EM_SETSEL, static_cast<WPARAM>(-1), static_cast<LPARAM>(-1));
+    SendMessageW(transcript_, EM_SETSEL, 0, 0);
     SendMessageW(transcript_, EM_SCROLLCARET, 0, 0);
-    SendMessageW(transcript_, WM_VSCROLL, SB_BOTTOM, 0);
+    SendMessageW(transcript_, WM_VSCROLL, SB_TOP, 0);
 }
 
 void MainWindow::RenderToolTrace() {

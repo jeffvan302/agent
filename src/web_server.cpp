@@ -903,7 +903,6 @@ AgentUploadArtifact CreateAgentMarkdownArtifact(
     markdown << "- Original file: " << original_abs << "\n";
     markdown << "- Project relative original: " << RelativePathUtf8(project_folder, original_path) << "\n";
     markdown << "- Web download route: " << download_url << "\n";
-    markdown << "- Web download URL: " << absolute_download_url << "\n";
     markdown << "- Agent Markdown file: " << markdown_abs << "\n";
     markdown << "- Agent upload index: " << index_abs << "\n\n";
     markdown << "## Processing\n\n";
@@ -1154,20 +1153,19 @@ std::string BuildWebFormattingContext(const std::string& server_address,
         "- Output the visualization spec directly in the fenced block. Do not wrap it in "
         "HTML or JavaScript.\n"
         "\nWeb Download Links:\n"
-        "- You may generate direct download URLs from raw link data by combining the server address with the route. "
-        "Relative routes also work inside this web chat, but absolute URLs are better for standalone HTML files.\n"
-        "- Project-accessible files can be linked as `" + server_address + "/data/{project_id}/{chat_id}/{file_or_relative_path}` "
-        "or `/data/{project_id}/{chat_id}/{file_or_relative_path}`. Use only file names or relative paths that came from the user, "
+        "- Prefer relative routes inside this web chat so links work from other machines on the network. "
+        "Use absolute URLs only for standalone HTML files or content that will be opened outside this server UI.\n"
+        "- Project-accessible files can be linked as `/data/{project_id}/{chat_id}/{file_or_relative_path}`. "
+        "Use only file names or relative paths that came from the user, "
         "tool output, or project context; URL-encode spaces and special characters. The server only serves files inside configured "
         "folder variables for the current user and chat.\n"
-        "- RAG originals can be linked as `" + server_address + "/rag/{project_id}/{rag_id}/{document_id}` "
-        "or `/rag/{project_id}/{rag_id}/{document_id}` when a readable exposed RAG tool returns a document_id or download_url.\n"
+        "- RAG originals can be linked as `/rag/{project_id}/{rag_id}/{document_id}` when a readable exposed RAG tool returns a document_id or download_url.\n"
         "- When writing standalone HTML files that reference images, stylesheets, or sibling assets from the web server, prefer the full absolute URL "
         "with the current server address instead of a bare `/data/...` or `/rag/...` route so the asset link stays explicit outside the chat UI.\n"
         "- For RAG documents, source_path, original_source_uri, and original file names are provenance only. They may refer to another "
         "computer or a file that no longer exists. Use download_url or the /rag route for downloadable links.";
     if (!server_address.empty()) {
-        context += "\n- Current server_address: " + server_address;
+        context += "\n- Current server_address for standalone/off-chat assets only: " + server_address;
     }
     if (!project_id.empty()) {
         context += "\n- Current project_id: " + project_id;
@@ -3316,26 +3314,6 @@ std::string WebServer::BuildUserContentWithAttachments(
 {
     if (attachments.empty()) return user_content;
 
-    const std::string server_address = BuildServerAddress(config_);
-    const auto make_absolute_download_url =
-        [&](const std::string& route_or_url) -> std::string {
-            const std::string trimmed = Trim(route_or_url);
-            if (trimmed.empty()) {
-                return {};
-            }
-            const std::string lowered = LowerAscii(trimmed);
-            if (lowered.rfind("http://", 0) == 0 || lowered.rfind("https://", 0) == 0) {
-                return trimmed;
-            }
-            if (server_address.empty()) {
-                return trimmed;
-            }
-            if (!trimmed.empty() && trimmed.front() == '/') {
-                return server_address + trimmed;
-            }
-            return server_address + "/" + trimmed;
-        };
-
     std::string folder_error;
     const auto upload_folder = ResolveProjectUploadFolder(
         mcp_manager_, storage_, user_store_, project_id, chat_id, username, &folder_error);
@@ -3365,8 +3343,6 @@ std::string WebServer::BuildUserContentWithAttachments(
         const std::string attachment_download_url =
             "/data/" + project_id + "/" + chat_id + "/" +
             UrlEncodePath(attachment_file_relative);
-        const std::string attachment_absolute_download_url =
-            make_absolute_download_url(attachment_download_url);
 
         if (const auto agent_entry =
                 FindAgentIndexEntryForUpload(upload_folder->root, filename)) {
@@ -3386,12 +3362,7 @@ std::string WebServer::BuildUserContentWithAttachments(
                 agent_entry->download_url.empty()
                     ? attachment_download_url
                     : agent_entry->download_url;
-            const std::string agent_absolute_download_url =
-                agent_entry->absolute_download_url.empty()
-                    ? make_absolute_download_url(agent_download_route)
-                    : agent_entry->absolute_download_url;
             combined += "Web download route: " + agent_download_route + "\n";
-            combined += "Web download URL: " + agent_absolute_download_url + "\n";
             combined += "Processed Markdown file: " +
                 WideToUtf8(agent_entry->markdown_path.wstring()) + "\n";
             combined += "Agent upload index: " +
@@ -3416,7 +3387,7 @@ std::string WebServer::BuildUserContentWithAttachments(
             combined += "Stored file: " + attachment_file_abs + "\n";
             combined += "Project relative path: " + attachment_file_relative + "\n";
             combined += "Web download route: " + attachment_download_url + "\n";
-            combined += "Web download URL: " + attachment_absolute_download_url + "\n\n";
+            combined += "\n";
             combined += text.empty() ? "[Error: could not read file]\n" : text;
             if (truncated) {
                 combined += "\n[... truncated at 128 KB ...]";
@@ -3429,7 +3400,6 @@ std::string WebServer::BuildUserContentWithAttachments(
             combined += "Stored file: " + attachment_file_abs + "\n";
             combined += "Project relative path: " + attachment_file_relative + "\n";
             combined += "Web download route: " + attachment_download_url + "\n";
-            combined += "Web download URL: " + attachment_absolute_download_url + "\n";
             combined += "[Binary file, " +
                 std::to_string(file_size_error ? 0 : attachment_file_size) +
                 " bytes; content not embedded]\n";
