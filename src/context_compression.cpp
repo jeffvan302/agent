@@ -50,6 +50,10 @@ std::string CompressionStrategyToString(ContextCompressionStrategy strategy) {
     switch (strategy) {
     case ContextCompressionStrategy::TruncateTop:
         return "truncate_top";
+    case ContextCompressionStrategy::RollingSummary:
+        return "rolling_summary";
+    case ContextCompressionStrategy::ToolTraceDistillation:
+        return "tool_trace_distillation";
     case ContextCompressionStrategy::HierarchicalStructured:
         return "hierarchical_structured";
     case ContextCompressionStrategy::None:
@@ -124,9 +128,182 @@ void AppendMessageToCompressedContext(std::ostringstream& block,
           << "\n\n";
 }
 
+bool IsToolTraceMessage(const MessageRecord& message) {
+    return message.role == "tool" ||
+           !TrimStr(message.tool_call_id).empty() ||
+           !TrimStr(message.tool_calls_json).empty();
+}
+
+bool HasToolTraceMessages(const std::vector<MessageRecord>& messages) {
+    return std::any_of(messages.begin(), messages.end(), IsToolTraceMessage);
+}
+
+std::string TruncateForPrompt(const std::string& text, size_t max_chars) {
+    if (max_chars == 0 || text.size() <= max_chars) {
+        return text;
+    }
+    const std::string note = "\n[...truncated for compression prompt...]\n";
+    if (max_chars <= note.size() + 16) {
+        return text.substr(0, max_chars);
+    }
+    const size_t available = max_chars - note.size();
+    const size_t head = (available * 2) / 3;
+    const size_t tail = available - head;
+    return text.substr(0, head) + note + text.substr(text.size() - tail);
+}
+
+std::string BuildDeterministicRollingSummary(const std::string& prior_summary,
+                                             const std::vector<MessageRecord>& new_turns,
+                                             int max_tokens) {
+    std::ostringstream summary;
+    if (!TrimStr(prior_summary).empty()) {
+        summary << prior_summary << "\n\n";
+    }
+    summary << "Recent updates:\n";
+    for (const auto& turn : new_turns) {
+        if (turn.role == "tool") {
+            summary << "- Tool output was received";
+            if (!turn.name.empty()) summary << " from " << turn.name;
+            if (!turn.tool_call_id.empty()) summary << " (" << turn.tool_call_id << ")";
+            summary << ".\n";
+            continue;
+        }
+        summary << "- " << CompressionMessageLabel(turn) << ": "
+                << TruncateForPrompt(turn.content, 900) << "\n";
+    }
+
+    const size_t max_chars = static_cast<size_t>(std::max(200, max_tokens <= 0 ? 500 : max_tokens) * 4);
+    std::string result = summary.str();
+    if (result.size() > max_chars) {
+        result = TruncateForPrompt(result, max_chars);
+    }
+    return TrimStr(result);
+}
+
+std::string BuildToolTraceSourceText(const std::vector<MessageRecord>& messages) {
+    constexpr size_t kMaxSourceChars = 32000;
+    std::ostringstream source;
+    size_t count = 0;
+    for (size_t i = 0; i < messages.size(); ++i) {
+        const auto& message = messages[i];
+        if (!IsToolTraceMessage(message)) {
+            continue;
+        }
+        ++count;
+        source << "Trace " << count << " (message " << i << ", " << CompressionMessageLabel(message) << ")\n";
+        if (!message.tool_call_id.empty()) {
+            source << "tool_call_id: " << message.tool_call_id << "\n";
+        }
+        if (!TrimStr(message.tool_calls_json).empty()) {
+            source << "tool_calls_json:\n" << TruncateForPrompt(message.tool_calls_json, 3000) << "\n";
+        }
+        if (!TrimStr(message.content).empty()) {
+            source << "content:\n" << TruncateForPrompt(message.content, 5000) << "\n";
+        }
+        source << "\n";
+        if (static_cast<size_t>(source.tellp()) >= kMaxSourceChars) {
+            source << "[Additional tool trace material omitted before model distillation.]\n";
+            break;
+        }
+    }
+    return count == 0 ? "" : source.str();
+}
+
+std::string BuildDeterministicToolTraceSummary(const std::string& prior_summary,
+                                               const std::vector<MessageRecord>& messages,
+                                               int max_tokens) {
+    std::ostringstream summary;
+    if (!TrimStr(prior_summary).empty()) {
+        summary << "Prior distilled tool trace:\n" << prior_summary << "\n\n";
+    }
+    summary << "Distilled tool trace:\n";
+    size_t count = 0;
+    for (size_t i = 0; i < messages.size(); ++i) {
+        const auto& message = messages[i];
+        if (!IsToolTraceMessage(message)) {
+            continue;
+        }
+        ++count;
+        summary << "- Message " << i << " [" << CompressionMessageLabel(message) << "]";
+        if (!message.name.empty()) summary << " name=" << message.name;
+        if (!message.tool_call_id.empty()) summary << " call_id=" << message.tool_call_id;
+        summary << "\n";
+        if (!TrimStr(message.tool_calls_json).empty()) {
+            summary << "  tool calls: " << TruncateForPrompt(message.tool_calls_json, 1200) << "\n";
+        }
+        if (!TrimStr(message.content).empty()) {
+            summary << "  result: " << TruncateForPrompt(message.content, 1800) << "\n";
+        }
+    }
+    if (count == 0) {
+        summary << "- No tool calls or tool outputs were found in this range.\n";
+    }
+
+    const size_t max_chars = static_cast<size_t>(std::max(200, max_tokens <= 0 ? 500 : max_tokens) * 4);
+    std::string result = summary.str();
+    if (result.size() > max_chars) {
+        result = TruncateForPrompt(result, max_chars);
+    }
+    return TrimStr(result);
+}
+
+std::string FormatToolTraceDistillationContext(const std::vector<MessageRecord>& messages,
+                                               const ContextCompressionConfig& config,
+                                               const ChatCompressionState& state) {
+    int keep = config.truncate_top_keep_messages;
+    if (keep <= 0) keep = 20;
+
+    std::vector<MessageRecord> recent_non_tool;
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+        if (IsToolTraceMessage(*it)) {
+            continue;
+        }
+        recent_non_tool.insert(recent_non_tool.begin(), *it);
+        if (recent_non_tool.size() >= static_cast<size_t>(keep)) {
+            break;
+        }
+    }
+
+    std::ostringstream block;
+    block << "=== TOOL TRACE DISTILLATION ===\n\n";
+    block << "## Distilled Tool Trace\n";
+    block << (state.layer2_previous_summary.empty()
+        ? "No meaningful tool traces were found."
+        : state.layer2_previous_summary)
+          << "\n\n";
+
+    block << "## Recent Non-Tool Conversation - Verbatim Tail\n";
+    if (recent_non_tool.empty()) {
+        block << "(No recent non-tool messages)\n\n";
+    } else {
+        for (const auto& message : recent_non_tool) {
+            AppendMessageToCompressedContext(
+                block,
+                message,
+                10000,
+                "Tool trace distillation keeps a bounded non-tool tail for continuity.");
+        }
+    }
+
+    block << "=== END TOOL TRACE DISTILLATION ===\n";
+    return block.str();
+}
+
 std::string ResolveLayer2PromptTemplate(const Layer2Config& config) {
     return TrimStr(config.prompt_template).empty()
         ? ContextCompressionService::DefaultLayer2PromptTemplate()
+        : config.prompt_template;
+}
+
+std::string ResolveRollingSummaryPromptTemplate(const Layer2Config& config) {
+    return TrimStr(config.prompt_template).empty()
+        ? ContextCompressionService::DefaultRollingSummaryPromptTemplate()
+        : config.prompt_template;
+}
+
+std::string ResolveToolTraceDistillationPromptTemplate(const Layer2Config& config) {
+    return TrimStr(config.prompt_template).empty()
+        ? ContextCompressionService::DefaultToolTraceDistillationPromptTemplate()
         : config.prompt_template;
 }
 
@@ -1355,6 +1532,39 @@ std::string ContextCompressionService::DefaultLayer2PromptTemplate() {
         "- Flag any ambiguity or unresolved questions explicitly";
 }
 
+std::string ContextCompressionService::DefaultRollingSummaryPromptTemplate() {
+    return
+        "Update the rolling summary under {{max_tokens}} tokens.\n\n"
+        "Preserve durable context that future turns need:\n"
+        "1. The user's goal, requirements, and preferences\n"
+        "2. Important decisions and why they were made\n"
+        "3. Files, paths, commands, model/provider choices, and configuration names when they matter\n"
+        "4. Work already completed, current status, blockers, and next steps\n"
+        "5. Explicit user corrections or constraints\n\n"
+        "Rules:\n"
+        "- Merge the previous summary with the new turns; do not simply append a transcript.\n"
+        "- Replace obsolete details when new turns contradict them.\n"
+        "- Keep the summary compact but operationally useful.\n"
+        "- Include exact names, paths, commands, and errors when they are needed to continue the work.\n"
+        "- Do not include large tool outputs; summarize their effect instead.";
+}
+
+std::string ContextCompressionService::DefaultToolTraceDistillationPromptTemplate() {
+    return
+        "Distill the tool trace under {{max_tokens}} tokens.\n\n"
+        "Keep only the operational facts that future turns need:\n"
+        "1. Tool names and commands/actions used\n"
+        "2. Files, folders, URLs, ports, providers, and model IDs touched\n"
+        "3. Success/failure status and the exact important error messages\n"
+        "4. Files changed, tests/builds run, and verification results\n"
+        "5. Windows and PowerShell-specific details when they affect follow-up work\n\n"
+        "Rules:\n"
+        "- Drop repeated stdout, progress noise, stack traces that do not matter, and bulky raw listings.\n"
+        "- Keep a concise chronological timeline.\n"
+        "- Preserve exact commands and error text when they explain why a later correction was made.\n"
+        "- If there were no meaningful tool traces, say that briefly.";
+}
+
 std::string ContextCompressionService::DefaultLayer3PromptTemplate() {
     return
         "Update the state object based on the new turns. Rules:\n"
@@ -1859,6 +2069,256 @@ std::string ContextCompressionService::CompressTruncateTop(
 }
 
 // ============================================================================
+// Rolling Summary Strategy
+// ============================================================================
+
+std::string ContextCompressionService::BuildRollingSummaryBlock(
+    const std::vector<MessageRecord>& messages,
+    const ContextCompressionConfig& config,
+    ChatCompressionState& state) const {
+
+    int keep = config.truncate_top_keep_messages;
+    if (keep <= 0) keep = 20;
+
+    const size_t start = messages.size() > static_cast<size_t>(keep)
+        ? messages.size() - static_cast<size_t>(keep)
+        : 0;
+
+    std::ostringstream block;
+    block << "=== ROLLING SUMMARY CONTEXT ===\n\n";
+    block << "## Rolling Summary\n";
+    block << (state.layer2_previous_summary.empty() ? "(No rolling summary yet)" : state.layer2_previous_summary)
+          << "\n\n";
+
+    block << "## Recent Conversation - Verbatim Tail\n";
+    if (messages.empty()) {
+        block << "(No recent messages)\n\n";
+    } else {
+        for (size_t i = start; i < messages.size(); ++i) {
+            AppendMessageToCompressedContext(
+                block,
+                messages[i],
+                messages[i].role == "tool" ? 3000 : 10000,
+                "Rolling summary keeps a short verbatim tail; large outputs remain in the full chat log.");
+        }
+    }
+
+    state.last_compression_message_index = messages.size();
+    block << "=== END ROLLING SUMMARY CONTEXT ===\n";
+    return block.str();
+}
+
+std::string ContextCompressionService::CompressRollingSummary(
+    const std::vector<MessageRecord>& messages,
+    const ContextCompressionConfig& config,
+    ChatCompressionState& state,
+    std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller,
+    bool force_rebuild) const {
+
+    const size_t last_idx = force_rebuild
+        ? 0
+        : std::min(state.last_compression_message_index, messages.size());
+
+    std::vector<MessageRecord> new_turns;
+    for (size_t i = last_idx; i < messages.size(); ++i) {
+        new_turns.push_back(messages[i]);
+    }
+    if (new_turns.empty() && !force_rebuild) {
+        return "";
+    }
+
+    Layer2Config rolling_config = config.layers.layer2;
+    if (TrimStr(rolling_config.prompt_template).empty()) {
+        rolling_config.prompt_template = DefaultRollingSummaryPromptTemplate();
+    }
+
+    std::string summary;
+    if (rolling_config.enabled &&
+        !rolling_config.model_id.empty() &&
+        !rolling_config.model_provider_id.empty()) {
+        summary = Layer2_Summarize(
+            {},
+            new_turns,
+            state.layer2_previous_summary,
+            state.layer3_previous_state_json,
+            rolling_config,
+            model_caller);
+    }
+
+    if (TrimStr(summary).empty() ||
+        (summary == state.layer2_previous_summary && !new_turns.empty() &&
+         (!rolling_config.enabled || rolling_config.model_id.empty() || rolling_config.model_provider_id.empty()))) {
+        summary = BuildDeterministicRollingSummary(
+            state.layer2_previous_summary,
+            new_turns,
+            rolling_config.max_tokens);
+    }
+
+    state.layer2_previous_summary = TrimStr(summary);
+    return BuildRollingSummaryBlock(messages, config, state);
+}
+
+// ============================================================================
+// Tool Trace Distillation Strategy
+// ============================================================================
+
+std::string ContextCompressionService::BuildToolTraceDistillationBlock(
+    const std::vector<MessageRecord>& messages,
+    const ContextCompressionConfig& config,
+    ChatCompressionState& state,
+    std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller) const {
+
+    Layer2Config trace_config = config.layers.layer2;
+    if (TrimStr(trace_config.prompt_template).empty()) {
+        trace_config.prompt_template = DefaultToolTraceDistillationPromptTemplate();
+    }
+
+    const std::string source_text = BuildToolTraceSourceText(messages);
+    std::string distilled;
+    if (!source_text.empty() &&
+        trace_config.enabled &&
+        !trace_config.model_id.empty() &&
+        !trace_config.model_provider_id.empty()) {
+        std::ostringstream prompt;
+        prompt << "You are compressing tool calls and tool outputs for future context.\n\n";
+        if (state.layer2_previous_summary.empty()) {
+            prompt << "PREVIOUS DISTILLED TOOL TRACE: (none)\n\n";
+        } else {
+            prompt << "PREVIOUS DISTILLED TOOL TRACE:\n"
+                   << state.layer2_previous_summary << "\n\n";
+        }
+        prompt << "NEW TOOL TRACE MATERIAL:\n" << source_text << "\n";
+        prompt << ApplyPromptTemplate(
+            ResolveToolTraceDistillationPromptTemplate(trace_config),
+            trace_config.max_tokens) << "\n";
+
+        ChatRequestOptions opts;
+        opts.model.id = trace_config.model_id;
+        if (auto provider = OpenAIClient::LookupProvider(trace_config.model_provider_id)) {
+            opts.provider = *provider;
+            opts.messages.push_back(MessageRecord{});
+            opts.messages.back().role = "user";
+            opts.messages.back().content = prompt.str();
+            opts.max_tokens = trace_config.max_tokens;
+            opts.temperature = 0.2;
+
+            auto result = model_caller(opts);
+            if (result && result->success && !result->message.content.empty()) {
+                distilled = TrimStr(result->message.content);
+            }
+        }
+    }
+
+    if (distilled.empty()) {
+        distilled = BuildDeterministicToolTraceSummary(
+            state.layer2_previous_summary,
+            messages,
+            trace_config.max_tokens);
+    }
+
+    state.layer2_previous_summary = TrimStr(distilled);
+    state.last_compression_message_index = messages.size();
+    return FormatToolTraceDistillationContext(messages, config, state);
+}
+
+std::string ContextCompressionService::CompressToolTraceDistillation(
+    const std::vector<MessageRecord>& messages,
+    const ContextCompressionConfig& config,
+    ChatCompressionState& state,
+    std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller,
+    bool force_rebuild) const {
+
+    const size_t last_idx = force_rebuild
+        ? 0
+        : std::min(state.last_compression_message_index, messages.size());
+
+    std::vector<MessageRecord> new_turns;
+    for (size_t i = last_idx; i < messages.size(); ++i) {
+        new_turns.push_back(messages[i]);
+    }
+
+    if (new_turns.empty() && !force_rebuild) {
+        return "";
+    }
+    if (!HasToolTraceMessages(new_turns) && !force_rebuild) {
+        state.last_compression_message_index = messages.size();
+        return "";
+    }
+
+    const std::vector<MessageRecord>& source = force_rebuild ? messages : new_turns;
+    (void)BuildToolTraceDistillationBlock(source, config, state, model_caller);
+    state.last_compression_message_index = messages.size();
+    return FormatToolTraceDistillationContext(messages, config, state);
+}
+
+std::vector<MessageRecord> ContextCompressionService::ApplyPrePass(
+    const std::vector<MessageRecord>& messages,
+    const ContextCompressionConfig& config,
+    std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller) const {
+
+    if (config.pre_pass_config_id.empty() || config.pre_pass_config_id == config.id || messages.empty()) {
+        return messages;
+    }
+
+    auto pre_config_opt = GetGlobalConfig(config.pre_pass_config_id);
+    if (!pre_config_opt || pre_config_opt->strategy == ContextCompressionStrategy::None) {
+        return messages;
+    }
+
+    const ContextCompressionConfig& pre_config = *pre_config_opt;
+    ChatCompressionState pre_state;
+    std::string pre_block;
+    if (pre_config.strategy == ContextCompressionStrategy::ToolTraceDistillation) {
+        if (!HasToolTraceMessages(messages)) {
+            return messages;
+        }
+        pre_block = BuildToolTraceDistillationBlock(messages, pre_config, pre_state, model_caller);
+    } else if (pre_config.strategy == ContextCompressionStrategy::RollingSummary) {
+        pre_block = CompressRollingSummary(messages, pre_config, pre_state, model_caller, true);
+    } else if (pre_config.strategy == ContextCompressionStrategy::TruncateTop) {
+        pre_block = BuildTruncateTopBlock(messages, pre_config, pre_state);
+    } else if (pre_config.strategy == ContextCompressionStrategy::HierarchicalStructured) {
+        pre_state.layer1_pinned_messages = Layer1_Pin(messages, pre_config.layers.layer1);
+        pre_state.last_compression_message_index = messages.size();
+        pre_block = BuildHierarchicalContextBlock(messages, pre_config, pre_state);
+    }
+
+    if (TrimStr(pre_block).empty()) {
+        return messages;
+    }
+
+    std::vector<MessageRecord> preprocessed = messages;
+    if (pre_config.strategy == ContextCompressionStrategy::ToolTraceDistillation) {
+        bool inserted_summary = false;
+        for (auto& message : preprocessed) {
+            if (!IsToolTraceMessage(message)) {
+                continue;
+            }
+            if (!inserted_summary) {
+                message.role = "system";
+                message.name.clear();
+                message.tool_call_id.clear();
+                message.tool_calls_json.clear();
+                message.content =
+                    "[Compression pre-pass: " + pre_config.name + "]\n" + pre_block;
+                inserted_summary = true;
+            } else {
+                message.tool_calls_json.clear();
+                message.content =
+                    "[Tool trace omitted by compression pre-pass: " + pre_config.name +
+                    ". Use the distilled trace above.]";
+            }
+        }
+        return preprocessed;
+    }
+
+    preprocessed.front().content =
+        "[Compression pre-pass: " + pre_config.name + "]\n" + pre_block +
+        "\n[Original message]\n" + preprocessed.front().content;
+    return preprocessed;
+}
+
+// ============================================================================
 // Hierarchical Structured Compression Strategy
 // ============================================================================
 
@@ -2141,16 +2601,37 @@ std::string ContextCompressionService::CompressConversation(
     ChatCompressionState state = LoadChatState(project_id, chat_id);
     const ChatCompressionState previous_state = state;
     const size_t previous_message_index = std::min(state.last_compression_message_index, messages.size());
+    const std::vector<MessageRecord> working_messages = ApplyPrePass(messages, *config_opt, model_caller);
     std::string block;
 
     if (config_opt->strategy == ContextCompressionStrategy::TruncateTop) {
-        block = CompressTruncateTop(messages, *config_opt, state);
+        block = CompressTruncateTop(working_messages, *config_opt, state);
         if (block.empty() && force_rebuild) {
-            block = BuildTruncateTopBlock(messages, *config_opt, state);
+            block = BuildTruncateTopBlock(working_messages, *config_opt, state);
+        }
+    } else if (config_opt->strategy == ContextCompressionStrategy::RollingSummary) {
+        block = CompressRollingSummary(
+            working_messages,
+            *config_opt,
+            state,
+            model_caller,
+            force_rebuild);
+        if (block.empty() && force_rebuild) {
+            block = BuildRollingSummaryBlock(working_messages, *config_opt, state);
+        }
+    } else if (config_opt->strategy == ContextCompressionStrategy::ToolTraceDistillation) {
+        block = CompressToolTraceDistillation(
+            working_messages,
+            *config_opt,
+            state,
+            model_caller,
+            force_rebuild);
+        if (block.empty() && force_rebuild) {
+            block = BuildToolTraceDistillationBlock(working_messages, *config_opt, state, model_caller);
         }
     } else if (config_opt->strategy == ContextCompressionStrategy::HierarchicalStructured) {
         block = CompressHierarchical(
-            messages,
+            working_messages,
             *config_opt,
             state,
             model_caller,
@@ -2159,15 +2640,16 @@ std::string ContextCompressionService::CompressConversation(
             project_id,
             chat_id);
         if (block.empty() && force_rebuild) {
-            state.layer1_pinned_messages = Layer1_Pin(messages, config_opt->layers.layer1);
-            state.last_compression_message_index = messages.size();
-            block = BuildHierarchicalContextBlock(messages, *config_opt, state);
+            state.layer1_pinned_messages = Layer1_Pin(working_messages, config_opt->layers.layer1);
+            state.last_compression_message_index = working_messages.size();
+            block = BuildHierarchicalContextBlock(working_messages, *config_opt, state);
         }
     } else {
         return "";
     }
 
     if (!block.empty()) {
+        state.last_compression_message_index = std::min(state.last_compression_message_index, messages.size());
         state.current_compressed_context = block;
         ChatCompressionSnapshot snapshot;
         snapshot.id = MakeId("compression");
@@ -2219,6 +2701,16 @@ std::string ContextCompressionService::RebuildCompressedContextFromExistingState
     std::string block;
     if (config_opt->strategy == ContextCompressionStrategy::TruncateTop) {
         block = BuildTruncateTopBlock(compressed_prefix, *config_opt, state);
+    } else if (config_opt->strategy == ContextCompressionStrategy::RollingSummary) {
+        state.last_compression_message_index = compressed_through;
+        block = BuildRollingSummaryBlock(compressed_prefix, *config_opt, state);
+    } else if (config_opt->strategy == ContextCompressionStrategy::ToolTraceDistillation) {
+        state.last_compression_message_index = compressed_through;
+        block = BuildToolTraceDistillationBlock(
+            compressed_prefix,
+            *config_opt,
+            state,
+            [](const ChatRequestOptions&) -> std::optional<ChatCompletionResult> { return std::nullopt; });
     } else if (config_opt->strategy == ContextCompressionStrategy::HierarchicalStructured) {
         state.layer1_pinned_messages = Layer1_Pin(compressed_prefix, config_opt->layers.layer1);
         state.last_compression_message_index = compressed_through;
@@ -2237,6 +2729,27 @@ std::string ContextCompressionService::BuildCompressedContextBlock(
     const ChatCompressionState& state) const {
     if (!state.current_compressed_context.empty()) {
         return state.current_compressed_context;
+    }
+
+    if (config.strategy == ContextCompressionStrategy::RollingSummary) {
+        std::ostringstream block;
+        block << "=== ROLLING SUMMARY CONTEXT ===\n\n";
+        block << "## Rolling Summary\n";
+        block << (state.layer2_previous_summary.empty() ? "(No rolling summary yet)" : state.layer2_previous_summary)
+              << "\n\n";
+        block << "=== END ROLLING SUMMARY CONTEXT ===\n";
+        return block.str();
+    }
+
+    if (config.strategy == ContextCompressionStrategy::ToolTraceDistillation) {
+        std::ostringstream block;
+        block << "=== TOOL TRACE DISTILLATION ===\n\n";
+        block << (state.layer2_previous_summary.empty()
+            ? "No meaningful tool traces have been distilled yet."
+            : state.layer2_previous_summary)
+              << "\n\n";
+        block << "=== END TOOL TRACE DISTILLATION ===\n";
+        return block.str();
     }
 
     std::ostringstream block;

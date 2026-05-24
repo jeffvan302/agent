@@ -511,6 +511,8 @@ struct IngestionJobRecord {
 enum class ContextCompressionStrategy {
     None,
     TruncateTop,
+    RollingSummary,
+    ToolTraceDistillation,
     HierarchicalStructured,
 };
 
@@ -571,6 +573,7 @@ struct ContextCompressionConfig {
     std::string id;
     std::string name;
     ContextCompressionStrategy strategy = ContextCompressionStrategy::None;
+    std::string pre_pass_config_id;
 
     // Common settings for all strategies
     int frequency_every_n_prompts = 10;        // 0 = manual only
@@ -633,7 +636,9 @@ struct ModelToolConfig {
     std::string preferred_provider_id;
     std::string preferred_model_id;
     std::string instructions;    // system prompt injected into the sub-agent
-    std::string selected_compression_config_id;  // optional context compression for sub-agent loop
+    std::string selected_compression_config_id;  // legacy; model tools no longer use context compression
+    std::string selected_agentic_mode_id;        // optional agentic mode instructions/framework for this tool
+    std::vector<std::string> built_in_tool_names; // built-in tools this model tool may use
     std::vector<ProjectMcpServerBinding> mcp_bindings;  // which servers this tool may use
     std::vector<ProjectRagBinding> rag_bindings;        // which RAG libraries this tool may use
 };
@@ -668,6 +673,8 @@ struct ProjectSettings {
     std::vector<std::string> enabled_agentic_mode_ids; // IDs of agentic modes enabled for this project
     bool enable_chat_logging = false;             // Enable detailed per-chat/request logging for this project
     bool allow_manual_context_compression = false; // Allow manual context window compression from web UI
+    bool force_context_compression_token_threshold = false; // Force automatic compression when request tokens reach threshold
+    int context_compression_token_threshold = 0;    // Absolute input-token threshold; ignored unless enabled
     bool enable_web_debugging = false;             // Allow prompt/context debugging bubbles in the web UI
     bool serve_web_links_inline = false;            // Serve /data and /rag file links inline instead of forced downloads
     bool enable_automation = false;                 // Enable automation sequence recording and playback in web UI

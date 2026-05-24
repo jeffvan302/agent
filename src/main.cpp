@@ -1071,6 +1071,35 @@ size_t EstimateRequestInputTokens(const ChatRequestOptions& request, const std::
     return EstimateRequestInputTokens(request, exposed_tools, {}, include_tools);
 }
 
+size_t ResolveCompressionTriggerTokens(
+    const ProjectSettings& project_settings,
+    const std::optional<ContextCompressionConfig>& selected_config,
+    const ChatRequestOptions& request) {
+    if (!selected_config) {
+        return 0;
+    }
+
+    size_t trigger_tokens = 0;
+    if (project_settings.force_context_compression_token_threshold &&
+        project_settings.context_compression_token_threshold > 0) {
+        trigger_tokens =
+            static_cast<size_t>(project_settings.context_compression_token_threshold);
+    }
+
+    if (request.model.context_window > 0 &&
+        selected_config->context_window_trigger_percent > 0) {
+        const size_t config_trigger_tokens =
+            static_cast<size_t>(request.model.context_window) *
+            static_cast<size_t>(selected_config->context_window_trigger_percent) / 100;
+        if (config_trigger_tokens > 0 &&
+            (trigger_tokens == 0 || config_trigger_tokens < trigger_tokens)) {
+            trigger_tokens = config_trigger_tokens;
+        }
+    }
+
+    return trigger_tokens;
+}
+
 // Build a "Previously Retrieved RAG Context" block from the per-chat working set.
 // max_token_budget == 0 means no limit; otherwise chunks are included until the budget is consumed.
 std::string BuildWorkingSetContextBlock(const std::vector<RagWorkingSetEntry>& entries, size_t max_token_budget = 0) {
@@ -1837,6 +1866,161 @@ std::string SanitizeToolName(const std::string& name) {
     return collapsed;
 }
 
+const AgenticModeConfig* FindAgenticModeById(
+    const std::vector<AgenticModeConfig>& modes,
+    const std::string& mode_id) {
+    if (mode_id.empty()) return nullptr;
+    const auto it = std::find_if(modes.begin(), modes.end(),
+        [&](const AgenticModeConfig& mode) { return mode.id == mode_id; });
+    return it == modes.end() ? nullptr : &*it;
+}
+
+bool ModelToolHasBuiltInTool(const ModelToolConfig& tool, const std::string& name) {
+    return std::find(tool.built_in_tool_names.begin(),
+                     tool.built_in_tool_names.end(),
+                     name) != tool.built_in_tool_names.end();
+}
+
+ProjectSettings BuildModelToolBuiltInSettings(
+    const ProjectSettings& project_settings,
+    const ModelToolConfig& tool) {
+    ProjectSettings scoped = project_settings;
+    scoped.built_in_powershell_enabled =
+        project_settings.built_in_powershell_enabled &&
+        ModelToolHasBuiltInTool(tool, built_in_tools::kPowerShellToolName);
+    scoped.built_in_filesystem_enabled =
+        project_settings.built_in_filesystem_enabled &&
+        ModelToolHasBuiltInTool(tool, built_in_tools::kFilesystemToolName);
+    scoped.built_in_planner_enabled =
+        project_settings.built_in_planner_enabled &&
+        ModelToolHasBuiltInTool(tool, built_in_tools::kPlannerToolName);
+    scoped.built_in_completion_driver_enabled =
+        project_settings.built_in_completion_driver_enabled &&
+        ModelToolHasBuiltInTool(tool, built_in_tools::kCompletionDriverToolName);
+    scoped.built_in_questionnaire_enabled =
+        project_settings.built_in_questionnaire_enabled &&
+        ModelToolHasBuiltInTool(tool, built_in_tools::kQuestionnaireToolName);
+    scoped.built_in_sleep_enabled =
+        project_settings.built_in_sleep_enabled &&
+        ModelToolHasBuiltInTool(tool, built_in_tools::kSleepToolName);
+    scoped.built_in_artifact_memory_enabled = false;
+    return scoped;
+}
+
+std::string BuiltInToolShortName(const std::string& name) {
+    if (name == built_in_tools::kPowerShellToolName) return "PowerShell";
+    if (name == built_in_tools::kFilesystemToolName) return "Project Filesystem";
+    if (name == built_in_tools::kPlannerToolName) return "Planner";
+    if (name == built_in_tools::kCompletionDriverToolName) return "Completion Driver";
+    if (name == built_in_tools::kQuestionnaireToolName) return "Questionnaire";
+    if (name == built_in_tools::kSleepToolName) return "Sleep";
+    return name;
+}
+
+std::vector<std::string> ModelToolBuiltInDisplayNames(
+    const ModelToolConfig& tool,
+    const ProjectSettings& project_settings,
+    const std::string& agentic_mode_id = {}) {
+    const ProjectSettings scoped = BuildModelToolBuiltInSettings(project_settings, tool);
+    std::vector<std::string> names;
+    for (const auto& def : built_in_tools::BuildDefinitions(scoped, agentic_mode_id)) {
+        names.push_back(BuiltInToolShortName(def.name));
+    }
+    return names;
+}
+
+void AppendPromptSection(std::string& prompt,
+                         const std::string& title,
+                         const std::string& body) {
+    const std::string trimmed = Trim(body);
+    if (trimmed.empty()) return;
+    if (!prompt.empty()) prompt += "\n\n";
+    prompt += title;
+    prompt += ":\n";
+    prompt += trimmed;
+}
+
+std::string BuildInheritedVariablesPrompt(
+    const std::vector<ProjectMcpVariableValue>& variables) {
+    if (variables.empty()) return {};
+    std::ostringstream out;
+    out << "Inherited Variables:\n";
+    out << "These values were resolved by the parent model/chat and are available to this model tool. Use them directly for paths, working directories, project variables, MCP arguments, and built-in tool arguments.\n";
+    for (const auto& variable : variables) {
+        if (Trim(variable.name).empty()) continue;
+        out << "- " << variable.name << ": " << variable.value;
+        if (!Trim(variable.description).empty()) {
+            out << " (description: " << Trim(variable.description) << ")";
+        }
+        out << "\n";
+    }
+    return out.str();
+}
+
+std::string BuildModelToolBuiltInSystemPrompt(
+    const ProjectSettings& settings,
+    const std::string& agentic_mode_id) {
+    std::string prompt;
+    if (settings.built_in_powershell_enabled) {
+        AppendPromptSection(prompt, "PowerShell Execution", built_in_tools::PowerShellSystemPrompt());
+    }
+    if (settings.built_in_planner_enabled) {
+        AppendPromptSection(prompt, "Planner / Task Decomposition", built_in_tools::PlannerSystemPrompt());
+    }
+    if (built_in_tools::IsCompletionDriverEnabled(settings, agentic_mode_id)) {
+        AppendPromptSection(prompt, "Completion Driver",
+            built_in_tools::CompletionDriverSystemPrompt(
+                built_in_tools::NormalizedCompletionDriverMaxContinuations(settings)));
+    }
+    if (built_in_tools::IsQuestionnaireEnabled(settings, agentic_mode_id)) {
+        AppendPromptSection(prompt, "User Questionnaire", built_in_tools::QuestionnaireSystemPrompt());
+    }
+    if (settings.built_in_sleep_enabled) {
+        AppendPromptSection(prompt, "Sleep / Pause",
+            built_in_tools::SleepSystemPrompt(
+                built_in_tools::NormalizedSleepMaxSeconds(settings)));
+    }
+    if (settings.built_in_filesystem_enabled) {
+        AppendPromptSection(prompt, "Project Filesystem", built_in_tools::FilesystemSystemPrompt());
+    }
+    return prompt;
+}
+
+void FilterRagToolSetForModelTool(rag_tools::RagToolSet& set,
+                                  const ModelToolConfig& tool) {
+    std::vector<std::string> allowed_rag_ids;
+    for (const auto& binding : tool.rag_bindings) {
+        if (binding.enabled && binding.can_read && binding.expose_as_tool &&
+            binding.retrieval_mode != RagRetrievalMode::PassiveOnly &&
+            binding.retrieval_mode != RagRetrievalMode::Disabled) {
+            allowed_rag_ids.push_back(binding.rag_id);
+        }
+    }
+    const auto allowed = [&](const std::string& rag_id) {
+        return std::find(allowed_rag_ids.begin(), allowed_rag_ids.end(), rag_id) != allowed_rag_ids.end();
+    };
+
+    for (auto it = set.routes.begin(); it != set.routes.end();) {
+        if (!allowed(it->second.rag_id)) {
+            it = set.routes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    set.definitions.erase(
+        std::remove_if(set.definitions.begin(), set.definitions.end(),
+            [&](const ChatToolDefinition& def) {
+                return set.routes.find(def.name) == set.routes.end();
+            }),
+        set.definitions.end());
+    set.exposed_tools.erase(
+        std::remove_if(set.exposed_tools.begin(), set.exposed_tools.end(),
+            [&](const McpExposedTool& exposed) {
+                return set.routes.find(exposed.alias) == set.routes.end();
+            }),
+        set.exposed_tools.end());
+}
+
 bool IsRagToolName(const std::string& name) {
     return name == kRagListLibrariesToolName ||
         name == kRagSearchToolName ||
@@ -2391,6 +2575,8 @@ McpToolCallResult CallModelToolAgent(
     RagService* rag_service,
     const std::vector<ProviderConfig>& providers,
     const std::vector<ModelToolConfig>& model_tools,
+    const ProjectSettings& project_settings,
+    const std::vector<AgenticModeConfig>& agentic_modes,
     const std::vector<ProjectMcpVariableValue>& project_variables = {},
     const std::vector<ProjectMcpVariableValue>& runtime_variables = {})
 {
@@ -2466,6 +2652,14 @@ McpToolCallResult CallModelToolAgent(
         return err;
     }
 
+    const auto inherited_variables =
+        variable_resolver::MergeValues(project_variables, runtime_variables);
+    const std::string effective_agentic_mode_id = tool_config->selected_agentic_mode_id;
+    const AgenticModeConfig* assigned_mode =
+        FindAgenticModeById(agentic_modes, effective_agentic_mode_id);
+    const ProjectSettings sub_tool_settings =
+        BuildModelToolBuiltInSettings(project_settings, *tool_config);
+
     // Get exposed MCP tools for this sub-agent (scoped to its mcp_bindings)
     // We reuse GetExposedToolsForProject filtered by the tool's server bindings
     std::vector<std::string> allowed_server_ids;
@@ -2477,11 +2671,11 @@ McpToolCallResult CallModelToolAgent(
         if (config.enabled && config.auto_connect &&
             mcp_manager->IsServerSelectedForProject(project_id, config.id)) {
             std::string ignored;
-            mcp_manager->ConnectServer(config.id, project_id, &ignored, runtime_variables);
+            mcp_manager->ConnectServer(config.id, project_id, &ignored, inherited_variables);
         }
     }
 
-    const auto all_exposed = mcp_manager->GetExposedToolsForProject(project_id, runtime_variables);
+    const auto all_exposed = mcp_manager->GetExposedToolsForProject(project_id, inherited_variables);
     std::vector<McpExposedTool> sub_exposed;
     for (const auto& t : all_exposed) {
         if (std::find(allowed_server_ids.begin(), allowed_server_ids.end(), t.server_id) != allowed_server_ids.end()) {
@@ -2490,7 +2684,8 @@ McpToolCallResult CallModelToolAgent(
     }
 
     // RAGs are exposed as virtual MCP servers, one server per project-bound library.
-    const auto sub_rag_tools = rag_tools::BuildRagToolSet(rag_service, project_id);
+    auto sub_rag_tools = rag_tools::BuildRagToolSet(rag_service, project_id);
+    FilterRagToolSetForModelTool(sub_rag_tools, *tool_config);
 
     // Build full tool definitions
     std::vector<ChatToolDefinition> tool_definitions;
@@ -2506,6 +2701,12 @@ McpToolCallResult CallModelToolAgent(
     for (const auto& rd : sub_rag_tools.definitions) {
         tool_definitions.push_back(rd);
     }
+    const auto sub_built_in_definitions =
+        built_in_tools::BuildDefinitions(sub_tool_settings, effective_agentic_mode_id);
+    tool_definitions.insert(
+        tool_definitions.end(),
+        sub_built_in_definitions.begin(),
+        sub_built_in_definitions.end());
 
     const bool include_tools = use_model.supports_tools && !tool_definitions.empty();
 
@@ -2514,10 +2715,27 @@ McpToolCallResult CallModelToolAgent(
     sub_request.provider      = use_provider;
     sub_request.model         = use_model;
     // Apply project variable substitution to the instructions: $<VarName> â†’ value
-    {
-        sub_request.system_prompt =
-            variable_resolver::ExpandTemplate(tool_config->instructions, project_variables);
+    AppendPromptSection(
+        sub_request.system_prompt,
+        "Model Tool Instructions",
+        variable_resolver::ExpandTemplate(tool_config->instructions, inherited_variables));
+    if (assigned_mode) {
+        AppendPromptSection(
+            sub_request.system_prompt,
+            "Assigned Agentic Mode Instructions (" +
+                (assigned_mode->name.empty() ? assigned_mode->id : assigned_mode->name) + ")",
+            variable_resolver::ExpandTemplate(
+                Trim(NormalizeNewlinesToLf(assigned_mode->instructions)),
+                inherited_variables));
     }
+    AppendPromptSection(
+        sub_request.system_prompt,
+        "Inherited Variable Context",
+        BuildInheritedVariablesPrompt(inherited_variables));
+    AppendPromptSection(
+        sub_request.system_prompt,
+        "Built-in Tool Instructions",
+        BuildModelToolBuiltInSystemPrompt(sub_tool_settings, effective_agentic_mode_id));
     sub_request.temperature   = 0.2;
     sub_request.max_tokens    = 4096;
 
@@ -2550,9 +2768,15 @@ McpToolCallResult CallModelToolAgent(
         sub_request.messages.push_back(user_msg);
     }
 
-    constexpr int kSubAgentMaxRounds = 6;
+    constexpr int kSubAgentMaxRounds = 12;
     std::vector<MessageRecord> working_messages = sub_request.messages;
     std::string last_reply;
+    const bool sub_completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
+        sub_tool_settings, effective_agentic_mode_id);
+    const int sub_completion_driver_max_continuations =
+        built_in_tools::NormalizedCompletionDriverMaxContinuations(sub_tool_settings);
+    int sub_completion_driver_continuations = 0;
+    bool sub_completion_driver_done = !sub_completion_driver_enabled;
 
     for (int round = 0; round < kSubAgentMaxRounds; ++round) {
         ChatRequestOptions loop_request = sub_request;
@@ -2608,10 +2832,21 @@ McpToolCallResult CallModelToolAgent(
                         tc.arguments_json,
                         &sub_rag_tools.routes,
                         nullptr,
-                        project_variables);
+                        inherited_variables);
+                } else if (built_in_tools::IsBuiltInToolName(tc.name)) {
+                    result = built_in_tools::CallTool(
+                        tc.name,
+                        tc.arguments_json,
+                        sub_tool_settings,
+                        inherited_variables,
+                        effective_agentic_mode_id);
                 } else {
                     result = mcp_manager->CallExposedTool(
-                        project_id, tc.name, tc.arguments_json, runtime_variables);
+                        project_id, tc.name, tc.arguments_json, inherited_variables);
+                }
+                if (tc.name == built_in_tools::kCompletionDriverToolName &&
+                    built_in_tools::IsCompletionDriverCompletedResult(result)) {
+                    sub_completion_driver_done = true;
                 }
                 MessageRecord tool_msg;
                 tool_msg.role        = "tool";
@@ -2626,6 +2861,25 @@ McpToolCallResult CallModelToolAgent(
 
         // No tool calls â†’ final answer
         last_reply = completion.assistant_text;
+        if (sub_completion_driver_enabled && !sub_completion_driver_done) {
+            if (!completion.assistant_text.empty()) {
+                MessageRecord assistant_msg;
+                assistant_msg.role = "assistant";
+                assistant_msg.content = completion.assistant_text;
+                assistant_msg.created_at = CurrentTimestampUtc();
+                working_messages.push_back(std::move(assistant_msg));
+            }
+            if (sub_completion_driver_max_continuations > 0 &&
+                sub_completion_driver_continuations >= sub_completion_driver_max_continuations) {
+                break;
+            }
+            ++sub_completion_driver_continuations;
+            working_messages.push_back(
+                built_in_tools::MakeCompletionDriverContinuationMessage(
+                    sub_completion_driver_continuations,
+                    sub_completion_driver_max_continuations));
+            continue;
+        }
         break;
     }
 
@@ -3861,6 +4115,10 @@ void MainWindow::EditProjectSettings() {
     options.initial_project_variables = project_settings.project_variables;
     options.enable_chat_logging = project_settings.enable_chat_logging;
     options.allow_manual_context_compression = project_settings.allow_manual_context_compression;
+    options.force_context_compression_token_threshold =
+        project_settings.force_context_compression_token_threshold;
+    options.context_compression_token_threshold =
+        project_settings.context_compression_token_threshold;
     options.enable_web_debugging = project_settings.enable_web_debugging;
     options.serve_web_links_inline = project_settings.serve_web_links_inline;
     options.enable_automation = project_settings.enable_automation;
@@ -3929,6 +4187,10 @@ void MainWindow::EditProjectSettings() {
     saved_settings.enabled_agentic_mode_ids = result->enabled_agentic_mode_ids;
     saved_settings.enable_chat_logging = result->enable_chat_logging;
     saved_settings.allow_manual_context_compression = result->allow_manual_context_compression;
+    saved_settings.force_context_compression_token_threshold =
+        result->force_context_compression_token_threshold;
+    saved_settings.context_compression_token_threshold =
+        result->context_compression_token_threshold;
     saved_settings.enable_web_debugging = result->enable_web_debugging;
     saved_settings.serve_web_links_inline = result->serve_web_links_inline;
     saved_settings.enable_automation = result->enable_automation;
@@ -5042,9 +5304,9 @@ void MainWindow::SendCurrentMessage() {
         // Emergency trigger: if the assembled request exceeds the configured threshold,
         // compress NOW (before the model call), not on the next turn.
         size_t estimated = EstimateRequestInputTokens(request, {}, false);
-        size_t ctx_win = static_cast<size_t>(request.model.context_window);
-        int trigger_percent = selected_compression_config->context_window_trigger_percent;
-        if (trigger_percent > 0 && ctx_win > 0 && estimated > (ctx_win * static_cast<size_t>(trigger_percent) / 100)) {
+        const size_t trigger_tokens = ResolveCompressionTriggerTokens(
+            proj_settings, selected_compression_config, request);
+        if (trigger_tokens > 0 && estimated >= trigger_tokens) {
             compression_service_.MarkCompressionScheduled(active_project_id_, active_chat_id_);
             const auto compression_messages = ModelVisibleMessages(active_messages_);
             auto model_caller = [&](const ChatRequestOptions& opts) -> std::optional<ChatCompletionResult> {
@@ -5151,6 +5413,7 @@ void MainWindow::SendCurrentMessage() {
     const auto rag_tool_routes = rag_tool_set.routes;
     const auto rag_exposed_tools = rag_tool_set.exposed_tools;
     const auto all_model_tools = storage_.LoadModelTools();
+    const auto agentic_modes = storage_.LoadAgenticModes();
     // Filter model tools to only those enabled for this project.
     const auto project_settings_for_tools = storage_.LoadProjectSettings(project_id);
     const auto& enabled_tool_ids = project_settings_for_tools.model_tool_ids;
@@ -5207,10 +5470,21 @@ void MainWindow::SendCurrentMessage() {
                 }
             }
         }
+        const std::string mt_agentic_mode_name = [&]() {
+            if (const auto* mode = FindAgenticModeById(agentic_modes, mt.selected_agentic_mode_id)) {
+                return mode->name.empty() ? mode->id : mode->name;
+            }
+            return std::string{};
+        }();
+        const auto built_in_names = ModelToolBuiltInDisplayNames(
+            mt, project_settings_for_tools, mt.selected_agentic_mode_id);
 
         // Build enriched description
         std::string desc = mt.description.empty() ? ("Sub-agent: " + mt.name) : mt.description;
-        if (!mcp_server_names.empty() || !rag_names.empty()) {
+        if (!mt_agentic_mode_name.empty()) {
+            desc += " Runs under agentic mode: " + mt_agentic_mode_name + ".";
+        }
+        if (!mcp_server_names.empty() || !rag_names.empty() || !built_in_names.empty()) {
             desc += " This agent has access to:";
             if (!mcp_server_names.empty()) {
                 desc += " MCP tools from servers: ";
@@ -5228,18 +5502,29 @@ void MainWindow::SendCurrentMessage() {
                 }
                 desc += ".";
             }
+            if (!built_in_names.empty()) {
+                desc += " Built-in tools: ";
+                for (size_t i = 0; i < built_in_names.size(); ++i) {
+                    if (i) desc += ", ";
+                    desc += built_in_names[i];
+                }
+                desc += ".";
+            }
         }
         def.description = std::move(desc);
 
         // Build richer instructions parameter description listing agent capabilities
         std::string instr_desc = "Detailed task instructions for this agent.";
-        if (!mcp_server_names.empty() || !rag_names.empty()) {
+        if (!mcp_server_names.empty() || !rag_names.empty() || !built_in_names.empty()) {
             instr_desc += " The agent can access the following capabilities:";
             for (const auto& sn : mcp_server_names) {
                 instr_desc += " [MCP server: " + sn + "]";
             }
             for (const auto& rag_name : rag_names) {
                 instr_desc += " [RAG MCP server: " + rag_name + "]";
+            }
+            for (const auto& built_in_name : built_in_names) {
+                instr_desc += " [Built-in: " + built_in_name + "]";
             }
             instr_desc += ". Provide sufficient context for the agent to complete the task using these resources.";
         }
@@ -5422,7 +5707,7 @@ void MainWindow::SendCurrentMessage() {
         return;
     }
 
-    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, proj_settings, project_variables, runtime_variables, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_, selected_compression_config, compression_service = &compression_service_]() {
+    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, proj_settings, project_variables, runtime_variables, agentic_modes, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_, selected_compression_config, compression_service = &compression_service_]() {
         try {
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
@@ -5468,14 +5753,15 @@ void MainWindow::SendCurrentMessage() {
         for (int round = 0; ; ++round) {
             // Tool-loop emergency: if pre-tool-loop request already exceeds threshold,
             // schedule compression for the *next* turn (preserves current tool chain).
-            if (selected_compression_config && request.model.context_window > 0) {
+            if (selected_compression_config) {
                 ChatRequestOptions check;
                 check.system_prompt = request.system_prompt;
                 check.model = request.model;
                 check.messages = ModelVisibleMessages(pre_tool_loop_messages);
                 const size_t est_tool = EstimateRequestInputTokens(check, {}, false);
-                const size_t trigger_tool = request.model.context_window * selected_compression_config->context_window_trigger_percent / 100;
-                if (est_tool > trigger_tool) {
+                const size_t trigger_tool = ResolveCompressionTriggerTokens(
+                    project_settings_for_tools, selected_compression_config, check);
+                if (trigger_tool > 0 && est_tool >= trigger_tool) {
                     compression_service->MarkCompressionScheduled(project_id, chat_id);
                 }
             }
@@ -5597,7 +5883,7 @@ void MainWindow::SendCurrentMessage() {
                     std::vector<std::thread> sub_threads(model_tool_indices.size());
                     for (size_t ti = 0; ti < model_tool_indices.size(); ++ti) {
                         const size_t pi = model_tool_indices[ti];
-                        sub_threads[ti] = std::thread([&pending, pi, &project_id, mcp_manager, rag_service, &providers, &model_tools, &project_variables, &runtime_variables]() {
+                        sub_threads[ti] = std::thread([&pending, pi, &project_id, mcp_manager, rag_service, &providers, &model_tools, &project_settings_for_tools, &agentic_modes, &project_variables, &runtime_variables]() {
                             try {
                                 pending[pi].result = CallModelToolAgent(
                                     pending[pi].tool_call.name,
@@ -5607,6 +5893,8 @@ void MainWindow::SendCurrentMessage() {
                                     rag_service,
                                     providers,
                                     model_tools,
+                                    project_settings_for_tools,
+                                    agentic_modes,
                                     project_variables,
                                     runtime_variables);
                             } catch (const std::exception& ex) {

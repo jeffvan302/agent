@@ -32,6 +32,8 @@ enum ControlId : int {
     kConfigNameEdit = 6306,
     kStrategyLabel = 6307,
     kStrategyCombo = 6308,
+    kPrePassLabel = 6373,
+    kPrePassCombo = 6374,
 
     kScrollPanel = 6309,
     kFooterPanel = 6310,
@@ -302,6 +304,54 @@ std::wstring BrowseForFolder(HWND owner) {
     return result;
 }
 
+int StrategyToComboIndex(ContextCompressionStrategy strategy) {
+    switch (strategy) {
+    case ContextCompressionStrategy::TruncateTop:
+        return 0;
+    case ContextCompressionStrategy::RollingSummary:
+        return 1;
+    case ContextCompressionStrategy::ToolTraceDistillation:
+        return 2;
+    case ContextCompressionStrategy::HierarchicalStructured:
+        return 3;
+    case ContextCompressionStrategy::None:
+    default:
+        return 0;
+    }
+}
+
+ContextCompressionStrategy StrategyFromComboIndex(int index) {
+    switch (index) {
+    case 0:
+        return ContextCompressionStrategy::TruncateTop;
+    case 1:
+        return ContextCompressionStrategy::RollingSummary;
+    case 2:
+        return ContextCompressionStrategy::ToolTraceDistillation;
+    case 3:
+        return ContextCompressionStrategy::HierarchicalStructured;
+    default:
+        return ContextCompressionStrategy::TruncateTop;
+    }
+}
+
+std::string DefaultLayer2PromptForStrategy(ContextCompressionStrategy strategy) {
+    if (strategy == ContextCompressionStrategy::RollingSummary) {
+        return ContextCompressionService::DefaultRollingSummaryPromptTemplate();
+    }
+    if (strategy == ContextCompressionStrategy::ToolTraceDistillation) {
+        return ContextCompressionService::DefaultToolTraceDistillationPromptTemplate();
+    }
+    return ContextCompressionService::DefaultLayer2PromptTemplate();
+}
+
+bool IsKnownLayer2DefaultPrompt(const std::string& prompt) {
+    const std::string normalized = Trim(prompt);
+    return normalized == Trim(ContextCompressionService::DefaultLayer2PromptTemplate()) ||
+           normalized == Trim(ContextCompressionService::DefaultRollingSummaryPromptTemplate()) ||
+           normalized == Trim(ContextCompressionService::DefaultToolTraceDistillationPromptTemplate());
+}
+
 class CompressionManagerWindow {
 public:
     CompressionManagerWindow(HWND owner, ContextCompressionService* service, AppStorage* storage,
@@ -346,6 +396,8 @@ private:
     void PopulateAllModelCombos() const;
     void SelectComboForModel(HWND combo, const std::string& provider_id, const std::string& model_id) const;
     void AssignModelFromCombo(HWND combo, std::string& provider_id, std::string& model_id) const;
+    void PopulatePrePassCombo(const std::string& selected_id);
+    std::string SelectedPrePassConfigId() const;
 
     LRESULT HandleScrollPanelMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
 
@@ -357,6 +409,7 @@ private:
     std::function<std::vector<ProviderConfig>()> get_providers_;
     std::function<void()> on_changed_;
     std::vector<ContextCompressionConfig> configs_;
+    std::vector<std::string> pre_pass_combo_ids_;
     int selected_config_index_ = -1;
     int scroll_offset_ = 0;
     int scroll_content_height_ = 0;
@@ -375,6 +428,8 @@ private:
     HWND config_name_edit_ = nullptr;
     HWND strategy_label_ = nullptr;
     HWND strategy_combo_ = nullptr;
+    HWND pre_pass_label_ = nullptr;
+    HWND pre_pass_combo_ = nullptr;
     HWND scroll_panel_ = nullptr;
     HWND scroll_backdrop_ = nullptr;
     HWND scroll_content_host_ = nullptr;
@@ -650,6 +705,12 @@ void CompressionManagerWindow::OnCreate() {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStrategyCombo), nullptr, nullptr);
 
+    pre_pass_label_ = CreateWindowExW(0, L"STATIC", L"Pre-pass:", WS_CHILD | WS_VISIBLE,
+        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kPrePassLabel), nullptr, nullptr);
+    pre_pass_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kPrePassCombo), nullptr, nullptr);
+
     scroll_panel_ = CreateWindowExW(
         WS_EX_CONTROLPARENT | WS_EX_COMPOSITED,
         kCompressionScrollPanelClassName,
@@ -817,9 +878,10 @@ void CompressionManagerWindow::OnCreate() {
     cancel_button_ = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCancelButton), nullptr, nullptr);
 
-    std::array<HWND, 49> controls = {
+    std::array<HWND, 51> controls = {
         config_list_, add_button_, delete_button_, duplicate_button_,
         config_name_label_, config_name_edit_, strategy_label_, strategy_combo_,
+        pre_pass_label_, pre_pass_combo_,
         scroll_panel_, scroll_content_host_, footer_panel_,
         truncate_panel_, truncate_keep_label_, truncate_keep_edit_,
         l0_panel_, l0_enabled_, l0_capture_model_label_, l0_capture_model_combo_, l0_capture_prompt_label_,
@@ -862,6 +924,8 @@ void CompressionManagerWindow::OnCreate() {
     SetTimer(hwnd_, kHelpHoverTimer, 150, nullptr);
 
     ComboBox_AddString(strategy_combo_, L"Truncate Top (Rolling Window)");
+    ComboBox_AddString(strategy_combo_, L"Rolling Summary");
+    ComboBox_AddString(strategy_combo_, L"Tool Trace Distillation");
     ComboBox_AddString(strategy_combo_, L"Hierarchical Structured Compression");
     PopulateAllModelCombos();
 
@@ -925,6 +989,42 @@ void CompressionManagerWindow::AssignModelFromCombo(HWND combo, std::string& pro
     }
 }
 
+void CompressionManagerWindow::PopulatePrePassCombo(const std::string& selected_id) {
+    ComboBox_ResetContent(pre_pass_combo_);
+    pre_pass_combo_ids_.clear();
+
+    ComboBox_AddString(pre_pass_combo_, L"(None)");
+    pre_pass_combo_ids_.push_back("");
+    int selected_index = 0;
+
+    const std::string current_id =
+        (selected_config_index_ >= 0 && static_cast<size_t>(selected_config_index_) < configs_.size())
+            ? configs_[selected_config_index_].id
+            : std::string{};
+
+    for (const auto& config : configs_) {
+        if (!current_id.empty() && config.id == current_id) {
+            continue;
+        }
+        ComboBox_AddString(pre_pass_combo_, Utf8ToWide(config.name).c_str());
+        pre_pass_combo_ids_.push_back(config.id);
+        if (!selected_id.empty() && config.id == selected_id) {
+            selected_index = static_cast<int>(pre_pass_combo_ids_.size()) - 1;
+        }
+    }
+
+    ComboBox_SetCurSel(pre_pass_combo_, selected_index);
+    SendMessageW(pre_pass_combo_, CB_SETDROPPEDWIDTH, Scale(hwnd_, 360), 0);
+}
+
+std::string CompressionManagerWindow::SelectedPrePassConfigId() const {
+    const int sel = ComboBox_GetCurSel(pre_pass_combo_);
+    if (sel >= 0 && static_cast<size_t>(sel) < pre_pass_combo_ids_.size()) {
+        return pre_pass_combo_ids_[static_cast<size_t>(sel)];
+    }
+    return {};
+}
+
 void CompressionManagerWindow::LayoutControls(int width, int height) {
     if (!hwnd_) return;
 
@@ -936,7 +1036,7 @@ void CompressionManagerWindow::LayoutControls(int width, int height) {
     const int edit_height = Scale(hwnd_, 24);
     const int sidebar_width = Scale(hwnd_, 260);
     const int help_target_height = Scale(hwnd_, 250);
-    const int top_area_height = Scale(hwnd_, 86);
+    const int top_area_height = Scale(hwnd_, 118);
     const int footer_height = Scale(hwnd_, 106);
 
     const int list_height = std::max(
@@ -964,6 +1064,8 @@ void CompressionManagerWindow::LayoutControls(int width, int height) {
     MoveWindow(config_name_edit_, right_x + Scale(hwnd_, 58), margin - Scale(hwnd_, 2), right_width - Scale(hwnd_, 58), edit_height, TRUE);
     MoveWindow(strategy_label_, right_x, margin + Scale(hwnd_, 36), Scale(hwnd_, 60), label_height, TRUE);
     MoveWindow(strategy_combo_, right_x + Scale(hwnd_, 68), margin + Scale(hwnd_, 32), right_width - Scale(hwnd_, 68), Scale(hwnd_, 260), TRUE);
+    MoveWindow(pre_pass_label_, right_x, margin + Scale(hwnd_, 68), Scale(hwnd_, 66), label_height, TRUE);
+    MoveWindow(pre_pass_combo_, right_x + Scale(hwnd_, 68), margin + Scale(hwnd_, 64), right_width - Scale(hwnd_, 68), Scale(hwnd_, 260), TRUE);
 
     const int footer_y = height - margin - footer_height;
     MoveWindow(footer_panel_, right_x, footer_y, right_width, footer_height, TRUE);
@@ -1001,43 +1103,59 @@ void CompressionManagerWindow::LayoutScrollableContent(int width) {
     const int prompt_label_width = inner_width - prompt_button_width - gutter;
 
     int y = Scale(hwnd_, 6);
-    const bool is_truncate = (ComboBox_GetCurSel(strategy_combo_) == 0);
+    const ContextCompressionStrategy strategy = StrategyFromComboIndex(ComboBox_GetCurSel(strategy_combo_));
+    const bool is_truncate = strategy == ContextCompressionStrategy::TruncateTop;
+    const bool is_rolling = strategy == ContextCompressionStrategy::RollingSummary;
+    const bool is_tool_trace = strategy == ContextCompressionStrategy::ToolTraceDistillation;
+    const bool is_hsc = strategy == ContextCompressionStrategy::HierarchicalStructured;
+    const bool show_keep_recent = is_truncate || is_rolling;
+    const bool show_l2 = is_hsc || is_rolling || is_tool_trace;
 
     auto show = [](HWND control, bool visible) {
         ShowWindow(control, visible ? SW_SHOW : SW_HIDE);
     };
 
-    show(truncate_panel_, is_truncate);
-    show(truncate_keep_label_, is_truncate);
-    show(truncate_keep_edit_, is_truncate);
+    show(truncate_panel_, show_keep_recent);
+    show(truncate_keep_label_, show_keep_recent);
+    show(truncate_keep_edit_, show_keep_recent);
 
-    const std::array<HWND, 33> hsc_controls = {
+    const std::array<HWND, 27> hsc_only_controls = {
         l0_panel_, l0_enabled_, l0_capture_model_label_, l0_capture_model_combo_, l0_capture_prompt_label_,
         l0_capture_prompt_default_button_, l0_capture_prompt_edit_, l0_selection_model_label_,
         l0_selection_model_combo_, l0_selection_prompt_label_, l0_selection_prompt_default_button_,
         l0_selection_prompt_edit_, l0_storage_label_, l0_storage_edit_, l0_storage_browse_button_,
         l0_max_rows_label_, l0_max_rows_edit_,
         l1_panel_, l1_enabled_, l1_max_pins_label_, l1_max_pins_edit_, l1_pin_code_, l1_pin_urls_,
-        l1_pin_numbers_, l1_pin_first_, l1_pin_user_flag_, l1_pin_instructions_,
-        l2_panel_, l2_enabled_, l2_model_label_, l2_model_combo_, l2_max_tokens_label_, l2_max_tokens_edit_
+        l1_pin_numbers_, l1_pin_first_, l1_pin_user_flag_, l1_pin_instructions_
     };
-    for (HWND control : hsc_controls) show(control, !is_truncate);
-    const std::array<HWND, 15> hsc_controls_2 = {
-        l2_trigger_label_, l2_trigger_edit_, l2_prompt_label_, l2_prompt_default_button_, l2_prompt_edit_,
-        l3_panel_, l3_enabled_, l3_model_label_, l3_model_combo_, l3_max_tokens_label_, l3_max_tokens_edit_,
-        l3_prompt_label_, l3_prompt_default_button_, l3_prompt_edit_, l4_panel_
-    };
-    for (HWND control : hsc_controls_2) show(control, !is_truncate);
-    const std::array<HWND, 3> hsc_controls_3 = {l4_enabled_, l4_min_recent_label_, l4_min_recent_edit_};
-    for (HWND control : hsc_controls_3) show(control, !is_truncate);
+    for (HWND control : hsc_only_controls) show(control, is_hsc);
 
-    if (is_truncate) {
+    const std::array<HWND, 8> l2_controls = {
+        l2_panel_, l2_enabled_, l2_model_label_, l2_model_combo_, l2_max_tokens_label_, l2_max_tokens_edit_,
+        l2_trigger_label_, l2_trigger_edit_
+    };
+    for (HWND control : l2_controls) show(control, show_l2);
+    const std::array<HWND, 3> l2_prompt_controls = {
+        l2_prompt_label_, l2_prompt_default_button_, l2_prompt_edit_
+    };
+    for (HWND control : l2_prompt_controls) show(control, show_l2);
+
+    const std::array<HWND, 13> hsc_tail_controls = {
+        l3_panel_, l3_enabled_, l3_model_label_, l3_model_combo_, l3_max_tokens_label_, l3_max_tokens_edit_,
+        l3_prompt_label_, l3_prompt_default_button_, l3_prompt_edit_, l4_panel_,
+        l4_enabled_, l4_min_recent_label_, l4_min_recent_edit_
+    };
+    for (HWND control : hsc_tail_controls) show(control, is_hsc);
+
+    if (show_keep_recent) {
         const int panel_height = Scale(hwnd_, 74);
         MoveWindow(truncate_panel_, x, y, panel_width, panel_height, TRUE);
         MoveWindow(truncate_keep_label_, left, y + group_top_padding + Scale(hwnd_, 8), Scale(hwnd_, 140), label_height, TRUE);
         MoveWindow(truncate_keep_edit_, left + Scale(hwnd_, 150), y + group_top_padding + Scale(hwnd_, 4), Scale(hwnd_, 72), edit_height, TRUE);
         y += panel_height + gutter;
-    } else {
+    }
+
+    if (is_hsc) {
         const int l0_panel_height = Scale(hwnd_, 470);
         MoveWindow(l0_panel_, x, y, panel_width, l0_panel_height, TRUE);
         MoveWindow(l0_enabled_, left, y + group_top_padding, Scale(hwnd_, 180), Scale(hwnd_, 22), TRUE);
@@ -1070,10 +1188,18 @@ void CompressionManagerWindow::LayoutScrollableContent(int width) {
         MoveWindow(l1_pin_user_flag_, left + Scale(hwnd_, 340), y + group_top_padding + Scale(hwnd_, 56), Scale(hwnd_, 150), Scale(hwnd_, 22), TRUE);
         MoveWindow(l1_pin_instructions_, left + Scale(hwnd_, 340), y + group_top_padding + Scale(hwnd_, 80), Scale(hwnd_, 180), Scale(hwnd_, 22), TRUE);
         y += l1_panel_height + gutter;
+    }
 
+    if (show_l2) {
+        SetWindowTextW(l2_panel_,
+            is_tool_trace ? L"Tool Trace Distillation" :
+            (is_rolling ? L"Rolling Summary" : L"Layer 2 - Summary"));
+        SetWindowTextW(l2_enabled_,
+            is_tool_trace ? L"Enable tool trace distillation" :
+            (is_rolling ? L"Enable rolling summary" : L"Enable L2 summary"));
         const int l2_panel_height = Scale(hwnd_, 252);
         MoveWindow(l2_panel_, x, y, panel_width, l2_panel_height, TRUE);
-        MoveWindow(l2_enabled_, left, y + group_top_padding, Scale(hwnd_, 150), Scale(hwnd_, 22), TRUE);
+        MoveWindow(l2_enabled_, left, y + group_top_padding, Scale(hwnd_, 230), Scale(hwnd_, 22), TRUE);
         MoveWindow(l2_model_label_, left, y + group_top_padding + Scale(hwnd_, 28), Scale(hwnd_, 50), label_height, TRUE);
         MoveWindow(l2_model_combo_, left + Scale(hwnd_, 58), y + group_top_padding + Scale(hwnd_, 24), inner_width - Scale(hwnd_, 58), combo_height, TRUE);
         MoveWindow(l2_max_tokens_label_, left, y + group_top_padding + Scale(hwnd_, 56), Scale(hwnd_, 76), label_height, TRUE);
@@ -1084,7 +1210,9 @@ void CompressionManagerWindow::LayoutScrollableContent(int width) {
         MoveWindow(l2_prompt_default_button_, left + inner_width - prompt_button_width, y + group_top_padding + Scale(hwnd_, 82), prompt_button_width, Scale(hwnd_, 24), TRUE);
         MoveWindow(l2_prompt_edit_, left, y + group_top_padding + Scale(hwnd_, 108), inner_width, Scale(hwnd_, 118), TRUE);
         y += l2_panel_height + gutter;
+    }
 
+    if (is_hsc) {
         const int l3_panel_height = Scale(hwnd_, 228);
         MoveWindow(l3_panel_, x, y, panel_width, l3_panel_height, TRUE);
         MoveWindow(l3_enabled_, left, y + group_top_padding, Scale(hwnd_, 150), Scale(hwnd_, 22), TRUE);
@@ -1155,12 +1283,16 @@ void CompressionManagerWindow::SetScrollOffset(int new_offset) {
 }
 
 void CompressionManagerWindow::UpdateLayerEnabledStates() const {
-    const bool is_truncate = (ComboBox_GetCurSel(strategy_combo_) == 0);
-    const bool l0_enabled = !is_truncate && Button_GetCheck(l0_enabled_) == BST_CHECKED;
-    const bool l1_enabled = !is_truncate && Button_GetCheck(l1_enabled_) == BST_CHECKED;
-    const bool l2_enabled = !is_truncate && Button_GetCheck(l2_enabled_) == BST_CHECKED;
-    const bool l3_enabled = !is_truncate && Button_GetCheck(l3_enabled_) == BST_CHECKED;
-    const bool l4_enabled = !is_truncate && Button_GetCheck(l4_enabled_) == BST_CHECKED;
+    const ContextCompressionStrategy strategy = StrategyFromComboIndex(ComboBox_GetCurSel(strategy_combo_));
+    const bool is_hsc = strategy == ContextCompressionStrategy::HierarchicalStructured;
+    const bool has_l2 = is_hsc ||
+        strategy == ContextCompressionStrategy::RollingSummary ||
+        strategy == ContextCompressionStrategy::ToolTraceDistillation;
+    const bool l0_enabled = is_hsc && Button_GetCheck(l0_enabled_) == BST_CHECKED;
+    const bool l1_enabled = is_hsc && Button_GetCheck(l1_enabled_) == BST_CHECKED;
+    const bool l2_enabled = has_l2 && Button_GetCheck(l2_enabled_) == BST_CHECKED;
+    const bool l3_enabled = is_hsc && Button_GetCheck(l3_enabled_) == BST_CHECKED;
+    const bool l4_enabled = is_hsc && Button_GetCheck(l4_enabled_) == BST_CHECKED;
 
     const std::array<HWND, 14> l0_children = {
         l0_capture_model_label_, l0_capture_model_combo_, l0_capture_prompt_label_,
@@ -1287,8 +1419,8 @@ void CompressionManagerWindow::SelectConfig(int index) {
 
 void CompressionManagerWindow::LoadConfigToEditor(const ContextCompressionConfig& config) {
     SetWindowTextW(config_name_edit_, Utf8ToWide(config.name).c_str());
-    ComboBox_SetCurSel(strategy_combo_,
-        config.strategy == ContextCompressionStrategy::TruncateTop ? 0 : 1);
+    ComboBox_SetCurSel(strategy_combo_, StrategyToComboIndex(config.strategy));
+    PopulatePrePassCombo(config.pre_pass_config_id);
 
     SetWindowTextW(truncate_keep_edit_, std::to_wstring(config.truncate_top_keep_messages).c_str());
 
@@ -1320,7 +1452,7 @@ void CompressionManagerWindow::LoadConfigToEditor(const ContextCompressionConfig
     SetWindowTextW(l2_max_tokens_edit_, std::to_wstring(config.layers.layer2.max_tokens).c_str());
     SetWindowTextW(l2_trigger_edit_, std::to_wstring(config.layers.layer2.trigger_threshold_turns).c_str());
     const std::string l2_prompt = Trim(config.layers.layer2.prompt_template).empty()
-        ? ContextCompressionService::DefaultLayer2PromptTemplate()
+        ? DefaultLayer2PromptForStrategy(config.strategy)
         : config.layers.layer2.prompt_template;
     SetWindowTextW(l2_prompt_edit_, NormalizeMultilineForEdit(l2_prompt).c_str());
 
@@ -1355,9 +1487,11 @@ ContextCompressionConfig CompressionManagerWindow::BuildConfigFromEditor() const
     config.name = WideToUtf8(TrimWide(GetWindowTextString(config_name_edit_)));
     if (config.name.empty()) config.name = "Unnamed Config";
 
-    config.strategy = ComboBox_GetCurSel(strategy_combo_) == 0
-        ? ContextCompressionStrategy::TruncateTop
-        : ContextCompressionStrategy::HierarchicalStructured;
+    config.strategy = StrategyFromComboIndex(ComboBox_GetCurSel(strategy_combo_));
+    config.pre_pass_config_id = SelectedPrePassConfigId();
+    if (config.pre_pass_config_id == config.id) {
+        config.pre_pass_config_id.clear();
+    }
     config.truncate_top_keep_messages = ParseInt(GetWindowTextString(truncate_keep_edit_)).value_or(20);
 
     config.layers.layer0.enabled = (Button_GetCheck(l0_enabled_) == BST_CHECKED);
@@ -1387,6 +1521,9 @@ ContextCompressionConfig CompressionManagerWindow::BuildConfigFromEditor() const
     config.layers.layer2.max_tokens = ParseInt(GetWindowTextString(l2_max_tokens_edit_)).value_or(500);
     config.layers.layer2.trigger_threshold_turns = ParseInt(GetWindowTextString(l2_trigger_edit_)).value_or(8);
     config.layers.layer2.prompt_template = NormalizeMultilineFromEdit(GetWindowTextString(l2_prompt_edit_));
+    if (IsKnownLayer2DefaultPrompt(config.layers.layer2.prompt_template)) {
+        config.layers.layer2.prompt_template = DefaultLayer2PromptForStrategy(config.strategy);
+    }
     if (Trim(config.layers.layer2.prompt_template).empty()) config.layers.layer2.prompt_template.clear();
 
     config.layers.layer3.enabled = (Button_GetCheck(l3_enabled_) == BST_CHECKED);
@@ -1443,7 +1580,13 @@ void CompressionManagerWindow::AddConfig() {
 
 void CompressionManagerWindow::DeleteConfig() {
     if (selected_config_index_ < 0 || static_cast<size_t>(selected_config_index_) >= configs_.size()) return;
+    const std::string deleted_id = configs_[selected_config_index_].id;
     configs_.erase(configs_.begin() + selected_config_index_);
+    for (auto& config : configs_) {
+        if (config.pre_pass_config_id == deleted_id) {
+            config.pre_pass_config_id.clear();
+        }
+    }
     if (configs_.empty()) {
         selected_config_index_ = -1;
         AddConfig();
@@ -1516,6 +1659,13 @@ void CompressionManagerWindow::OnCommand(int control_id, int notification_code) 
         break;
     case kStrategyCombo:
         if (notification_code == CBN_SELCHANGE) {
+            const std::string current_l2_prompt =
+                NormalizeMultilineFromEdit(GetWindowTextString(l2_prompt_edit_));
+            if (IsKnownLayer2DefaultPrompt(current_l2_prompt)) {
+                SetWindowTextW(l2_prompt_edit_,
+                    NormalizeMultilineForEdit(DefaultLayer2PromptForStrategy(
+                        StrategyFromComboIndex(ComboBox_GetCurSel(strategy_combo_)))).c_str());
+            }
             UpdateContextHelp(kStrategyCombo, focused_help_control_id_ == kStrategyCombo);
             scroll_offset_ = 0;
             Relayout();
@@ -1535,7 +1685,9 @@ void CompressionManagerWindow::OnCommand(int control_id, int notification_code) 
         SetWindowTextW(l0_selection_prompt_edit_, NormalizeMultilineForEdit(ContextCompressionService::DefaultLayer0SelectionPromptTemplate()).c_str());
         break;
     case kL2PromptDefault:
-        SetWindowTextW(l2_prompt_edit_, NormalizeMultilineForEdit(ContextCompressionService::DefaultLayer2PromptTemplate()).c_str());
+        SetWindowTextW(l2_prompt_edit_,
+            NormalizeMultilineForEdit(DefaultLayer2PromptForStrategy(
+                StrategyFromComboIndex(ComboBox_GetCurSel(strategy_combo_)))).c_str());
         break;
     case kL3PromptDefault:
         SetWindowTextW(l3_prompt_edit_, NormalizeMultilineForEdit(ContextCompressionService::DefaultLayer3PromptTemplate()).c_str());

@@ -899,6 +899,12 @@ json ModelToolConfigToJson(const ModelToolConfig& tool) {
     for (const auto& b : tool.rag_bindings) {
         rag_arr.push_back(ProjectRagBindingToJson(b));
     }
+    json built_in_arr = json::array();
+    for (const auto& name : tool.built_in_tool_names) {
+        if (!name.empty()) {
+            built_in_arr.push_back(name);
+        }
+    }
     return json{
         {"id", tool.id},
         {"name", tool.name},
@@ -907,6 +913,8 @@ json ModelToolConfigToJson(const ModelToolConfig& tool) {
         {"preferred_model_id", tool.preferred_model_id},
         {"instructions", tool.instructions},
         {"selected_compression_config_id", tool.selected_compression_config_id},
+        {"selected_agentic_mode_id", tool.selected_agentic_mode_id},
+        {"built_in_tool_names", std::move(built_in_arr)},
         {"mcp_bindings", std::move(mcp_arr)},
         {"rag_bindings", std::move(rag_arr)},
     };
@@ -921,6 +929,20 @@ ModelToolConfig ModelToolConfigFromJson(const json& item) {
     tool.preferred_model_id = item.value("preferred_model_id", "");
     tool.instructions = item.value("instructions", "");
     tool.selected_compression_config_id = item.value("selected_compression_config_id", "");
+    tool.selected_agentic_mode_id = item.value("selected_agentic_mode_id", "");
+    if (item.contains("built_in_tool_names") && item["built_in_tool_names"].is_array()) {
+        for (const auto& name : item["built_in_tool_names"]) {
+            if (name.is_string()) {
+                const std::string value = Trim(name.get<std::string>());
+                if (!value.empty() &&
+                    std::find(tool.built_in_tool_names.begin(),
+                              tool.built_in_tool_names.end(),
+                              value) == tool.built_in_tool_names.end()) {
+                    tool.built_in_tool_names.push_back(value);
+                }
+            }
+        }
+    }
     if (item.contains("mcp_bindings") && item["mcp_bindings"].is_array()) {
         for (const auto& b : item["mcp_bindings"]) {
             tool.mcp_bindings.push_back(ProjectMcpServerBindingFromJson(b));
@@ -2219,6 +2241,10 @@ std::string StrategyToString(ContextCompressionStrategy strategy) {
     switch (strategy) {
     case ContextCompressionStrategy::TruncateTop:
         return "truncate_top";
+    case ContextCompressionStrategy::RollingSummary:
+        return "rolling_summary";
+    case ContextCompressionStrategy::ToolTraceDistillation:
+        return "tool_trace_distillation";
     case ContextCompressionStrategy::HierarchicalStructured:
         return "hierarchical_structured";
     case ContextCompressionStrategy::None:
@@ -2230,6 +2256,12 @@ std::string StrategyToString(ContextCompressionStrategy strategy) {
 ContextCompressionStrategy StrategyFromString(const std::string& value) {
     if (value == "truncate_top") {
         return ContextCompressionStrategy::TruncateTop;
+    }
+    if (value == "rolling_summary") {
+        return ContextCompressionStrategy::RollingSummary;
+    }
+    if (value == "tool_trace_distillation") {
+        return ContextCompressionStrategy::ToolTraceDistillation;
     }
     if (value == "hierarchical_structured") {
         return ContextCompressionStrategy::HierarchicalStructured;
@@ -2272,6 +2304,7 @@ json ContextCompressionConfigToJson(const ContextCompressionConfig& config) {
         {"id", config.id},
         {"name", config.name},
         {"strategy", StrategyToString(config.strategy)},
+        {"pre_pass_config_id", config.pre_pass_config_id},
         {"layers", ContextCompressionLayerSettingsToJson(config.layers)},
         {"frequency_every_n_prompts", config.frequency_every_n_prompts},
         {"context_window_trigger_percent", config.context_window_trigger_percent},
@@ -2284,6 +2317,7 @@ ContextCompressionConfig ContextCompressionConfigFromJson(const json& item) {
     config.id = item.value("id", "");
     config.name = item.value("name", "Unnamed Config");
     config.strategy = StrategyFromString(item.value("strategy", "none"));
+    config.pre_pass_config_id = item.value("pre_pass_config_id", "");
     if (item.contains("layers")) {
         config.layers = ContextCompressionLayerSettingsFromJson(item["layers"]);
     }
@@ -2483,6 +2517,10 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     j["enabled_agentic_mode_ids"] = am_arr;
     j["enable_chat_logging"] = settings.enable_chat_logging;
     j["allow_manual_context_compression"] = settings.allow_manual_context_compression;
+    j["force_context_compression_token_threshold"] =
+        settings.force_context_compression_token_threshold;
+    j["context_compression_token_threshold"] =
+        settings.context_compression_token_threshold;
     j["enable_web_debugging"] = settings.enable_web_debugging;
     j["serve_web_links_inline"] = settings.serve_web_links_inline;
     j["enable_automation"] = settings.enable_automation;
@@ -2583,6 +2621,13 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
 
     settings.enable_chat_logging = j.value("enable_chat_logging", false);
     settings.allow_manual_context_compression = j.value("allow_manual_context_compression", false);
+    settings.force_context_compression_token_threshold =
+        j.value("force_context_compression_token_threshold", false);
+    settings.context_compression_token_threshold =
+        j.value("context_compression_token_threshold", 0);
+    if (settings.context_compression_token_threshold < 0) {
+        settings.context_compression_token_threshold = 0;
+    }
     settings.enable_web_debugging = j.value("enable_web_debugging", false);
     settings.serve_web_links_inline = j.value("serve_web_links_inline", false);
     settings.enable_automation = j.value("enable_automation", false);

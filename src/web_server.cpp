@@ -612,9 +612,10 @@ std::vector<ProjectMcpVariableValue> BuildWebRuntimeVariables(
     const std::string& project_id,
     const std::string& chat_id,
     const std::string& username,
-    const ProjectSettings& project_settings) {
+    const ProjectSettings& project_settings,
+    const std::string& preview_chat_name = {}) {
     std::string project_name = Trim(project_settings.project_name);
-    std::string chat_name;
+    std::string chat_name = Trim(preview_chat_name);
     std::vector<ProjectMcpVariableValue> chat_variables;
 
     if (storage) {
@@ -623,11 +624,15 @@ std::vector<ProjectMcpVariableValue> BuildWebRuntimeVariables(
             if (project_name.empty()) {
                 project_name = Trim(project.info.name);
             }
-            for (const auto& chat : project.chats) {
-                if (chat.id == chat_id) {
-                    chat_name = Trim(chat.name);
-                    chat_variables = chat.user_variables;
-                    break;
+            if (!chat_id.empty()) {
+                for (const auto& chat : project.chats) {
+                    if (chat.id == chat_id) {
+                        if (chat_name.empty()) {
+                            chat_name = Trim(chat.name);
+                        }
+                        chat_variables = chat.user_variables;
+                        break;
+                    }
                 }
             }
             break;
@@ -2810,8 +2815,13 @@ void WebServer::HandleGetNewChatOptions(const void* req_ptr, void* res_ptr) {
     const bool can_browse =
         UserCanBrowseFoldersForProject(*session, project_settings);
 
+    std::string preview_chat_name =
+        req->has_param("chat_name") ? Trim(req->get_param_value("chat_name")) : "New Chat";
+    if (preview_chat_name.empty()) preview_chat_name = "New Chat";
+
     const auto runtime_variables = BuildWebRuntimeVariables(
-        storage_, user_store_, project_id, "", session->username, project_settings);
+        storage_, user_store_, project_id, "", session->username, project_settings,
+        preview_chat_name);
     const auto resolved_values = BuildResolvedProjectVariables(
         mcp_manager_, storage_, project_id, runtime_variables);
     const auto default_project_folder =
@@ -2872,13 +2882,26 @@ void WebServer::HandleBrowseProjectFolders(const void* req_ptr, void* res_ptr) {
     }
 
     fs::path path(Utf8ToWide(path_value));
-    std::error_code ec;
-    if (path.empty() || !path.is_absolute() || !fs::is_directory(path, ec) || ec) {
+    if (path.empty() || !path.is_absolute()) {
         SendError(res_ptr, 400, "Folder is not accessible");
         return;
     }
 
-    SendJson(res_ptr, 200, FolderChildrenJson(path).dump());
+    std::error_code ec;
+    fs::path browse_path = path;
+    while (!browse_path.empty()) {
+        ec.clear();
+        if (fs::is_directory(browse_path, ec) && !ec) {
+            SendJson(res_ptr, 200, FolderChildrenJson(browse_path).dump());
+            return;
+        }
+        if (!browse_path.has_parent_path() || browse_path.parent_path() == browse_path) {
+            break;
+        }
+        browse_path = browse_path.parent_path();
+    }
+
+    SendError(res_ptr, 400, "Folder is not accessible");
 }
 
 void WebServer::HandleCreateChat(const void* req_ptr, void* res_ptr) {
@@ -3051,6 +3074,10 @@ void WebServer::HandleGetProjectAgenticModes(const void* req_ptr, void* res_ptr)
         {"default_model", default_model_json},
         {"selectable_models", selectable_models_arr},
         {"allow_manual_context_compression", proj_settings.allow_manual_context_compression},
+        {"force_context_compression_token_threshold",
+            proj_settings.force_context_compression_token_threshold},
+        {"context_compression_token_threshold",
+            proj_settings.context_compression_token_threshold},
         {"enable_web_debugging", proj_settings.enable_web_debugging},
         {"enable_automation", proj_settings.enable_automation},
         {"built_in_completion_driver_enabled", proj_settings.built_in_completion_driver_enabled},
@@ -4275,6 +4302,10 @@ json ProjectSettingsDebugJson(
         {"allow_privileged_user_project_folder_browse",
             settings.allow_privileged_user_project_folder_browse},
         {"allow_manual_context_compression", settings.allow_manual_context_compression},
+        {"force_context_compression_token_threshold",
+            settings.force_context_compression_token_threshold},
+        {"context_compression_token_threshold",
+            settings.context_compression_token_threshold},
         {"built_in_powershell_enabled", settings.built_in_powershell_enabled},
         {"built_in_artifact_memory_enabled", settings.built_in_artifact_memory_enabled},
         {"built_in_planner_enabled", settings.built_in_planner_enabled},
@@ -4292,14 +4323,19 @@ json ProjectSettingsDebugJson(
     };
 }
 
-bool MaybeScheduleCompression(
-    ContextCompressionService* compression_service,
+size_t ResolveCompressionTriggerTokens(
+    const ProjectSettings& project_settings,
     const std::optional<ContextCompressionConfig>& selected_config,
-    const std::string& project_id,
-    const std::string& chat_id,
     const ChatRequestOptions& request) {
-    if (!compression_service || !selected_config) {
-        return false;
+    if (!selected_config) {
+        return 0;
+    }
+
+    size_t trigger_tokens = 0;
+    if (project_settings.force_context_compression_token_threshold &&
+        project_settings.context_compression_token_threshold > 0) {
+        trigger_tokens =
+            static_cast<size_t>(project_settings.context_compression_token_threshold);
     }
 
     const size_t context_window =
@@ -4308,15 +4344,33 @@ bool MaybeScheduleCompression(
             : 0;
     const int trigger_percent =
         selected_config->context_window_trigger_percent;
-    if (context_window == 0 || trigger_percent <= 0) {
+    if (context_window > 0 && trigger_percent > 0) {
+        const size_t config_trigger_tokens =
+            context_window * static_cast<size_t>(trigger_percent) / 100;
+        if (config_trigger_tokens > 0 &&
+            (trigger_tokens == 0 || config_trigger_tokens < trigger_tokens)) {
+            trigger_tokens = config_trigger_tokens;
+        }
+    }
+    return trigger_tokens;
+}
+
+bool MaybeScheduleCompression(
+    ContextCompressionService* compression_service,
+    const ProjectSettings& project_settings,
+    const std::optional<ContextCompressionConfig>& selected_config,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const ChatRequestOptions& request) {
+    if (!compression_service || !selected_config) {
         return false;
     }
 
     const size_t estimated_tokens =
         EstimateRequestInputTokens(request, {}, {}, false);
     const size_t trigger_tokens =
-        context_window * static_cast<size_t>(trigger_percent) / 100;
-    if (estimated_tokens > trigger_tokens) {
+        ResolveCompressionTriggerTokens(project_settings, selected_config, request);
+    if (trigger_tokens > 0 && estimated_tokens >= trigger_tokens) {
         compression_service->MarkCompressionScheduled(project_id, chat_id);
         return true;
     }
@@ -4479,6 +4533,7 @@ WebServer::CallModel(const std::string& project_id,
 
     if (MaybeScheduleCompression(
         &compression_service_,
+        proj_settings,
         prepared_history.selected_config,
         project_id,
         chat_id,
@@ -4534,14 +4589,15 @@ WebServer::CallModel(const std::string& project_id,
         for (int round = 0; ; ++round) {
             // Tool-loop emergency: if pre-tool-loop request already exceeds threshold,
             // schedule compression for the *next* turn (preserves current tool chain).
-            if (prepared_history.selected_config && opts.model.context_window > 0) {
+            if (prepared_history.selected_config) {
                 ChatRequestOptions check;
                 check.system_prompt = opts.system_prompt;
                 check.model = opts.model;
                 check.messages = ModelVisibleMessages(working_messages);
                 const size_t est_tool = EstimateRequestInputTokens(check, {}, {}, false);
-                const size_t trigger_tool = opts.model.context_window * prepared_history.selected_config->context_window_trigger_percent / 100;
-                if (est_tool > trigger_tool) {
+                const size_t trigger_tool = ResolveCompressionTriggerTokens(
+                    proj_settings, prepared_history.selected_config, check);
+                if (trigger_tool > 0 && est_tool >= trigger_tool) {
                     compression_service_.MarkCompressionScheduled(project_id, chat_id);
                 }
             }
@@ -5100,6 +5156,7 @@ std::string WebServer::StreamModel(const std::string& project_id,
 
     if (MaybeScheduleCompression(
         &compression_service_,
+        proj_settings,
         prepared_history.selected_config,
         project_id,
         chat_id,
@@ -5272,14 +5329,15 @@ std::string WebServer::StreamModel(const std::string& project_id,
 
         for (int round = 0; ; ++round) {
             // Tool-loop emergency: if threshold exceeded mid-loop, schedule for next turn
-            if (prepared_history.selected_config && opts.model.context_window > 0) {
+            if (prepared_history.selected_config) {
                 ChatRequestOptions check;
                 check.system_prompt = opts.system_prompt;
                 check.model = opts.model;
                 check.messages = ModelVisibleMessages(working_messages);
                 const size_t est_tool = EstimateRequestInputTokens(check, {}, {}, false);
-                const size_t trigger_tool = opts.model.context_window * prepared_history.selected_config->context_window_trigger_percent / 100;
-                if (est_tool > trigger_tool) {
+                const size_t trigger_tool = ResolveCompressionTriggerTokens(
+                    proj_settings, prepared_history.selected_config, check);
+                if (trigger_tool > 0 && est_tool >= trigger_tool) {
                     compression_service_.MarkCompressionScheduled(project_id, chat_id);
                 }
             }

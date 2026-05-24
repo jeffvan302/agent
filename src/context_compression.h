@@ -69,6 +69,8 @@ public:
     static std::string DefaultLayer0CapturePromptTemplate();
     static std::string DefaultLayer0SelectionPromptTemplate();
     static std::string DefaultLayer2PromptTemplate();
+    static std::string DefaultRollingSummaryPromptTemplate();
+    static std::string DefaultToolTraceDistillationPromptTemplate();
     static std::string DefaultLayer3PromptTemplate();
 
 private:
@@ -94,15 +96,45 @@ private:
         const std::string& project_id,
         const std::string& chat_id) const;
 
+    std::string CompressRollingSummary(
+        const std::vector<MessageRecord>& messages,
+        const ContextCompressionConfig& config,
+        ChatCompressionState& state,
+        std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller,
+        bool force_rebuild) const;
+
+    std::string CompressToolTraceDistillation(
+        const std::vector<MessageRecord>& messages,
+        const ContextCompressionConfig& config,
+        ChatCompressionState& state,
+        std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller,
+        bool force_rebuild) const;
+
     std::string BuildTruncateTopBlock(
         const std::vector<MessageRecord>& messages,
         const ContextCompressionConfig& config,
         ChatCompressionState& state) const;
 
+    std::string BuildRollingSummaryBlock(
+        const std::vector<MessageRecord>& messages,
+        const ContextCompressionConfig& config,
+        ChatCompressionState& state) const;
+
+    std::string BuildToolTraceDistillationBlock(
+        const std::vector<MessageRecord>& messages,
+        const ContextCompressionConfig& config,
+        ChatCompressionState& state,
+        std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller) const;
+
     std::string BuildHierarchicalContextBlock(
         const std::vector<MessageRecord>& messages,
         const ContextCompressionConfig& config,
         const ChatCompressionState& state) const;
+
+    std::vector<MessageRecord> ApplyPrePass(
+        const std::vector<MessageRecord>& messages,
+        const ContextCompressionConfig& config,
+        std::function<std::optional<ChatCompletionResult>(const ChatRequestOptions& opts)> model_caller) const;
 
     ParallelCompressionResult RunParallelCompression(
         const std::vector<MessageRecord>& new_turns,

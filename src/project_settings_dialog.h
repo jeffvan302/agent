@@ -36,6 +36,8 @@ struct ProjectSettingsOptions {
     std::vector<std::string> enabled_agentic_mode_ids;  // currently enabled mode IDs
     bool enable_chat_logging = false;                    // current chat logging setting
     bool allow_manual_context_compression = false;       // allow manual compression from web UI
+    bool force_context_compression_token_threshold = false;
+    int context_compression_token_threshold = 0;
     bool enable_web_debugging = false;                   // allow prompt debugging in web UI
     bool serve_web_links_inline = false;                  // serve web file links inline instead of forced downloads
     bool enable_automation = false;                       // Enable automation sequence recording and playback in web UI
@@ -78,6 +80,8 @@ struct ProjectSettingsResult {
     std::vector<std::string> enabled_agentic_mode_ids;  // enabled agentic mode IDs after editing
     bool enable_chat_logging = false;             // whether detailed chat logging is enabled
     bool allow_manual_context_compression = false; // allow manual compression from web UI
+    bool force_context_compression_token_threshold = false;
+    int context_compression_token_threshold = 0;
     bool enable_web_debugging = false;             // allow prompt debugging in web UI
     bool serve_web_links_inline = false;            // serve web file links inline instead of forced downloads
     bool enable_automation = false;                 // Enable automation sequence recording and playback in web UI

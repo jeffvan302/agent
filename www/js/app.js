@@ -66,6 +66,9 @@ let state = {
   projectSelectableModels: [],
   newChatOptions: null,
   newChatBrowsePath: '',
+  newChatFolderEdited: false,
+  newChatFolderRefreshTimer: null,
+  newChatFolderRefreshId: 0,
   projectAllowManualCompress: false,
   projectEnableWebDebugging: false,
   projectEnableAutomation: false,
@@ -3374,6 +3377,12 @@ function closeNewChatModal() {
   newChatModal.hidden = true;
   showNewChatError('');
   if (newChatFolderBrowser) newChatFolderBrowser.hidden = true;
+  if (state.newChatFolderRefreshTimer) {
+    window.clearTimeout(state.newChatFolderRefreshTimer);
+    state.newChatFolderRefreshTimer = null;
+  }
+  state.newChatFolderRefreshId += 1;
+  state.newChatFolderEdited = false;
 }
 
 function renderNewChatVariables(variables) {
@@ -3406,12 +3415,41 @@ function renderNewChatVariables(variables) {
   }
 }
 
-async function loadNewChatOptions(projectId) {
-  const resp = await api('GET', `/api/projects/${projectId}/new-chat-options`);
+function getNewChatNameValue() {
+  return ((newChatNameInput && newChatNameInput.value) || 'New Chat').trim() || 'New Chat';
+}
+
+async function loadNewChatOptions(projectId, chatName = '') {
+  const name = (chatName || 'New Chat').trim() || 'New Chat';
+  const resp = await api('GET', `/api/projects/${projectId}/new-chat-options?chat_name=${encodeURIComponent(name)}`);
   if (!resp || !resp.ok) {
     return { can_browse_folders: false, default_project_folder: '', variables: [] };
   }
   return await resp.json();
+}
+
+async function refreshNewChatDefaultFolder() {
+  if (!state.selectedProjectId || !newChatFolderInput) return;
+  if (!state.newChatOptions || !state.newChatOptions.can_browse_folders) return;
+  if (state.newChatFolderEdited) return;
+
+  const refreshId = ++state.newChatFolderRefreshId;
+  const options = await loadNewChatOptions(state.selectedProjectId, getNewChatNameValue());
+  if (refreshId !== state.newChatFolderRefreshId || state.newChatFolderEdited) return;
+  if (!state.newChatOptions || !state.newChatOptions.can_browse_folders) return;
+
+  state.newChatOptions.default_project_folder = options.default_project_folder || '';
+  newChatFolderInput.value = state.newChatOptions.default_project_folder;
+}
+
+function scheduleNewChatDefaultFolderRefresh() {
+  if (state.newChatFolderRefreshTimer) {
+    window.clearTimeout(state.newChatFolderRefreshTimer);
+  }
+  state.newChatFolderRefreshTimer = window.setTimeout(() => {
+    state.newChatFolderRefreshTimer = null;
+    refreshNewChatDefaultFolder();
+  }, 180);
 }
 
 async function loadFolderBrowser(path) {
@@ -3440,6 +3478,7 @@ async function loadFolderBrowser(path) {
     row.title = entry.path || '';
     row.addEventListener('click', () => {
       if (newChatFolderInput) newChatFolderInput.value = entry.path || '';
+      state.newChatFolderEdited = true;
       loadFolderBrowser(entry.path || '');
     });
     folderBrowserList.appendChild(row);
@@ -3451,9 +3490,11 @@ async function openNewChatModal() {
   if (!newChatModal || !newChatNameInput) return;
 
   showNewChatError('');
-  const options = await loadNewChatOptions(state.selectedProjectId);
-  state.newChatOptions = options;
   newChatNameInput.value = 'New Chat';
+  state.newChatFolderEdited = false;
+  state.newChatFolderRefreshId += 1;
+  const options = await loadNewChatOptions(state.selectedProjectId, getNewChatNameValue());
+  state.newChatOptions = options;
   if (newChatFolderGroup) newChatFolderGroup.hidden = !options.can_browse_folders;
   if (newChatFolderInput) newChatFolderInput.value = options.default_project_folder || '';
   if (newChatFolderBrowser) newChatFolderBrowser.hidden = true;
@@ -3507,6 +3548,14 @@ if (newChatBtn) {
 }
 if (newChatForm) {
   newChatForm.addEventListener('submit', submitNewChatModal);
+}
+if (newChatNameInput) {
+  newChatNameInput.addEventListener('input', scheduleNewChatDefaultFolderRefresh);
+}
+if (newChatFolderInput) {
+  newChatFolderInput.addEventListener('input', () => {
+    state.newChatFolderEdited = true;
+  });
 }
 if (newChatCloseBtn) newChatCloseBtn.addEventListener('click', closeNewChatModal);
 if (newChatCancelBtn) newChatCancelBtn.addEventListener('click', closeNewChatModal);

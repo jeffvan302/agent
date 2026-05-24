@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -459,6 +460,7 @@ std::string WebResearchUsageContextText() {
         "- Prefer a web/search tool before guessing about unfamiliar or version-sensitive commands, APIs, model/provider behavior, or documentation-backed details.\n"
         "- If the user provides a URL or asks about a specific online document/page, use the web retrieval/download/fetch-capable MCP tool when available to read the page contents before answering.\n"
         "- If no URL is provided, search first, choose the most relevant official or primary source, then fetch/download/read the result when the exact page content matters.\n"
+        "- If DuckDuckGo returns repeated suspicious 'no results' responses with bot-detection or retry-later wording, treat that as temporary throttling. Stop retrying the same broad search, use a known URL/fetch tool or another source, and tell the user web search is temporarily limited.\n"
         "- Summarize findings in your own words and include source URLs when the answer relies on web research.\n"
         "- Do not use web research for purely local codebase facts that can be answered from project files or local tools.";
 }
@@ -494,7 +496,7 @@ std::string AugmentToolDescription(const McpServerConfig& config, const McpToolD
             "DuckDuckGo/web research guidance: use this tool when the task depends on external web pages, current facts, online documentation, release notes, package or command behavior, or a user-provided URL/document. ";
         if (tool_name.find("search") != std::string::npos) {
             description +=
-                "Use search to find the relevant official or primary source; when exact details matter, follow up with a fetch/download/read-content tool if the server exposes one. ";
+                "Use search to find the relevant official or primary source; when exact details matter, follow up with a fetch/download/read-content tool if the server exposes one. If repeated simple searches return a no-results message mentioning bot detection or retrying in a few minutes, stop retrying that search and treat DuckDuckGo as temporarily throttled. ";
         }
         if (tool_name.find("fetch") != std::string::npos ||
             tool_name.find("download") != std::string::npos ||
@@ -712,6 +714,83 @@ std::string FormatToolResultText(const json& result) {
         stream << parts[i];
     }
     return stream.str();
+}
+
+bool ToolNameLooksLikeSearch(const std::string& tool_name) {
+    const std::string lowered = LowerAscii(tool_name);
+    return lowered.find("search") != std::string::npos ||
+           lowered.find("duckduckgo") != std::string::npos ||
+           lowered.find("duck_duck_go") != std::string::npos;
+}
+
+std::string NormalizeSearchQuery(std::string query) {
+    query = Trim(std::move(query));
+    std::string normalized;
+    normalized.reserve(query.size());
+    bool last_space = false;
+    for (const unsigned char ch : query) {
+        if (std::isspace(ch)) {
+            if (!last_space) {
+                normalized.push_back(' ');
+                last_space = true;
+            }
+        } else {
+            normalized.push_back(static_cast<char>(std::tolower(ch)));
+            last_space = false;
+        }
+    }
+    return Trim(std::move(normalized));
+}
+
+std::string ExtractSearchQueryFromArguments(const std::string& arguments_json) {
+    if (Trim(arguments_json).empty()) {
+        return "";
+    }
+    try {
+        const json arguments = json::parse(arguments_json);
+        if (!arguments.is_object()) {
+            return "";
+        }
+
+        const std::array<std::string, 8> preferred_keys = {
+            "query", "q", "keywords", "search", "search_query",
+            "search_terms", "term", "text"
+        };
+        for (const auto& key : preferred_keys) {
+            const auto it = arguments.find(key);
+            if (it != arguments.end() && it->is_string()) {
+                return NormalizeSearchQuery(it->get<std::string>());
+            }
+        }
+    } catch (...) {
+    }
+    return "";
+}
+
+bool LooksLikeDuckDuckGoBlockedNoResults(const McpToolCallResult& result) {
+    const std::string combined = LowerAscii(result.content_text + "\n" + result.raw_result_json);
+    const bool no_results =
+        combined.find("no results were found for your search query") != std::string::npos;
+    const bool throttle_hint =
+        combined.find("bot detection") != std::string::npos ||
+        combined.find("try again in a few minutes") != std::string::npos ||
+        combined.find("rate limit") != std::string::npos ||
+        combined.find("too many requests") != std::string::npos;
+    return no_results && throttle_hint;
+}
+
+std::string BuildWebResearchGuardMessage(const std::string& query, int consecutive_count) {
+    std::ostringstream message;
+    message << "DuckDuckGo/web search appears to be temporarily throttled or blocked. "
+            << "The MCP server returned the same suspicious no-results/bot-detection response "
+            << consecutive_count << " time(s)";
+    if (!query.empty()) {
+        message << " for query \"" << query << "\"";
+    }
+    message << ". Stop retrying this DuckDuckGo search for a few minutes. "
+            << "Use a different source, use a known URL fetch/download tool, narrow to an official site URL, "
+            << "or ask the user before continuing broad web research.";
+    return message.str();
 }
 
 bool EquivalentVariables(const std::vector<McpServerVariable>& left, const std::vector<McpServerVariable>& right) {
@@ -1429,10 +1508,16 @@ void McpManager::Connection::HandleRequest(const json& message) {
     }
 }
 
+struct WebResearchGuardState {
+    int consecutive_suspicious_empty_results = 0;
+    std::chrono::steady_clock::time_point cooldown_until{};
+};
+
 struct McpManager::Impl {
     mutable std::mutex mutex;
     std::unordered_map<std::string, std::shared_ptr<Connection>> connections;
     mutable std::unordered_map<std::string, std::vector<ProjectMcpServerBinding>> bindings_by_project;
+    mutable std::unordered_map<std::string, WebResearchGuardState> web_research_guards;
 };
 
 McpManager::McpManager(AppStorage* storage) : storage_(storage), impl_(std::make_unique<Impl>()) {}
@@ -1934,6 +2019,11 @@ McpToolCallResult McpManager::CallExposedTool(
     }
 
     std::shared_ptr<Connection> connection;
+    McpServerConfig resolved_config;
+    std::string connection_key;
+    std::string web_guard_key;
+    std::string search_query;
+    bool use_web_research_guard = false;
     {
         std::scoped_lock lock(impl_->mutex);
         const auto config_it = std::find_if(configs_.begin(), configs_.end(), [&](const McpServerConfig& config) { return config.id == tool_it->server_id; });
@@ -1945,8 +2035,35 @@ McpToolCallResult McpManager::CallExposedTool(
             result.raw_result_json = json{{"error", result.content_text}}.dump(2);
             return result;
         }
-        const auto connection_it =
-            impl_->connections.find(BuildConnectionKey(*config_it, project_id, runtime_variables));
+        resolved_config = *config_it;
+        connection_key = BuildConnectionKey(resolved_config, project_id, runtime_variables);
+        use_web_research_guard =
+            LooksLikeWebResearchServer(resolved_config) &&
+            ToolNameLooksLikeSearch(tool_it->tool_name);
+        if (use_web_research_guard) {
+            search_query = ExtractSearchQueryFromArguments(arguments_json);
+            web_guard_key = connection_key + "::" + tool_it->tool_name + "::" + search_query;
+            const auto guard_it = impl_->web_research_guards.find(web_guard_key);
+            if (guard_it != impl_->web_research_guards.end() &&
+                guard_it->second.cooldown_until > std::chrono::steady_clock::now()) {
+                McpToolCallResult result;
+                result.success = false;
+                result.is_tool_error = true;
+                result.content_text = BuildWebResearchGuardMessage(
+                    search_query,
+                    guard_it->second.consecutive_suspicious_empty_results);
+                result.raw_result_json = json{
+                    {"error", "web_research_search_guard_active"},
+                    {"message", result.content_text},
+                    {"query", search_query},
+                    {"consecutive_suspicious_empty_results",
+                        guard_it->second.consecutive_suspicious_empty_results},
+                }.dump(2);
+                return result;
+            }
+        }
+
+        const auto connection_it = impl_->connections.find(connection_key);
         if (connection_it != impl_->connections.end()) {
             connection = connection_it->second;
         }
@@ -1961,7 +2078,38 @@ McpToolCallResult McpManager::CallExposedTool(
         return result;
     }
 
-    return connection->CallTool(tool_it->tool_name, arguments_json);
+    McpToolCallResult result = connection->CallTool(tool_it->tool_name, arguments_json);
+
+    if (use_web_research_guard && !web_guard_key.empty()) {
+        std::scoped_lock lock(impl_->mutex);
+        auto& guard = impl_->web_research_guards[web_guard_key];
+        if (LooksLikeDuckDuckGoBlockedNoResults(result)) {
+            ++guard.consecutive_suspicious_empty_results;
+            if (guard.consecutive_suspicious_empty_results >= 2) {
+                guard.cooldown_until =
+                    std::chrono::steady_clock::now() + std::chrono::minutes(5);
+                const std::string original_raw_result = result.raw_result_json;
+                result.success = false;
+                result.is_tool_error = true;
+                result.content_text = BuildWebResearchGuardMessage(
+                    search_query,
+                    guard.consecutive_suspicious_empty_results);
+                result.raw_result_json = json{
+                    {"error", "web_research_suspected_duckduckgo_throttle"},
+                    {"message", result.content_text},
+                    {"query", search_query},
+                    {"consecutive_suspicious_empty_results",
+                        guard.consecutive_suspicious_empty_results},
+                    {"original_result", original_raw_result},
+                }.dump(2);
+            }
+        } else if (result.success) {
+            guard.consecutive_suspicious_empty_results = 0;
+            guard.cooldown_until = {};
+        }
+    }
+
+    return result;
 }
 
 McpServerTestResult McpManager::TestServerConfig(const McpServerConfig& config) const {

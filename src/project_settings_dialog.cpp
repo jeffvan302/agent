@@ -59,6 +59,8 @@ enum ControlId : int {
     kUserSelectableModelsList = 6510,
     kProjectFolderBrowseCheck = 6511,
     kProjVarsUserDefinitionCheck = 6512,
+    kForceContextCompressionThresholdCheck = 6513,
+    kForceContextCompressionThresholdEdit = 6514,
 
     // Right panel - context window
     kContextWindowLabel = 6410,
@@ -723,6 +725,8 @@ private:
             &user_select_model_check_,
             &user_selectable_models_list_,
             &context_window_combo_,
+            &force_context_compression_threshold_check_,
+            &force_context_compression_threshold_edit_,
             &manual_context_compression_check_,
             &chat_logging_check_,
             &web_debugging_check_,
@@ -1139,6 +1143,12 @@ private:
         // Context window section
         context_window_label_ = CreateWindowExW(0, L"STATIC", L"Context Window Compression:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kContextWindowLabel), nullptr, nullptr);
         context_window_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kContextWindowCombo), nullptr, nullptr);
+        force_context_compression_threshold_check_ = CreateWindowExW(0, L"BUTTON", L"Force compression at input tokens:",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kForceContextCompressionThresholdCheck), nullptr, nullptr);
+        force_context_compression_threshold_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"0",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kForceContextCompressionThresholdEdit), nullptr, nullptr);
         manual_context_compression_check_ = CreateWindowExW(0, L"BUTTON", L"Allow manual context window compression",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kManualContextCompressionCheck), nullptr, nullptr);
@@ -1362,7 +1372,9 @@ private:
             variables_header_,
             model_label_, model_combo_, model_timeout_label_, model_timeout_edit_,
             user_select_model_check_, user_selectable_models_list_label_, user_selectable_models_list_,
-            context_window_label_, context_window_combo_, manual_context_compression_check_,
+            context_window_label_, context_window_combo_,
+            force_context_compression_threshold_check_, force_context_compression_threshold_edit_,
+            manual_context_compression_check_,
             internal_tools_header_, internal_tools_list_, internal_tool_settings_panel_,
             internal_powershell_enabled_check_, internal_powershell_workdir_label_,
             internal_powershell_workdir_edit_, internal_powershell_risk_label_,
@@ -1388,7 +1400,9 @@ private:
             proj_vars_description_label_, proj_vars_description_edit_, proj_vars_inject_check_,
             proj_vars_user_definition_check_,
             agentic_mode_label_, agentic_mode_combo_, agentic_modes_list_label_, agentic_modes_list_,
-            chat_logging_check_, manual_context_compression_check_, web_debugging_check_,
+            chat_logging_check_, manual_context_compression_check_,
+            force_context_compression_threshold_check_, force_context_compression_threshold_edit_,
+            web_debugging_check_,
             inline_web_links_check_, automation_check_, project_folder_browse_check_,
             instructions_label_, import_instructions_button_, instructions_edit_,
             check_context_button_, save_button_, cancel_button_
@@ -1473,6 +1487,12 @@ private:
         if (options_.allow_manual_context_compression) {
             CheckDlgButton(scroll_content_host_, kManualContextCompressionCheck, BST_CHECKED);
         }
+        if (options_.force_context_compression_token_threshold) {
+            CheckDlgButton(scroll_content_host_, kForceContextCompressionThresholdCheck, BST_CHECKED);
+        }
+        SetWindowTextW(force_context_compression_threshold_edit_,
+            std::to_wstring(std::max(0, options_.context_compression_token_threshold)).c_str());
+        RefreshForceCompressionThresholdControls();
         if (options_.enable_web_debugging) {
             CheckDlgButton(scroll_content_host_, kWebDebuggingCheck, BST_CHECKED);
         }
@@ -1597,10 +1617,18 @@ private:
         y += Scale(hwnd_, 118) + gutter * 2;
 
         // Context window section
+        const int scroll_bar_w = GetSystemMetrics(SM_CXVSCROLL);
+        const int context_combo_w = std::max(
+            Scale(hwnd_, 220),
+            right_width - scroll_bar_w - gutter);
         MoveWindow(context_window_label_, 0, y, right_width, label_height, TRUE);
         y += label_height + gutter;
-        MoveWindow(context_window_combo_, 0, y, right_width, Scale(hwnd_, 200), TRUE);
+        MoveWindow(context_window_combo_, 0, y, context_combo_w, Scale(hwnd_, 200), TRUE);
         y += Scale(hwnd_, 28) + gutter;
+        const int threshold_check_w = std::min(Scale(hwnd_, 245), std::max(Scale(hwnd_, 180), right_width - Scale(hwnd_, 110)));
+        MoveWindow(force_context_compression_threshold_check_, 0, y, threshold_check_w, Scale(hwnd_, 20), TRUE);
+        MoveWindow(force_context_compression_threshold_edit_, threshold_check_w + gutter, y - Scale(hwnd_, 1), Scale(hwnd_, 88), Scale(hwnd_, 22), TRUE);
+        y += Scale(hwnd_, 24) + gutter;
         const int context_third = (right_width - gutter * 2) / 3;
         MoveWindow(manual_context_compression_check_, 0, y, context_third, Scale(hwnd_, 20), TRUE);
         MoveWindow(chat_logging_check_, context_third + gutter, y, context_third, Scale(hwnd_, 20), TRUE);
@@ -1840,6 +1868,13 @@ private:
             if (notification_code == CBN_SELCHANGE) {
                 OnCompressionConfigChanged();
             }
+            break;
+        case kForceContextCompressionThresholdCheck:
+            if (notification_code == BN_CLICKED) {
+                RefreshForceCompressionThresholdControls();
+            }
+            break;
+        case kForceContextCompressionThresholdEdit:
             break;
         case kAgenticModeCombo:
             if (notification_code == CBN_SELCHANGE &&
@@ -2380,6 +2415,7 @@ private:
         if (sel_idx <= 0) {
             selected_compression_config_id_.clear();
         }
+        SendMessageW(context_window_combo_, CB_SETDROPPEDWIDTH, Scale(hwnd_, 360), 0);
     }
 
     bool ArtifactMemoryForcedByLayer0() const {
@@ -2393,6 +2429,13 @@ private:
 
     bool ArtifactMemoryEffectiveEnabled() const {
         return internal_artifact_memory_enabled_ || ArtifactMemoryForcedByLayer0();
+    }
+
+    void RefreshForceCompressionThresholdControls() {
+        const BOOL enabled =
+            IsDlgButtonChecked(scroll_content_host_, kForceContextCompressionThresholdCheck) ==
+            BST_CHECKED;
+        EnableWindow(force_context_compression_threshold_edit_, enabled);
     }
 
     std::string CurrentDefaultAgenticModeId() const {
@@ -3342,6 +3385,17 @@ private:
         result.enabled_agentic_mode_ids = std::move(enabled_agentic_mode_ids);
         result.enable_chat_logging = (IsDlgButtonChecked(scroll_content_host_, kChatLoggingCheck) == BST_CHECKED);
         result.allow_manual_context_compression = (IsDlgButtonChecked(scroll_content_host_, kManualContextCompressionCheck) == BST_CHECKED);
+        result.force_context_compression_token_threshold =
+            (IsDlgButtonChecked(scroll_content_host_, kForceContextCompressionThresholdCheck) == BST_CHECKED);
+        const std::wstring compression_threshold_text =
+            TrimWide(GetWindowTextString(force_context_compression_threshold_edit_));
+        if (!compression_threshold_text.empty()) {
+            result.context_compression_token_threshold =
+                std::stoi(compression_threshold_text);
+            if (result.context_compression_token_threshold < 0) {
+                result.context_compression_token_threshold = 0;
+            }
+        }
         result.enable_web_debugging = (IsDlgButtonChecked(scroll_content_host_, kWebDebuggingCheck) == BST_CHECKED);
         result.serve_web_links_inline = (IsDlgButtonChecked(scroll_content_host_, kInlineWebLinksCheck) == BST_CHECKED);
         result.enable_automation = (IsDlgButtonChecked(scroll_content_host_, kAutomationCheck) == BST_CHECKED);
@@ -3931,6 +3985,8 @@ private:
     WNDPROC user_selectable_models_list_prev_proc_ = nullptr;
     HWND context_window_label_ = nullptr;
     HWND context_window_combo_ = nullptr;
+    HWND force_context_compression_threshold_check_ = nullptr;
+    HWND force_context_compression_threshold_edit_ = nullptr;
     HWND rag_services_header_ = nullptr;
     HWND rag_services_list_ = nullptr;
     HWND rag_enabled_check_ = nullptr;

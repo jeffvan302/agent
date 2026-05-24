@@ -1,5 +1,6 @@
 #include "model_tools_manager.h"
 
+#include "built_in_tools.h"
 #include "util.h"
 
 #include <commdlg.h>
@@ -8,6 +9,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -35,9 +37,9 @@ enum ControlId : int {
     kModelLabel    = 7114,
     kModelCombo    = 7115,
 
-    // Context window compression
-    kCompressionLabel = 7116,
-    kCompressionCombo = 7117,
+    // Agentic mode
+    kAgenticModeLabel = 7116,
+    kAgenticModeCombo = 7117,
 
     // Right panel – MCP servers
     kMcpHeader        = 7120,
@@ -47,6 +49,15 @@ enum ControlId : int {
     kMcpVarHeader     = 7124,   // "Variables:" label in details panel
     // Browse buttons for MCP variable edits: IDs kMcpBrowseVarBase..kMcpBrowseVarBase+99
     kMcpBrowseVarBase = 8000,
+
+    // Right panel - built-in tools
+    kBuiltInHeader          = 7190,
+    kBuiltInPowerShell      = 7191,
+    kBuiltInPlanner         = 7192,
+    kBuiltInCompletion      = 7193,
+    kBuiltInQuestionnaire   = 7194,
+    kBuiltInSleep           = 7195,
+    kBuiltInFilesystem      = 7196,
 
     // Right panel – RAG services
     kRagHeader        = 7130,
@@ -128,6 +139,20 @@ struct RagRow {
     RagRetrievalMode retrieval_mode = RagRetrievalMode::Both;
 };
 
+struct BuiltInToolInfo {
+    const char* name;
+    const wchar_t* label;
+};
+
+static constexpr std::array<BuiltInToolInfo, 6> kBuiltInToolChoices{{
+    {built_in_tools::kPowerShellToolName, L"PowerShell"},
+    {built_in_tools::kFilesystemToolName, L"Project Filesystem"},
+    {built_in_tools::kPlannerToolName, L"Planner"},
+    {built_in_tools::kCompletionDriverToolName, L"Completion Driver"},
+    {built_in_tools::kQuestionnaireToolName, L"Questionnaire"},
+    {built_in_tools::kSleepToolName, L"Sleep"},
+}};
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Small utilities
 // ──────────────────────────────────────────────────────────────────────────────
@@ -208,6 +233,30 @@ static void NormalizeRagRow(RagRow& row) {
     row.inject_on_start = false;
 }
 
+static bool ContainsToolName(const std::vector<std::string>& names, const std::string& name) {
+    return std::find(names.begin(), names.end(), name) != names.end();
+}
+
+static std::string BuiltInToolDisplayName(const std::string& name) {
+    for (const auto& choice : kBuiltInToolChoices) {
+        if (name == choice.name) {
+            return WideToUtf8(choice.label);
+        }
+    }
+    return name;
+}
+
+static std::string AgenticModeDisplayName(const std::string& mode_id,
+                                          const std::vector<AgenticModeConfig>& modes) {
+    if (mode_id.empty()) return {};
+    for (const auto& mode : modes) {
+        if (mode.id == mode_id) {
+            return mode.name.empty() ? mode.id : mode.name;
+        }
+    }
+    return mode_id;
+}
+
 // Build a sanitized tool name for agent_ prefix (mirrors SanitizeToolName in main.cpp)
 static std::string LocalSanitizeToolName(const std::string& name) {
     std::string result;
@@ -234,7 +283,8 @@ static std::string LocalSanitizeToolName(const std::string& name) {
 // ──────────────────────────────────────────────────────────────────────────────
 static std::string BuildCallerContextText(const ModelToolConfig& tool,
                                           const std::vector<McpServerConfig>& servers,
-                                          const std::vector<RagLibraryConfig>& available_rags)
+                                          const std::vector<RagLibraryConfig>& available_rags,
+                                          const std::vector<AgenticModeConfig>& agentic_modes)
 {
     // Build description with auto-appended RAG/capability notes
     std::string description = tool.description.empty()
@@ -266,8 +316,20 @@ static std::string BuildCallerContextText(const ModelToolConfig& tool,
         mcp_names.push_back(srv_name);
     }
 
+    std::vector<std::string> built_in_names;
+    for (const auto& name : tool.built_in_tool_names) {
+        if (built_in_tools::IsBuiltInToolName(name)) {
+            built_in_names.push_back(BuiltInToolDisplayName(name));
+        }
+    }
+
+    const std::string mode_name = AgenticModeDisplayName(tool.selected_agentic_mode_id, agentic_modes);
+
     // Append automatic notes to description
     std::string notes;
+    if (!mode_name.empty()) {
+        notes += " Runs under agentic mode: " + mode_name + ".";
+    }
     if (!mcp_names.empty()) {
         notes += " Has access to: ";
         for (size_t i = 0; i < mcp_names.size(); ++i) {
@@ -284,10 +346,18 @@ static std::string BuildCallerContextText(const ModelToolConfig& tool,
         }
         notes += ".";
     }
+    if (!built_in_names.empty()) {
+        notes += " Has access to built-in tools: ";
+        for (size_t i = 0; i < built_in_names.size(); ++i) {
+            if (i) notes += ", ";
+            notes += built_in_names[i];
+        }
+        notes += ".";
+    }
 
     // Build param description
     std::string instructions_desc = "Detailed task instructions for this agent. Describe exactly what you want accomplished.";
-    if (!mcp_names.empty() || !rag_names.empty()) {
+    if (!mcp_names.empty() || !rag_names.empty() || !built_in_names.empty()) {
         instructions_desc += " Available capabilities:";
         if (!mcp_names.empty()) {
             instructions_desc += " tools from [";
@@ -297,6 +367,11 @@ static std::string BuildCallerContextText(const ModelToolConfig& tool,
         if (!rag_names.empty()) {
             instructions_desc += " and RAG MCP servers [";
             for (size_t i = 0; i < rag_names.size(); ++i) { if (i) instructions_desc += ", "; instructions_desc += rag_names[i]; }
+            instructions_desc += "]";
+        }
+        if (!built_in_names.empty()) {
+            instructions_desc += " and built-in tools [";
+            for (size_t i = 0; i < built_in_names.size(); ++i) { if (i) instructions_desc += ", "; instructions_desc += built_in_names[i]; }
             instructions_desc += "]";
         }
         instructions_desc += ". Example: 'Search for X, then write a summary to Y.'";
@@ -344,7 +419,8 @@ static std::string BuildCallerContextText(const ModelToolConfig& tool,
 // ──────────────────────────────────────────────────────────────────────────────
 static std::string BuildToolContextText(const ModelToolConfig& tool,
                                         const std::vector<McpServerConfig>& servers,
-                                        const std::vector<RagLibraryConfig>& available_rags)
+                                        const std::vector<RagLibraryConfig>& available_rags,
+                                        const std::vector<AgenticModeConfig>& agentic_modes)
 {
     std::ostringstream out;
 
@@ -356,6 +432,12 @@ static std::string BuildToolContextText(const ModelToolConfig& tool,
         out << "(No instructions defined)\n";
     }
 
+    const std::string mode_name = AgenticModeDisplayName(tool.selected_agentic_mode_id, agentic_modes);
+    if (!mode_name.empty()) {
+        out << "\n=== ASSIGNED AGENTIC MODE ===\n";
+        out << mode_name << "\n";
+    }
+
     // MCP tools
     if (!tool.mcp_bindings.empty()) {
         out << "\n=== ACCESSIBLE MCP SERVERS ===\n";
@@ -365,6 +447,16 @@ static std::string BuildToolContextText(const ModelToolConfig& tool,
                 if (srv.id == binding.server_id) { name = srv.name; break; }
             }
             out << "  • " << name << "\n";
+        }
+    }
+
+    // Built-in tools
+    if (!tool.built_in_tool_names.empty()) {
+        out << "\n=== ACCESSIBLE BUILT-IN TOOLS ===\n";
+        for (const auto& name : tool.built_in_tool_names) {
+            if (built_in_tools::IsBuiltInToolName(name)) {
+                out << "  - " << BuiltInToolDisplayName(name) << " (" << name << ")\n";
+            }
         }
     }
 
@@ -421,6 +513,9 @@ static std::string BuildToolContextText(const ModelToolConfig& tool,
     if (!tool.mcp_bindings.empty()) {
         out << " Use the available MCP tools as needed.";
     }
+    if (!tool.built_in_tool_names.empty()) {
+        out << " Use the configured built-in tools as needed.";
+    }
     if (!tool.rag_bindings.empty()) {
         for (const auto& b : tool.rag_bindings) {
             if (b.enabled && (b.retrieval_mode == RagRetrievalMode::Both || b.retrieval_mode == RagRetrievalMode::PassiveOnly)) {
@@ -443,12 +538,13 @@ public:
     static void Show(HWND owner,
                      const ModelToolConfig& tool,
                      const std::vector<McpServerConfig>& servers,
-                     const std::vector<RagLibraryConfig>& available_rags)
+                     const std::vector<RagLibraryConfig>& available_rags,
+                     const std::vector<AgenticModeConfig>& agentic_modes)
     {
         HINSTANCE inst = reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr));
         RegisterWndClass(inst);
 
-        auto* w = new ToolTestWindow(tool, servers, available_rags);
+        auto* w = new ToolTestWindow(tool, servers, available_rags, agentic_modes);
         HWND hwnd = CreateWindowExW(
             WS_EX_CONTROLPARENT,
             kToolTestClassName,
@@ -466,9 +562,10 @@ public:
 private:
     ToolTestWindow(const ModelToolConfig& tool,
                    const std::vector<McpServerConfig>& servers,
-                   const std::vector<RagLibraryConfig>& available_rags)
-        : caller_text_(BuildCallerContextText(tool, servers, available_rags))
-        , tool_text_(BuildToolContextText(tool, servers, available_rags))
+                   const std::vector<RagLibraryConfig>& available_rags,
+                   const std::vector<AgenticModeConfig>& agentic_modes)
+        : caller_text_(BuildCallerContextText(tool, servers, available_rags, agentic_modes))
+        , tool_text_(BuildToolContextText(tool, servers, available_rags, agentic_modes))
     {}
 
     static void RegisterWndClass(HINSTANCE inst) {
@@ -602,7 +699,7 @@ public:
         tools_ = storage_->LoadModelTools();
         available_servers_ = mcp_manager_->configs();
         available_rags_ = rag_service_->ListLibraries();
-        compression_configs_ = storage_->LoadCompressionConfigs();
+        agentic_modes_ = storage_->LoadAgenticModes();
     }
 
     HWND Create() {
@@ -701,18 +798,18 @@ private:
             0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kModelCombo), nullptr, nullptr);
         PopulateModelCombo("", "");
 
-        // Context window compression
-        compression_label_ = CreateWindowExW(0, L"STATIC", L"Context Window Compression:",
+        // Agentic mode
+        agentic_mode_label_ = CreateWindowExW(0, L"STATIC", L"Agentic Mode:",
             WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_,
-            reinterpret_cast<HMENU>(kCompressionLabel), nullptr, nullptr);
-        compression_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
+            reinterpret_cast<HMENU>(kAgenticModeLabel), nullptr, nullptr);
+        agentic_mode_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCompressionCombo), nullptr, nullptr);
-        ComboBox_AddString(compression_combo_, L"None");
-        for (const auto& cfg : compression_configs_) {
-            ComboBox_AddString(compression_combo_, Utf8ToWide(cfg.name).c_str());
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kAgenticModeCombo), nullptr, nullptr);
+        ComboBox_AddString(agentic_mode_combo_, L"None");
+        for (const auto& mode : agentic_modes_) {
+            ComboBox_AddString(agentic_mode_combo_, Utf8ToWide(mode.name.empty() ? mode.id : mode.name).c_str());
         }
-        ComboBox_SetCurSel(compression_combo_, 0);
+        ComboBox_SetCurSel(agentic_mode_combo_, 0);
 
         // MCP servers section
         mcp_header_ = CreateWindowExW(0, L"STATIC", L"MCP Server Access:",
@@ -731,6 +828,29 @@ private:
         mcp_var_header_ = CreateWindowExW(0, L"STATIC", L"Variables:",
             WS_CHILD | WS_VISIBLE,
             0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kMcpVarHeader), nullptr, nullptr);
+
+        // Built-in tools section
+        built_in_header_ = CreateWindowExW(0, L"STATIC", L"Built-in Tool Access:",
+            WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_,
+            reinterpret_cast<HMENU>(kBuiltInHeader), nullptr, nullptr);
+        built_in_powershell_check_ = CreateWindowExW(0, L"BUTTON", L"PowerShell",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kBuiltInPowerShell), nullptr, nullptr);
+        built_in_filesystem_check_ = CreateWindowExW(0, L"BUTTON", L"Project Filesystem",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kBuiltInFilesystem), nullptr, nullptr);
+        built_in_planner_check_ = CreateWindowExW(0, L"BUTTON", L"Planner",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kBuiltInPlanner), nullptr, nullptr);
+        built_in_completion_check_ = CreateWindowExW(0, L"BUTTON", L"Completion Driver",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kBuiltInCompletion), nullptr, nullptr);
+        built_in_questionnaire_check_ = CreateWindowExW(0, L"BUTTON", L"Questionnaire",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kBuiltInQuestionnaire), nullptr, nullptr);
+        built_in_sleep_check_ = CreateWindowExW(0, L"BUTTON", L"Sleep",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kBuiltInSleep), nullptr, nullptr);
 
         // RAG section
         rag_header_ = CreateWindowExW(0, L"STATIC", L"RAG Library Access:",
@@ -787,8 +907,11 @@ private:
             tool_list_, add_tool_button_, remove_tool_button_,
             name_label_, name_edit_, desc_label_, desc_edit_,
             model_label_, model_combo_,
-            compression_label_, compression_combo_,
+            agentic_mode_label_, agentic_mode_combo_,
             mcp_header_, mcp_list_, mcp_details_panel_, mcp_enabled_check_, mcp_var_header_,
+            built_in_header_, built_in_powershell_check_, built_in_filesystem_check_,
+            built_in_planner_check_, built_in_completion_check_, built_in_questionnaire_check_,
+            built_in_sleep_check_,
             rag_header_, rag_list_,
             rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_, rag_inject_onstart_,
@@ -848,10 +971,10 @@ private:
         MoveWindow(model_combo_, right_x, ry, right_w, Scale(hwnd_, 250), TRUE);
         ry += Scale(hwnd_, 28) + gutter * 2;
 
-        // Compression
-        MoveWindow(compression_label_, right_x, ry, right_w, label_h, TRUE);
+        // Agentic mode
+        MoveWindow(agentic_mode_label_, right_x, ry, right_w, label_h, TRUE);
         ry += label_h + gutter;
-        MoveWindow(compression_combo_, right_x, ry, right_w, Scale(hwnd_, 200), TRUE);
+        MoveWindow(agentic_mode_combo_, right_x, ry, right_w, Scale(hwnd_, 200), TRUE);
         ry += Scale(hwnd_, 28) + gutter * 2;
 
         // MCP servers
@@ -870,6 +993,20 @@ private:
         MoveWindow(mcp_var_header_,    mdx, ry + Scale(hwnd_, 46), mdw, label_h,          TRUE);
         LayoutMcpVariableControls();
         ry += mcp_details_h + gutter;
+
+        // Built-in tools
+        MoveWindow(built_in_header_, right_x, ry, right_w, label_h, TRUE);
+        ry += label_h + gutter;
+        const int built_col_w = std::max(Scale(hwnd_, 150), (right_w - gutter * 2) / 3);
+        const int built_row_h = Scale(hwnd_, 22);
+        MoveWindow(built_in_powershell_check_,    right_x,                         ry, built_col_w, built_row_h, TRUE);
+        MoveWindow(built_in_filesystem_check_,    right_x + built_col_w + gutter,  ry, built_col_w, built_row_h, TRUE);
+        MoveWindow(built_in_planner_check_,       right_x + (built_col_w + gutter) * 2, ry, built_col_w, built_row_h, TRUE);
+        ry += built_row_h + Scale(hwnd_, 2);
+        MoveWindow(built_in_completion_check_,    right_x,                         ry, built_col_w, built_row_h, TRUE);
+        MoveWindow(built_in_questionnaire_check_, right_x + built_col_w + gutter,  ry, built_col_w, built_row_h, TRUE);
+        MoveWindow(built_in_sleep_check_,         right_x + (built_col_w + gutter) * 2, ry, built_col_w, built_row_h, TRUE);
+        ry += built_row_h + gutter * 2;
 
         // RAG
         MoveWindow(rag_header_, right_x, ry, right_w, label_h, TRUE);
@@ -1039,7 +1176,8 @@ private:
             SetWindowTextW(desc_edit_, L"");
             SetWindowTextW(instructions_edit_, L"");
             PopulateModelCombo("", "");
-            SetCompressionCombo("");
+            SetAgenticModeCombo("");
+            SetBuiltInChecks({});
             PopulateMcpList({});
             SelectMcpRow(-1);
             PopulateRagList({});
@@ -1054,7 +1192,8 @@ private:
         SetWindowTextW(desc_edit_, Utf8ToWide(tool.description).c_str());
         SetWindowTextW(instructions_edit_, Utf8ToWide(tool.instructions).c_str());
         PopulateModelCombo(tool.preferred_provider_id, tool.preferred_model_id);
-        SetCompressionCombo(tool.selected_compression_config_id);
+        SetAgenticModeCombo(tool.selected_agentic_mode_id);
+        SetBuiltInChecks(tool.built_in_tool_names);
         PopulateMcpList(tool.mcp_bindings);
         SelectMcpRow(-1);   // clear details panel; user clicks a server to inspect/edit it
         PopulateRagList(tool.rag_bindings);
@@ -1082,15 +1221,18 @@ private:
             tool.preferred_model_id.clear();
         }
 
-        // Compression
+        // Agentic mode. Context compression is intentionally not used by model tools.
         {
-            const int csel = ComboBox_GetCurSel(compression_combo_);
-            if (csel <= 0 || csel - 1 >= static_cast<int>(compression_configs_.size())) {
-                tool.selected_compression_config_id.clear();
+            tool.selected_compression_config_id.clear();
+            const int csel = ComboBox_GetCurSel(agentic_mode_combo_);
+            if (csel <= 0 || csel - 1 >= static_cast<int>(agentic_modes_.size())) {
+                tool.selected_agentic_mode_id.clear();
             } else {
-                tool.selected_compression_config_id = compression_configs_[csel - 1].id;
+                tool.selected_agentic_mode_id = agentic_modes_[csel - 1].id;
             }
         }
+
+        tool.built_in_tool_names = CollectBuiltInToolNames();
 
         // MCP bindings
         tool.mcp_bindings.clear();
@@ -1149,7 +1291,7 @@ private:
         // Collect current edits into memory (don't save to disk)
         CollectCurrentTool();
         const auto& tool = tools_[selected_tool_index_];
-        ToolTestWindow::Show(hwnd_, tool, available_servers_, available_rags_);
+        ToolTestWindow::Show(hwnd_, tool, available_servers_, available_rags_, agentic_modes_);
     }
 
     // ── Model combo ────────────────────────────────────────────────────────────
@@ -1182,15 +1324,47 @@ private:
 
     // ── Compression combo ──────────────────────────────────────────────────────
 
-    void SetCompressionCombo(const std::string& config_id) {
+    void SetAgenticModeCombo(const std::string& mode_id) {
         int sel = 0;  // default: None
-        for (int i = 0; i < static_cast<int>(compression_configs_.size()); ++i) {
-            if (compression_configs_[i].id == config_id) {
+        for (int i = 0; i < static_cast<int>(agentic_modes_.size()); ++i) {
+            if (agentic_modes_[i].id == mode_id) {
                 sel = i + 1;
                 break;
             }
         }
-        ComboBox_SetCurSel(compression_combo_, sel);
+        ComboBox_SetCurSel(agentic_mode_combo_, sel);
+    }
+
+    void SetBuiltInChecks(const std::vector<std::string>& names) {
+        Button_SetCheck(built_in_powershell_check_,
+            ContainsToolName(names, built_in_tools::kPowerShellToolName) ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(built_in_filesystem_check_,
+            ContainsToolName(names, built_in_tools::kFilesystemToolName) ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(built_in_planner_check_,
+            ContainsToolName(names, built_in_tools::kPlannerToolName) ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(built_in_completion_check_,
+            ContainsToolName(names, built_in_tools::kCompletionDriverToolName) ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(built_in_questionnaire_check_,
+            ContainsToolName(names, built_in_tools::kQuestionnaireToolName) ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(built_in_sleep_check_,
+            ContainsToolName(names, built_in_tools::kSleepToolName) ? BST_CHECKED : BST_UNCHECKED);
+    }
+
+    std::vector<std::string> CollectBuiltInToolNames() const {
+        std::vector<std::string> names;
+        if (Button_GetCheck(built_in_powershell_check_) == BST_CHECKED)
+            names.push_back(built_in_tools::kPowerShellToolName);
+        if (Button_GetCheck(built_in_filesystem_check_) == BST_CHECKED)
+            names.push_back(built_in_tools::kFilesystemToolName);
+        if (Button_GetCheck(built_in_planner_check_) == BST_CHECKED)
+            names.push_back(built_in_tools::kPlannerToolName);
+        if (Button_GetCheck(built_in_completion_check_) == BST_CHECKED)
+            names.push_back(built_in_tools::kCompletionDriverToolName);
+        if (Button_GetCheck(built_in_questionnaire_check_) == BST_CHECKED)
+            names.push_back(built_in_tools::kQuestionnaireToolName);
+        if (Button_GetCheck(built_in_sleep_check_) == BST_CHECKED)
+            names.push_back(built_in_tools::kSleepToolName);
+        return names;
     }
 
     // ── MCP list ───────────────────────────────────────────────────────────────
@@ -1540,8 +1714,10 @@ private:
 
     void SetRightPanelEnabled(bool on) {
         HWND ctrls[] = {
-            name_edit_, desc_edit_, model_combo_, compression_combo_,
+            name_edit_, desc_edit_, model_combo_, agentic_mode_combo_,
             mcp_list_, mcp_enabled_check_,
+            built_in_powershell_check_, built_in_filesystem_check_, built_in_planner_check_,
+            built_in_completion_check_, built_in_questionnaire_check_, built_in_sleep_check_,
             rag_list_,
             rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_, rag_inject_onstart_,
@@ -1564,7 +1740,7 @@ private:
     std::vector<ProviderConfig>        providers_;
     McpManager*                        mcp_manager_  = nullptr;
     RagService*                        rag_service_  = nullptr;
-    std::vector<ContextCompressionConfig> compression_configs_;
+    std::vector<AgenticModeConfig>     agentic_modes_;
 
     std::vector<ModelToolConfig>   tools_;
     std::vector<McpServerConfig>   available_servers_;
@@ -1595,8 +1771,8 @@ private:
     HWND model_combo_  = nullptr;
 
     // Controls – compression
-    HWND compression_label_ = nullptr;
-    HWND compression_combo_ = nullptr;
+    HWND agentic_mode_label_ = nullptr;
+    HWND agentic_mode_combo_ = nullptr;
 
     // Controls – MCP
     HWND mcp_header_        = nullptr;
@@ -1604,6 +1780,14 @@ private:
     HWND mcp_details_panel_ = nullptr;  // groupbox below list
     HWND mcp_enabled_check_ = nullptr;  // "Use this MCP server"
     HWND mcp_var_header_    = nullptr;  // "Variables:" label
+
+    HWND built_in_header_              = nullptr;
+    HWND built_in_powershell_check_    = nullptr;
+    HWND built_in_filesystem_check_    = nullptr;
+    HWND built_in_planner_check_       = nullptr;
+    HWND built_in_completion_check_    = nullptr;
+    HWND built_in_questionnaire_check_ = nullptr;
+    HWND built_in_sleep_check_         = nullptr;
 
     // Controls – RAG
     HWND rag_header_         = nullptr;
