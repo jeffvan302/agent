@@ -72,7 +72,6 @@ constexpr std::uintmax_t kDesktopTranscriptLoadLimitBytes = 8ull * 1024ull * 102
 enum ControlId : int {
     kTree = 3001,
     kNewProject = 3002,
-    kNewChat = 3003,
     kRename = 3004,
     kDelete = 3005,
     kProviders = 3007,
@@ -3312,13 +3311,12 @@ private:
     void StartBackgroundServices();
     void OnStartupServicesFinished();
     void LoadState();
-    void EnsureDefaultProjectAndChat();
+    void EnsureDefaultProject();
     void ChooseValidSelection();
     void LayoutControls(int width, int height);
     void OnCommand(int control_id, int notification_code);
     void OnNotify(NMHDR* header);
     void CreateProject();
-    void CreateChat();
     void RenameSelection();
     void DeleteSelection();
     void OpenProviderManager();
@@ -3368,7 +3366,6 @@ private:
     HWND hwnd_ = nullptr;
     HWND tree_ = nullptr;
     HWND new_project_button_ = nullptr;
-    HWND new_chat_button_ = nullptr;
     HWND rename_button_ = nullptr;
     HWND delete_button_ = nullptr;
     HWND providers_button_ = nullptr;
@@ -3541,7 +3538,6 @@ void MainWindow::OnCreate() {
     font_ = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 
     new_project_button_ = CreateWindowExW(0, L"BUTTON", L"New Project", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kNewProject), nullptr, nullptr);
-    new_chat_button_ = CreateWindowExW(0, L"BUTTON", L"New Chat", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kNewChat), nullptr, nullptr);
     rename_button_ = CreateWindowExW(0, L"BUTTON", L"Rename", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRename), nullptr, nullptr);
     delete_button_ = CreateWindowExW(0, L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kDelete), nullptr, nullptr);
 
@@ -3565,7 +3561,7 @@ void MainWindow::OnCreate() {
     context_messages_button_ = CreateWindowExW(0, L"BUTTON", L"Check Context", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextMessages), nullptr, nullptr);
     status_label_ = CreateWindowExW(0, L"STATIC", L"Initializing...", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
 
-    for (HWND control : {new_project_button_, new_chat_button_, rename_button_, delete_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, agentic_modes_button_, web_config_button_, admin_config_button_, remote_ollama_setup_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
+    for (HWND control : {new_project_button_, rename_button_, delete_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, agentic_modes_button_, web_config_button_, admin_config_button_, remote_ollama_setup_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
 
@@ -3665,7 +3661,7 @@ void MainWindow::LoadState() {
     Logger::Info("LoadState: projects begin");
     projects_ = storage_.LoadProjects();
     Logger::Info("LoadState: selection begin");
-    EnsureDefaultProjectAndChat();
+    EnsureDefaultProject();
     ChooseValidSelection();
     Logger::Info("LoadState: refresh tree begin");
     RefreshTree();
@@ -3679,13 +3675,12 @@ void MainWindow::LoadState() {
     Logger::Info("LoadState: complete");
 }
 
-void MainWindow::EnsureDefaultProjectAndChat() {
+void MainWindow::EnsureDefaultProject() {
     if (!projects_.empty()) {
         return;
     }
 
     const ProjectInfo project = storage_.CreateProject("Default Project");
-    storage_.CreateChat(project.id, "Chat 1", "", "");
     projects_ = storage_.LoadProjects();
 }
 
@@ -3715,8 +3710,7 @@ void MainWindow::LayoutControls(int width, int height) {
     const int tool_trace_height = std::max(Scale(hwnd_, 180), height / 4);
 
     const int left_button_width = (left_width - gutter) / 2;
-    MoveWindow(new_project_button_, margin, margin, left_button_width, button_height, TRUE);
-    MoveWindow(new_chat_button_, margin + left_button_width + gutter, margin, left_button_width, button_height, TRUE);
+    MoveWindow(new_project_button_, margin, margin, left_width, button_height, TRUE);
     MoveWindow(rename_button_, margin, margin + button_height + gutter, left_button_width, button_height, TRUE);
     MoveWindow(delete_button_, margin + left_button_width + gutter, margin + button_height + gutter, left_button_width, button_height, TRUE);
     const int rag_button_y = height - margin - button_height;
@@ -3768,9 +3762,6 @@ void MainWindow::OnCommand(int control_id, int notification_code) {
     switch (control_id) {
     case kNewProject:
         CreateProject();
-        break;
-    case kNewChat:
-        CreateChat();
         break;
     case kRename:
         RenameSelection();
@@ -3881,30 +3872,7 @@ void MainWindow::CreateProject() {
 
     const ProjectInfo project = storage_.CreateProject(result->project_name);
     mcp_manager_.SaveProjectBindings(project.id, result->bindings);
-    const ChatInfo chat = storage_.CreateChat(project.id, "Chat 1", "", "");
-    ReloadProjects(project.id, chat.id);
-}
-
-void MainWindow::CreateChat() {
-    if (active_project_id_.empty() && !projects_.empty()) {
-        active_project_id_ = projects_.front().info.id;
-    }
-    if (active_project_id_.empty()) {
-        return;
-    }
-
-    const auto name = ShowPromptDialog(hwnd_, PromptOptions{L"Create Chat", L"Chat name", L"New Chat"});
-    if (!name || name->empty()) {
-        return;
-    }
-
-    // Inherit the project's preferred model for the new chat
-    auto proj_settings_new_chat = storage_.LoadProjectSettings(active_project_id_);
-    const std::string provider_id = proj_settings_new_chat.preferred_provider_id;
-    const std::string model_id = proj_settings_new_chat.preferred_model_id;
-
-    const ChatInfo chat = storage_.CreateChat(active_project_id_, WideToUtf8(*name), provider_id, model_id);
-    ReloadProjects(active_project_id_, chat.id);
+    ReloadProjects(project.id, "");
 }
 
 void MainWindow::RenameSelection() {
@@ -4713,7 +4681,7 @@ void MainWindow::RestartApplication() {
 
 void MainWindow::ReloadProjects(const std::string& preferred_project_id, const std::string& preferred_chat_id) {
     projects_ = storage_.LoadProjects();
-    EnsureDefaultProjectAndChat();
+    EnsureDefaultProject();
     if (!preferred_project_id.empty()) {
         active_project_id_ = preferred_project_id;
     }

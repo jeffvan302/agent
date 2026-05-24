@@ -537,6 +537,7 @@ function postProcessMessageBubble(bubble, options = {}) {
     renderCytoscapeBlocks(bubble);
     renderSvgBlocks(bubble);
   }
+  enhanceCopyableBlocks(bubble);
   const hasDiagram = !!bubble.querySelector('.diagram-block');
   bubble.classList.toggle('has-diagram', hasDiagram);
   bubble.classList.toggle('diagram-only', hasDiagram && bubbleHasOnlyDiagrams(bubble));
@@ -545,6 +546,66 @@ function postProcessMessageBubble(bubble, options = {}) {
       hljs.highlightElement(el);
     }
   });
+}
+
+function enhanceCopyableBlocks(container) {
+  container.querySelectorAll('pre code').forEach(codeEl => {
+    if (getCodeLanguage(codeEl) !== 'copy') return;
+    const pre = codeEl.closest('pre');
+    if (!pre || pre.dataset.copyReady === 'true') return;
+
+    pre.dataset.copyReady = 'true';
+    pre.classList.add('copyable-block');
+
+    const button = document.createElement('button');
+    button.className = 'copy-block-button';
+    button.type = 'button';
+    button.title = 'Copy';
+    button.setAttribute('aria-label', 'Copy text');
+    button.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+      '<rect x="9" y="9" width="11" height="13" rx="2"></rect>' +
+      '<path d="M5 15V5a2 2 0 0 1 2-2h10"></path>' +
+      '</svg>';
+    button.addEventListener('click', async () => {
+      try {
+        await copyTextForUser(codeEl.textContent);
+        button.classList.add('copied');
+        button.title = 'Copied';
+        button.setAttribute('aria-label', 'Copied');
+        window.setTimeout(() => {
+          if (!button.isConnected) return;
+          button.classList.remove('copied');
+          button.title = 'Copy';
+          button.setAttribute('aria-label', 'Copy text');
+        }, 1200);
+      } catch (_) {
+        button.title = 'Copy unavailable';
+        button.setAttribute('aria-label', 'Copy unavailable');
+      }
+    });
+    pre.appendChild(button);
+  });
+}
+
+async function copyTextForUser(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Unable to copy text.');
 }
 
 function bubbleHasOnlyDiagrams(bubble) {
