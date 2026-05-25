@@ -658,6 +658,7 @@ inline constexpr int kDefaultCompletionDriverOverloadDelaySeconds = 180;
 
 struct ProjectSettings {
     std::string project_name;
+    std::string project_description;  // One-line web description shown beside selected chat name
     std::string project_instructions;
     std::vector<ProjectMcpServerBinding> mcp_bindings;
     std::vector<ContextCompressionConfig> compression_configs;

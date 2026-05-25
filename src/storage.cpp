@@ -2461,6 +2461,7 @@ ProjectCompressionSettings ProjectCompressionSettingsFromJson(const json& item) 
 json ProjectSettingsToJson(const ProjectSettings& settings) {
     json j;
     j["project_name"] = settings.project_name;
+    j["project_description"] = NormalizeProjectDescription(settings.project_description);
     j["project_instructions"] = settings.project_instructions;
 
     json mcp_arr = json::array();
@@ -2556,6 +2557,8 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
 ProjectSettings ProjectSettingsFromJson(const json& j) {
     ProjectSettings settings;
     settings.project_name = j.value("project_name", "");
+    settings.project_description =
+        NormalizeProjectDescription(j.value("project_description", ""));
     settings.project_instructions = j.value("project_instructions", "");
     settings.selected_compression_config_id = j.value("selected_compression_config_id", "");
     settings.preferred_provider_id = j.value("preferred_provider_id", "");

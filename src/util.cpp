@@ -65,6 +65,24 @@ std::wstring TrimWide(const std::wstring& value) {
     return TrimWideImpl(value);
 }
 
+std::string NormalizeProjectDescription(const std::string& value) {
+    std::wstring description = Utf8ToWide(value);
+    for (wchar_t& ch : description) {
+        if (ch == L'\r' || ch == L'\n') {
+            ch = L' ';
+        }
+    }
+    description = TrimWide(description);
+    if (description.size() > kMaxProjectDescriptionLength) {
+        description.resize(kMaxProjectDescriptionLength);
+        if (!description.empty() &&
+            description.back() >= 0xD800 && description.back() <= 0xDBFF) {
+            description.pop_back();
+        }
+    }
+    return WideToUtf8(description);
+}
+
 std::string MakeId(const std::string& prefix) {
     static std::atomic_uint64_t counter = 0;
     const auto now = std::chrono::system_clock::now().time_since_epoch();

@@ -61,6 +61,8 @@ enum ControlId : int {
     kProjVarsUserDefinitionCheck = 6512,
     kForceContextCompressionThresholdCheck = 6513,
     kForceContextCompressionThresholdEdit = 6514,
+    kProjectDescriptionLabel = 6515,
+    kProjectDescriptionEdit = 6516,
 
     // Right panel - context window
     kContextWindowLabel = 6410,
@@ -1121,7 +1123,17 @@ private:
             WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
             0, 0, 0, 0, scroll_panel_, nullptr, nullptr, this);
 
-    // Model selection section
+    // Project presentation and model selection section
+    project_description_label_ = CreateWindowExW(0, L"STATIC", L"Web Description (max 300 characters):",
+        WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_,
+        reinterpret_cast<HMENU>(kProjectDescriptionLabel), nullptr, nullptr);
+    project_description_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT",
+        Utf8ToWide(NormalizeProjectDescription(options_.project_description)).c_str(),
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0,
+        scroll_content_host_, reinterpret_cast<HMENU>(kProjectDescriptionEdit), nullptr, nullptr);
+    SendMessageW(project_description_edit_, EM_SETLIMITTEXT,
+        static_cast<WPARAM>(kMaxProjectDescriptionLength), 0);
+
     model_label_ = CreateWindowExW(0, L"STATIC", L"AI Model:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kModelLabel), nullptr, nullptr);
     model_combo_ = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kModelCombo), nullptr, nullptr);
 
@@ -1370,6 +1382,7 @@ private:
             server_details_panel_, server_enabled_check_, server_name_label_, server_scope_label_,
             model_tools_header_, model_tools_list_,
             variables_header_,
+            project_description_label_, project_description_edit_,
             model_label_, model_combo_, model_timeout_label_, model_timeout_edit_,
             user_select_model_check_, user_selectable_models_list_label_, user_selectable_models_list_,
             context_window_label_, context_window_combo_,
@@ -1599,8 +1612,12 @@ private:
         SetWindowPos(scroll_backdrop_, HWND_BOTTOM, 0, 0, right_width, scroll_viewport_height_,
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
-        // Model selection section (top of right panel)
+        // Project presentation and model selection section (top of right panel)
         y = margin;
+        MoveWindow(project_description_label_, 0, y, right_width, label_height, TRUE);
+        y += label_height + gutter;
+        MoveWindow(project_description_edit_, 0, y, right_width, Scale(hwnd_, 22), TRUE);
+        y += Scale(hwnd_, 22) + gutter * 2;
         MoveWindow(model_label_, 0, y, right_width, label_height, TRUE);
         y += label_height + gutter;
         MoveWindow(model_combo_, 0, y, right_width, Scale(hwnd_, 250), TRUE);
@@ -3357,6 +3374,8 @@ private:
         }
 
         result.project_name = WideToUtf8(options_.project_name);
+        result.project_description =
+            NormalizeProjectDescription(WideToUtf8(GetWindowTextString(project_description_edit_)));
         result.project_instructions = WideToUtf8(GetWindowTextString(instructions_edit_));
         result.selected_compression_config_id = selected_compression_config_id_;
         result.preferred_provider_id = preferred_provider_id;
@@ -3977,6 +3996,8 @@ private:
 
     HWND model_label_ = nullptr;
     HWND model_combo_ = nullptr;
+    HWND project_description_label_ = nullptr;
+    HWND project_description_edit_ = nullptr;
     HWND model_timeout_label_ = nullptr;
     HWND model_timeout_edit_ = nullptr;
     HWND user_select_model_check_ = nullptr;

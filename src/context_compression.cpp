@@ -1838,8 +1838,7 @@ std::string ContextCompressionService::BuildTruncateTopBlock(
     const ContextCompressionConfig& config,
     ChatCompressionState& state) const {
 
-    int keep = config.truncate_top_keep_messages;
-    if (keep <= 0) keep = 20;
+    const int keep = std::max(0, config.truncate_top_keep_messages);
 
     std::ostringstream block;
     block << "=== RECENT CONTEXT (Rolling Window) ===\n\n";
@@ -1854,7 +1853,9 @@ std::string ContextCompressionService::BuildTruncateTopBlock(
             messages[i].role == "tool" ? 6000 : 12000,
             "Rolling-window context keeps a bounded copy of each message.");
     }
-    if (messages.empty()) {
+    if (keep == 0) {
+        block << "(No prior conversation retained between user prompts.)\n\n";
+    } else if (messages.empty()) {
         block << "(No messages in this chat yet)\n\n";
     }
 
@@ -2057,10 +2058,10 @@ std::string ContextCompressionService::CompressTruncateTop(
     const ContextCompressionConfig& config,
     ChatCompressionState& state) const {
 
-    int keep = config.truncate_top_keep_messages;
-    if (keep <= 0) keep = 20;
+    const int keep = std::max(0, config.truncate_top_keep_messages);
 
-    if (messages.size() <= static_cast<size_t>(keep)) {
+    if (messages.empty() ||
+        (keep > 0 && messages.size() <= static_cast<size_t>(keep))) {
         // Not enough messages to truncate
         state.last_compression_message_index = messages.size();
         return "";
@@ -2077,8 +2078,7 @@ std::string ContextCompressionService::BuildRollingSummaryBlock(
     const ContextCompressionConfig& config,
     ChatCompressionState& state) const {
 
-    int keep = config.truncate_top_keep_messages;
-    if (keep <= 0) keep = 20;
+    const int keep = std::max(0, config.truncate_top_keep_messages);
 
     const size_t start = messages.size() > static_cast<size_t>(keep)
         ? messages.size() - static_cast<size_t>(keep)
@@ -2091,7 +2091,9 @@ std::string ContextCompressionService::BuildRollingSummaryBlock(
           << "\n\n";
 
     block << "## Recent Conversation - Verbatim Tail\n";
-    if (messages.empty()) {
+    if (keep == 0) {
+        block << "(No verbatim recent messages retained.)\n\n";
+    } else if (messages.empty()) {
         block << "(No recent messages)\n\n";
     } else {
         for (size_t i = start; i < messages.size(); ++i) {

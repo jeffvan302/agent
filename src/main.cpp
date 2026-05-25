@@ -4069,6 +4069,7 @@ void MainWindow::EditProjectSettings() {
     auto project_settings = storage_.LoadProjectSettings(active_project_id_);
     options.compression_configs = compression_service_.LoadGlobalConfigs();  // Global configs from Context Window Settings
     options.selected_compression_config_id = project_settings.selected_compression_config_id;
+    options.project_description = project_settings.project_description;
     options.project_instructions = project_settings.project_instructions;
     if (options.selected_compression_config_id.empty()) {
         auto legacy_compression = storage_.LoadProjectCompressionSettings(active_project_id_);
@@ -4161,6 +4162,7 @@ void MainWindow::EditProjectSettings() {
     // Save project settings (including selected compression config - global configs are managed separately)
     ProjectSettings saved_settings;
     saved_settings.project_name = result->project_name;
+    saved_settings.project_description = result->project_description;
     saved_settings.project_instructions = result->project_instructions;
     saved_settings.mcp_bindings = result->mcp_bindings;
     saved_settings.selected_compression_config_id = result->selected_compression_config_id;

@@ -143,7 +143,10 @@ HelpTopic HelpTopicForControlId(int control_id) {
     case kTruncatePanel:
     case kTruncateKeepLabel:
     case kTruncateKeepEdit:
-        return {L"Keep recent messages", L"For Truncate Top, this is the number of newest model-visible messages kept exactly. Older messages are not summarized or preserved.", L""};
+        return {L"Keep recent messages",
+            L"For Truncate Top, this is the number of newest model-visible messages kept exactly. Set it to 0 with Frequency set to 1 for stateless requests: an active prompt can complete its tool loop, but no prior prompt or tool result is sent with the next prompt.\r\n\r\n"
+            L"For Rolling Summary, 0 removes the verbatim tail only; the rolling summary still carries prior information.",
+            L""};
     case kL0Panel:
     case kL0Enabled:
         return {L"L0 artifact memory",
@@ -1492,7 +1495,8 @@ ContextCompressionConfig CompressionManagerWindow::BuildConfigFromEditor() const
     if (config.pre_pass_config_id == config.id) {
         config.pre_pass_config_id.clear();
     }
-    config.truncate_top_keep_messages = ParseInt(GetWindowTextString(truncate_keep_edit_)).value_or(20);
+    config.truncate_top_keep_messages = std::max(
+        0, ParseInt(GetWindowTextString(truncate_keep_edit_)).value_or(20));
 
     config.layers.layer0.enabled = (Button_GetCheck(l0_enabled_) == BST_CHECKED);
     AssignModelFromCombo(l0_capture_model_combo_, config.layers.layer0.capture_model_provider_id, config.layers.layer0.capture_model_id);

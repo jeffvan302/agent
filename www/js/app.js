@@ -2590,6 +2590,19 @@ function stripUserSuffix(name) {
   return m ? m[1] : name;
 }
 
+function projectDescription(projectId) {
+  const project = state.projects.find(item => item.id === projectId);
+  return project && project.description ? project.description.trim() : '';
+}
+
+function setSelectedChatTitle(projectId, chatName) {
+  const name = stripUserSuffix(chatName);
+  const description = projectDescription(projectId);
+  const title = description ? `${name} - ${description}` : name;
+  chatTitle.textContent = title;
+  chatTitle.title = title;
+}
+
 
 
 const PLANNER_SECTIONS = [
@@ -3025,7 +3038,7 @@ async function selectChat(projectId, chatId, chatName) {
   }
   document.querySelectorAll('.chat-entry').forEach(el =>
     el.classList.toggle('active', el.dataset.chatId === chatId));
-  chatTitle.textContent = stripUserSuffix(chatName);
+  setSelectedChatTitle(projectId, chatName);
   const selectedStreamActive = !!activeControllerForChat(chatId);
   messageInput.disabled = selectedStreamActive;
   sendBtn.disabled      = selectedStreamActive;
@@ -3817,6 +3830,7 @@ async function deleteChat(projectId, chatId) {
     state.selectedChatModelProviderId = null;
     state.selectedChatModelId = null;
     chatTitle.textContent  = 'Select or create a chat';
+    chatTitle.removeAttribute('title');
     messageInput.disabled  = true;
     sendBtn.disabled       = true;
     state.messages         = [];
@@ -3841,7 +3855,7 @@ async function renameChat(projectId, chatId, newName) {
   }
   // If currently selected, update title bar
   if (state.selectedChatId === chatId) {
-    chatTitle.textContent = stripUserSuffix(updated.name);
+    setSelectedChatTitle(projectId, updated.name);
   }
   return true;
 }

@@ -12,6 +12,9 @@ std::string WideToUtf8(const std::wstring& value);
 std::string Trim(const std::string& value);
 std::wstring TrimWide(const std::wstring& value);
 
+inline constexpr size_t kMaxProjectDescriptionLength = 300;
+std::string NormalizeProjectDescription(const std::string& value);
+
 inline std::string NormalizeNewlinesToLf(const std::string& value) {
     std::string out;
     out.reserve(value.size());

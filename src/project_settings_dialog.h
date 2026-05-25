@@ -15,6 +15,7 @@ struct ProjectSettingsOptions {
     std::wstring title = L"Project Settings";
     std::wstring accept_label = L"Save";
     std::wstring project_name;
+    std::string project_description;
     std::vector<McpServerConfig> servers;
     std::vector<McpServerVariable> global_variables;
     std::vector<ProjectMcpServerBinding> initial_mcp_bindings;
@@ -65,6 +66,7 @@ struct ProjectSettingsOptions {
 
 struct ProjectSettingsResult {
     std::string project_name;
+    std::string project_description;
     std::string project_instructions;
     std::vector<ProjectMcpServerBinding> mcp_bindings;
     std::vector<ContextCompressionConfig> compression_configs;

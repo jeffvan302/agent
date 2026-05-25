@@ -704,7 +704,8 @@ std::vector<ProjectMcpVariableValue> BuildResolvedProjectVariables(
     McpManager* mcp_manager,
     AppStorage* storage,
     const std::string& project_id,
-    const std::vector<ProjectMcpVariableValue>& runtime_variables) {
+    const std::vector<ProjectMcpVariableValue>& runtime_variables,
+    bool ensure_folder_variables = true) {
     std::vector<ProjectMcpVariableValue> values;
 
     if (mcp_manager && !project_id.empty()) {
@@ -732,7 +733,7 @@ std::vector<ProjectMcpVariableValue> BuildResolvedProjectVariables(
     }
 
     values = variable_resolver::ResolveValues(values);
-    if (mcp_manager) {
+    if (mcp_manager && ensure_folder_variables) {
         variable_resolver::EnsureFolderVariables(
             values,
             BuildProjectFolderVariableDefinitions(mcp_manager, project_id));
@@ -2939,7 +2940,12 @@ void WebServer::HandleGetProjects(const void* req_ptr, void* res_ptr) {
     json arr = json::array();
     for (const auto& proj : all_projects) {
         if (UserCanAccessProject(*session, proj.info.id)) {
-            arr.push_back({{"id", proj.info.id}, {"name", proj.info.name}});
+            const auto settings = storage_->LoadProjectSettings(proj.info.id);
+            arr.push_back({
+                {"id", proj.info.id},
+                {"name", proj.info.name},
+                {"description", settings.project_description},
+            });
         }
     }
     SendJson(res_ptr, 200, arr.dump());
@@ -3003,8 +3009,9 @@ void WebServer::HandleGetNewChatOptions(const void* req_ptr, void* res_ptr) {
     const auto runtime_variables = BuildWebRuntimeVariables(
         storage_, user_store_, project_id, "", session->username, project_settings,
         preview_chat_name);
+    // Updating a name preview must not materialize $CHATNAME$-based folders.
     const auto resolved_values = BuildResolvedProjectVariables(
-        mcp_manager_, storage_, project_id, runtime_variables);
+        mcp_manager_, storage_, project_id, runtime_variables, false);
     const auto default_project_folder =
         variable_resolver::FindValue(resolved_values, "ProjectFolder").value_or("");
 
