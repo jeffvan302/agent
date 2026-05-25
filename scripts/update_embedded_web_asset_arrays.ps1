@@ -37,6 +37,30 @@ function Format-EmbeddedByteArray {
 }
 
 $content = [System.IO.File]::ReadAllText($cppPath, $utf8NoBom)
+$rawAssets = @(
+    @{ Name = 'kIndexHtml'; Source = 'www\index.html' },
+    @{ Name = 'kLoginHtml'; Source = 'www\login.html' },
+    @{ Name = 'kChangePasswordHtml'; Source = 'www\change-password.html' }
+)
+
+foreach ($asset in $rawAssets) {
+    $sourcePath = Join-Path $RepositoryRoot $asset.Source
+    $sourceContent = [System.IO.File]::ReadAllText($sourcePath, $utf8NoBom)
+    $replacement = "const char $($asset.Name)[] =`nR`"ASSET(" +
+        $sourceContent +
+        ")ASSET`";"
+    $pattern = '(?s)const char ' + [Regex]::Escape($asset.Name) +
+        '\[\] =\r?\nR"ASSET\(.*?\)ASSET";'
+    if (-not [Regex]::IsMatch($content, $pattern)) {
+        throw "Could not locate embedded raw asset $($asset.Name) in $cppPath."
+    }
+    $content = [Regex]::Replace(
+        $content,
+        $pattern,
+        [System.Text.RegularExpressions.MatchEvaluator]{ param($match) $replacement },
+        1)
+}
+
 $assets = @(
     @{ Name = 'kBaseCss'; Source = 'www\css\base.css'; Next = 'kAppJs' },
     @{ Name = 'kAppJs'; Source = 'www\js\app.js'; Next = 'kAutomationJs' },

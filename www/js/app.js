@@ -166,6 +166,9 @@ const newChatCreateBtn = $('new-chat-create-btn');
 const SIDEBAR_WIDTH_STORAGE_KEY = 'agent.sidebar.width';
 const CHAT_TAIL_EPSILON_PX = 48;
 const THINKING_COLLAPSE_DELAY_MS = 1600;
+const LIVE_STREAM_RENDER_INTERVAL_MS = 100;
+const LIVE_THINKING_DISPLAY_CHARS = 5000;
+const COMPLETED_THINKING_MARKER = '[Thinking completed. Enable debugging to inspect details.]';
 
 // Keep following new output only while the user is already at the chat tail.
 function isMessagesNearBottom() {
@@ -461,7 +464,11 @@ function renderMarkdown(text, options = {}) {
 
   for (const block of extracted.blocks) {
     result = replacePlaceholder(result, block.placeholder,
-      renderThinkingBlock(block.content, block.open, !!options.streaming));
+      renderThinkingBlock(
+        block.content,
+        block.open,
+        !!options.streaming,
+        !!options.revealCompletedThinking));
   }
   return result;
 }
@@ -489,10 +496,73 @@ function extractThinkingBlocks(text, options = {}) {
   return { markdown, blocks };
 }
 
-function renderThinkingBlock(content, open, streaming) {
+function visibleThinkingContent(content, streaming) {
+  const body = content && content.trim() ? content.trim() : 'Thinking...';
+  if (!streaming || body.length <= LIVE_THINKING_DISPLAY_CHARS) return body;
+  return '[Earlier thinking hidden while the response is running.]\n\n' +
+    body.slice(-LIVE_THINKING_DISPLAY_CHARS);
+}
+
+function visibleLiveTextContent(content) {
+  const text = String(content || '');
+  if (text.length <= LIVE_THINKING_DISPLAY_CHARS) return text;
+
+  const lastOpen = text.lastIndexOf('<think>');
+  const lastClose = text.lastIndexOf('</think>');
+  if (lastOpen >= 0 && (lastClose < 0 || lastOpen > lastClose)) {
+    return '<think>[Earlier thinking hidden while the response is running.]\n\n' +
+      text.slice(-LIVE_THINKING_DISPLAY_CHARS);
+  }
+  if (lastOpen >= 0 && lastClose > lastOpen) {
+    const thinking = text.slice(lastOpen + '<think>'.length, lastClose);
+    const afterThinking = text.slice(lastClose + '</think>'.length);
+    const visibleThinking = thinking.length > LIVE_THINKING_DISPLAY_CHARS
+      ? '[Earlier thinking hidden while the response is running.]\n\n' +
+          thinking.slice(-LIVE_THINKING_DISPLAY_CHARS)
+      : thinking;
+    const visibleAfter = afterThinking.length > LIVE_THINKING_DISPLAY_CHARS
+      ? '[Earlier streamed output hidden while the response is running.]\n\n' +
+          afterThinking.slice(-LIVE_THINKING_DISPLAY_CHARS)
+      : afterThinking;
+    return '<think>' + visibleThinking + '</think>' + visibleAfter;
+  }
+  return '[Earlier streamed output hidden while the response is running.]\n\n' +
+    text.slice(-LIVE_THINKING_DISPLAY_CHARS);
+}
+
+function collapseCompletedThinkingText(content) {
+  return String(content || '').replace(
+    /<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi,
+    '<think>' + COMPLETED_THINKING_MARKER + '</think>');
+}
+
+function compactNormalStreamingText(content) {
+  if (isWebDebuggingEnabled()) return String(content || '');
+  const text = collapseCompletedThinkingText(content);
+  const lower = text.toLowerCase();
+  const lastOpenThink = lower.lastIndexOf('<think>');
+  const lastOpenThinking = lower.lastIndexOf('<thinking>');
+  const open = Math.max(lastOpenThink, lastOpenThinking);
+  const close = Math.max(lower.lastIndexOf('</think>'), lower.lastIndexOf('</thinking>'));
+  if (open < 0 || open < close) return text;
+
+  const contentStart = text.indexOf('>', open) + 1;
+  const thinking = text.slice(contentStart);
+  if (thinking.length <= LIVE_THINKING_DISPLAY_CHARS) return text;
+  return text.slice(0, contentStart) +
+    '[Earlier thinking hidden while the response is running.]\n\n' +
+    thinking.slice(-LIVE_THINKING_DISPLAY_CHARS);
+}
+
+function renderThinkingBlock(content, open, streaming, revealCompletedThinking) {
+  if (!streaming && !revealCompletedThinking) {
+    return '<div class="thinking-block thinking-complete">' +
+      '<span class="thinking-complete-label">Thinking completed</span>' +
+      '</div>';
+  }
   const classes = 'thinking-block' + (streaming ? ' thinking-live' : '');
   const state = streaming ? 'Thinking now' : 'Thinking';
-  const body = content && content.trim() ? content.trim() : 'Thinking...';
+  const body = visibleThinkingContent(content, streaming);
   return '<details class="' + classes + '"' + (open ? ' open' : '') + '>' +
     '<summary>' + state + '</summary>' +
     '<div class="thinking-content">' + escapeHtml(body) + '</div>' +
@@ -1627,12 +1697,23 @@ function normalizeToolUsageRecord(content) {
     toolName: record.tool_name || record.toolName || 'Tool',
     arguments: prettyToolUsageText(record.arguments || record.tool_arguments || ''),
     result: prettyToolUsageText(record.result || record.tool_result || ''),
+    summary: String(record.summary || record.tool_summary || '').trim(),
     startedAt: record.started_at || record.startedAt || record.created_at || record.createdAt || '',
     updatedAt: record.updated_at || record.updatedAt || record.finished_at || record.finishedAt || '',
     status: record.status === 'error' ? 'error'
       : record.status === 'live' ? 'live'
       : 'done',
+    detailsHidden: !!(record.details_hidden || record.detailsHidden),
   };
+}
+
+function compactCompletedToolUsageRecord(record) {
+  if (isWebDebuggingEnabled() || record.status === 'live') return record;
+  return Object.assign({}, record, {
+    arguments: '',
+    result: '',
+    detailsHidden: true,
+  });
 }
 
 function formatToolUsageSummary(record) {
@@ -1642,13 +1723,14 @@ function formatToolUsageSummary(record) {
       : (record.updatedAt || record.startedAt)
   );
   const suffix = timestamp ? ' [' + timestamp + ']' : '';
+  const activity = record.summary ? ' - ' + record.summary : '';
   if (record.status === 'live') {
-    return 'Using ' + record.toolName + '...' + suffix;
+    return 'Using ' + record.toolName + suffix + activity + '...';
   }
   if (record.status === 'error') {
-    return 'Tool error: ' + record.toolName + suffix;
+    return 'Tool error: ' + record.toolName + suffix + activity;
   }
-  return 'Used ' + record.toolName + suffix;
+  return 'Used ' + record.toolName + suffix + activity;
 }
 
 function formatToolLiveDescription(record) {
@@ -1659,75 +1741,79 @@ function formatToolLiveDescription(record) {
   return 'Tool is running. Waiting for arguments or result...';
 }
 
-function createToolUsageBlock(content) {
+function createToolUsageBlock(content, options = {}) {
   let record = normalizeToolUsageRecord(content);
 
-  const details = document.createElement('details');
-  details.className = 'tool-usage-block';
-
-  const summary = document.createElement('summary');
-  const icon = document.createElement('span');
-  icon.className = 'tool-usage-icon';
-  const text = document.createElement('span');
-  text.className = 'tool-usage-summary-text';
-  summary.appendChild(icon);
-  summary.appendChild(text);
-
-  const liveDescription = document.createElement('div');
-  liveDescription.className = 'tool-usage-live-description';
-
-  const body = document.createElement('div');
-  body.className = 'tool-usage-content';
-
-  const argsWrap = document.createElement('div');
-  argsWrap.className = 'tool-usage-section';
-  const argsLabel = document.createElement('div');
-  argsLabel.className = 'tool-usage-section-label';
-  argsLabel.textContent = 'Arguments';
-  const argsPre = document.createElement('pre');
-  argsPre.className = 'tool-usage-pre';
-  argsWrap.appendChild(argsLabel);
-  argsWrap.appendChild(argsPre);
-
-  const resultWrap = document.createElement('div');
-  resultWrap.className = 'tool-usage-section';
-  const resultLabel = document.createElement('div');
-  resultLabel.className = 'tool-usage-section-label';
-  resultLabel.textContent = 'Result';
-  const resultPre = document.createElement('pre');
-  resultPre.className = 'tool-usage-pre';
-  resultWrap.appendChild(resultLabel);
-  resultWrap.appendChild(resultPre);
-
-  body.appendChild(argsWrap);
-  body.appendChild(resultWrap);
-  details.appendChild(summary);
-  details.appendChild(liveDescription);
-  details.appendChild(body);
+  const host = document.createElement('div');
 
   function render(nextRecord) {
     record = normalizeToolUsageRecord(nextRecord);
-    details.className = 'tool-usage-block status-' + record.status;
+    host.innerHTML = '';
+    const revealDetails = record.status === 'live' || !!options.revealCompletedDetails;
+    const panel = document.createElement(revealDetails ? 'details' : 'div');
+    panel.className = 'tool-usage-block status-' + record.status +
+      (revealDetails ? '' : ' tool-usage-complete');
+    const summary = document.createElement(revealDetails ? 'summary' : 'div');
+    summary.className = revealDetails ? '' : 'tool-usage-static-summary';
+    const icon = document.createElement('span');
     icon.className = 'tool-usage-icon status-' + record.status;
     icon.textContent = record.status === 'done' ? '\u2713'
       : record.status === 'error' ? '!' : '';
+    const text = document.createElement('span');
+    text.className = 'tool-usage-summary-text';
     text.textContent = formatToolUsageSummary(record);
+    summary.appendChild(icon);
+    summary.appendChild(text);
+    panel.appendChild(summary);
+    if (!revealDetails) {
+      host.appendChild(panel);
+      return;
+    }
+
+    const liveDescription = document.createElement('div');
+    liveDescription.className = 'tool-usage-live-description';
     const liveText = formatToolLiveDescription(record);
     liveDescription.textContent = liveText;
     liveDescription.hidden = !liveText;
+    panel.appendChild(liveDescription);
+
+    const body = document.createElement('div');
+    body.className = 'tool-usage-content';
+    const argsWrap = document.createElement('div');
+    argsWrap.className = 'tool-usage-section';
+    const argsLabel = document.createElement('div');
+    argsLabel.className = 'tool-usage-section-label';
+    argsLabel.textContent = 'Arguments';
+    const argsPre = document.createElement('pre');
+    argsPre.className = 'tool-usage-pre';
     argsPre.textContent = record.arguments || 'No arguments provided.';
+    argsWrap.appendChild(argsLabel);
+    argsWrap.appendChild(argsPre);
+    const resultWrap = document.createElement('div');
+    resultWrap.className = 'tool-usage-section';
+    const resultLabel = document.createElement('div');
+    resultLabel.className = 'tool-usage-section-label';
+    resultLabel.textContent = 'Result';
+    const resultPre = document.createElement('pre');
+    resultPre.className = 'tool-usage-pre';
     resultPre.textContent = record.result || (record.status === 'live'
       ? 'Waiting for tool result...'
       : 'No tool result captured.');
     argsWrap.hidden = !record.arguments;
     resultWrap.hidden = !record.result && record.status === 'live';
-    details.open = record.status === 'live';
+    resultWrap.appendChild(resultLabel);
+    resultWrap.appendChild(resultPre);
+    body.appendChild(argsWrap);
+    body.appendChild(resultWrap);
+    panel.appendChild(body);
+    panel.open = record.status === 'live';
+    host.appendChild(panel);
   }
 
   render(record);
 
   return {
-    element: details,
+    element: host,
     update(nextRecord) {
       render(Object.assign({}, record, nextRecord || {}));
     },
@@ -1738,16 +1824,30 @@ function createToolUsageBlock(content) {
 }
 
 function renderAssistantTraceBubble(bubble, trace, options = {}) {
-  const normalized = normalizeAssistantTrace(trace, options.fallbackContent || '');
+  const displayTrace = options.streaming && Array.isArray(trace)
+    ? trace.map(segment => {
+        if (!segment || segment.type !== 'text') return segment;
+        return Object.assign({}, segment, {
+          content: visibleLiveTextContent(segment.content || ''),
+        });
+      })
+    : trace;
+  const fallbackContent = options.streaming
+    ? visibleLiveTextContent(options.fallbackContent || '')
+    : (options.fallbackContent || '');
+  const normalized = normalizeAssistantTrace(displayTrace, fallbackContent);
   bubble.innerHTML = '';
   bubble.classList.toggle('assistant-trace-bubble', normalized.length > 0);
 
   let lastLiveText = null;
+  let liveThinkingToFollow = null;
   normalized.forEach(segment => {
     const wrap = document.createElement('div');
     wrap.className = 'assistant-bubble-segment assistant-bubble-' + segment.type;
     if (segment.type === 'tool_usage') {
-      const block = createToolUsageBlock(segment.record);
+      const block = createToolUsageBlock(segment.record, {
+        revealCompletedDetails: isWebDebuggingEnabled(),
+      });
       wrap.appendChild(block.element);
     } else if (segment.type === 'questionnaire') {
       wrap.appendChild(createQuestionnaireBlock(segment.record, options));
@@ -1755,12 +1855,16 @@ function renderAssistantTraceBubble(bubble, trace, options = {}) {
       wrap.innerHTML = renderMarkdown(segment.content || '', {
         streaming: !!(options.streaming && segment.live),
         thinkingOpen: !!options.thinkingOpen,
+        revealCompletedThinking: isWebDebuggingEnabled(),
       });
       postProcessMessageBubble(wrap, {
         renderDiagrams: !(options.streaming && segment.live),
       });
       wireThinkingBlocks(wrap, options);
       if (options.streaming && segment.live) {
+        liveThinkingToFollow = wrap.querySelector(
+          '.thinking-block.thinking-live .thinking-content'
+        );
         lastLiveText = wrap;
       }
     }
@@ -1775,6 +1879,16 @@ function renderAssistantTraceBubble(bubble, trace, options = {}) {
     } else {
       bubble.appendChild(cursor);
     }
+  }
+
+  if (liveThinkingToFollow) {
+    const followLatestThinking = () => {
+      if (liveThinkingToFollow.isConnected) {
+        liveThinkingToFollow.scrollTop = liveThinkingToFollow.scrollHeight;
+      }
+    };
+    followLatestThinking();
+    window.requestAnimationFrame(followLatestThinking);
   }
 
   return normalized;
@@ -1805,7 +1919,9 @@ function createToolUsageRow(content) {
   lbl.className = 'message-role-label';
   lbl.textContent = 'Tool';
 
-  const block = createToolUsageBlock(content);
+  const block = createToolUsageBlock(content, {
+    revealCompletedDetails: isWebDebuggingEnabled(),
+  });
   row.appendChild(lbl);
   row.appendChild(block.element);
 
@@ -2113,7 +2229,9 @@ function buildMessageRow(role, content, modeName, createdAt = '') {
   bubble.className = 'message-bubble' + (role === 'error' ? ' error' : '');
 
   if (role === 'assistant') {
-    bubble.innerHTML = renderMarkdown(content);
+    bubble.innerHTML = renderMarkdown(content, {
+      revealCompletedThinking: isWebDebuggingEnabled(),
+    });
     postProcessMessageBubble(bubble);
   } else {
     const p = document.createElement('p');
@@ -2146,6 +2264,8 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
   scrollMessagesToBottom(true);
 
   let trace = normalizeAssistantTrace(initialTrace);
+  let liveRenderTimer = null;
+  let lastLiveRenderAt = 0;
 
   function ensureAttached() {
     if (!row.isConnected) {
@@ -2159,7 +2279,26 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
       streaming,
       questionnaireChatId: state.selectedChatId,
     }, renderOptions));
+    if (streaming) {
+      lastLiveRenderAt = window.performance.now();
+    }
     scrollMessagesToBottomIfPinned();
+  }
+
+  function cancelScheduledLiveRender() {
+    if (liveRenderTimer === null) return;
+    window.clearTimeout(liveRenderTimer);
+    liveRenderTimer = null;
+  }
+
+  function scheduleLiveRender() {
+    if (liveRenderTimer !== null) return;
+    const elapsed = window.performance.now() - lastLiveRenderAt;
+    const delay = Math.max(0, LIVE_STREAM_RENDER_INTERVAL_MS - elapsed);
+    liveRenderTimer = window.setTimeout(() => {
+      liveRenderTimer = null;
+      render(true);
+    }, delay);
   }
 
   function appendTextDelta(delta) {
@@ -2167,10 +2306,15 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
     const last = trace[trace.length - 1];
     if (last && last.type === 'text' && last.live) {
       last.content += delta;
+      last.content = compactNormalStreamingText(last.content);
     } else {
-      trace.push({ type: 'text', content: delta, live: true });
+      trace.push({
+        type: 'text',
+        content: compactNormalStreamingText(delta),
+        live: true,
+      });
     }
-    render(true);
+    scheduleLiveRender();
   }
 
   function upsertTool(record) {
@@ -2188,8 +2332,11 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
       const last = trace[trace.length - 1];
       if (last && last.type === 'text') {
         last.live = false;
+        if (!isWebDebuggingEnabled()) {
+          last.content = collapseCompletedThinkingText(last.content);
+        }
       }
-      trace.push({ type: 'tool_usage', record: next });
+      trace.push({ type: 'tool_usage', record: compactCompletedToolUsageRecord(next) });
     } else {
       if (trace[index].type === 'questionnaire') {
         const previous = trace[index].record || {};
@@ -2213,18 +2360,20 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
           type: 'questionnaire',
           record: questionnaire,
         };
+        cancelScheduledLiveRender();
         render(true);
         return;
       }
       const previous = trace[index].record || {};
       trace[index] = {
         type: 'tool_usage',
-        record: Object.assign({}, previous, next, {
+        record: compactCompletedToolUsageRecord(Object.assign({}, previous, next, {
           startedAt: next.startedAt || previous.startedAt || now,
           updatedAt: next.updatedAt || previous.updatedAt || now,
-        }),
+        })),
       };
     }
+    cancelScheduledLiveRender();
     render(true);
   }
 
@@ -2243,6 +2392,9 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
       const last = trace[trace.length - 1];
       if (last && last.type === 'text') {
         last.live = false;
+        if (!isWebDebuggingEnabled()) {
+          last.content = collapseCompletedThinkingText(last.content);
+        }
       }
       trace.push({ type: 'questionnaire', record: next });
     } else {
@@ -2251,22 +2403,34 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
         record: Object.assign({}, trace[index].record || {}, next),
       };
     }
+    cancelScheduledLiveRender();
     render(true);
   }
 
   function finalize() {
+    cancelScheduledLiveRender();
     row.removeAttribute('id');
     bubble.removeAttribute('id');
     bubble.classList.remove('streaming');
     trace = trace.map(segment => {
       if (segment.type === 'text') {
-        return Object.assign({}, segment, { live: false });
+        return Object.assign({}, segment, {
+          content: isWebDebuggingEnabled()
+            ? segment.content
+            : collapseCompletedThinkingText(segment.content),
+          live: false,
+        });
       }
       const record = Object.assign({}, segment.record);
       if (record.status === 'live') {
         record.status = 'done';
       }
-      return { type: segment.type === 'questionnaire' ? 'questionnaire' : 'tool_usage', record };
+      return {
+        type: segment.type === 'questionnaire' ? 'questionnaire' : 'tool_usage',
+        record: segment.type === 'questionnaire'
+          ? record
+          : compactCompletedToolUsageRecord(record),
+      };
     });
     render(false, {
       thinkingOpen: true,
@@ -2292,6 +2456,7 @@ function createAssistantTurnRow(initialTrace = [], modeName = '', createdAt = ''
   }
 
   function remove() {
+    cancelScheduledLiveRender();
     row.remove();
   }
 
@@ -4051,6 +4216,7 @@ async function sendMessage() {
           tool_name: ev.tool_name || 'Tool',
           arguments: ev.tool_arguments || '',
           result: ev.tool_result || '',
+          summary: ev.tool_summary || '',
           started_at: ev.started_at || ev.updated_at || '',
           updated_at: ev.updated_at || ev.started_at || '',
           status: ev.tool_status || (ev.tool_event === 'start' ? 'live' : 'done'),
@@ -4862,6 +5028,9 @@ function renderStreamRunLiveResponse(run = selectedStreamRun()) {
 async function refreshStreamStatusForChat(chatId, options = {}) {
   if (!chatId) return null;
   const previous = state.streamRuns ? state.streamRuns[chatId] : null;
+  if (activeControllerForChat(chatId) && options.force !== true) {
+    return previous || null;
+  }
   const previousMessagesRevision = previous ? previous.messages_revision : 0;
   const previousPlannerRevision = previous ? (previous.planner_revision || 0) : 0;
   const resp = await api('GET', `/api/chats/${chatId}/stream`);
@@ -4897,10 +5066,12 @@ function activeStreamRunChatIds() {
   const ids = new Set();
   if (state.streamRuns) {
     for (const [chatId, run] of Object.entries(state.streamRuns)) {
-      if (streamRunIsActive(run)) ids.add(chatId);
+      if (streamRunIsActive(run) && !activeControllerForChat(chatId)) ids.add(chatId);
     }
   }
-  if (state.selectedChatId) ids.add(state.selectedChatId);
+  if (state.selectedChatId && !activeControllerForChat(state.selectedChatId)) {
+    ids.add(state.selectedChatId);
+  }
   return Array.from(ids);
 }
 

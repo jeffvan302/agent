@@ -315,6 +315,7 @@ private:
         std::string tool_name;
         std::string arguments_json;
         std::string result_json;
+        std::string summary;
         std::string status;
         std::string started_at;
         std::string updated_at;

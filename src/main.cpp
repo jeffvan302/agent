@@ -30,6 +30,7 @@
 #include "artifact_memory_tool_bridge.h"
 #include "built_in_tools.h"
 #include "storage.h"
+#include "resource.h"
 #include "util.h"
 #include "variable_resolver.h"
 
@@ -66,8 +67,24 @@ constexpr UINT kWebContentChangedMessage = WM_APP + 5;
 constexpr UINT kStartupInitializeMessage = WM_APP + 6;
 constexpr UINT kStartupServicesFinishedMessage = WM_APP + 7;
 constexpr UINT kSetupSystemFinishedMessage = WM_APP + 8;
-constexpr int kDefaultConfigZipResourceId = 101;
+constexpr int kDefaultConfigZipResourceId = IDR_DEFAULT_CONFIG_ZIP;
 constexpr std::uintmax_t kDesktopTranscriptLoadLimitBytes = 8ull * 1024ull * 1024ull;
+
+HICON LoadApplicationIcon(HINSTANCE instance, bool use_small_icon) {
+    const int metric = use_small_icon ? SM_CXSMICON : SM_CXICON;
+    return reinterpret_cast<HICON>(LoadImageW(
+        instance,
+        MAKEINTRESOURCEW(IDI_APP_ICON),
+        IMAGE_ICON,
+        GetSystemMetrics(metric),
+        GetSystemMetrics(use_small_icon ? SM_CYSMICON : SM_CYICON),
+        LR_SHARED));
+}
+
+void ApplyApplicationIcons(WNDCLASSEXW& wc, HINSTANCE instance) {
+    wc.hIcon = LoadApplicationIcon(instance, false);
+    wc.hIconSm = LoadApplicationIcon(instance, true);
+}
 
 enum ControlId : int {
     kTree = 3001,
@@ -1222,6 +1239,7 @@ void ShowScrollableTextWindow(HWND owner, const std::wstring& title, const std::
         wc.lpfnWndProc = &ScrollableTextWindowProc;
         wc.lpszClassName = kScrollableTextWindowClassName;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        ApplyApplicationIcons(wc, instance);
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
         wc.style = CS_HREDRAW | CS_VREDRAW;
         RegisterClassExW(&wc);
@@ -3258,6 +3276,7 @@ void ShowContextMessagesWindow(HWND owner, AppStorage* storage, const std::strin
         wc.lpfnWndProc = &ContextMessagesWindowProc;
         wc.lpszClassName = kContextMessagesWindowClassName;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        ApplyApplicationIcons(wc, instance);
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
         wc.style = CS_HREDRAW | CS_VREDRAW;
         RegisterClassExW(&wc);
@@ -3448,6 +3467,7 @@ void MainWindow::RegisterWindowClass(HINSTANCE instance) {
     wc.lpfnWndProc = &MainWindow::WindowProc;
     wc.lpszClassName = kMainWindowClassName;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    ApplyApplicationIcons(wc, instance);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     wc.style = CS_HREDRAW | CS_VREDRAW;
     RegisterClassExW(&wc);

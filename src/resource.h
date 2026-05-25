@@ -1,0 +1,5 @@
+#pragma once
+
+#define IDR_DEFAULT_CONFIG_ZIP 101
+#define IDI_APP_ICON 102
+#define IDR_APP_FAVICON_PNG 103

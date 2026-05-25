@@ -523,12 +523,17 @@ body.sidebar-resizing {
   font-family: var(--font-mono);
   font-size: var(--font-size-small);
   line-height: 1.5;
+  max-height: min(50vh, 480px);
+  overflow-y: auto;
 }
 
 .thinking-block summary::before { content: ">"; font-size: 10px; }
 .thinking-block[open] summary::before { content: "v"; }
 .thinking-block.thinking-live {
   box-shadow: inset 0 0 0 1px var(--color-accent-thinking);
+}
+.thinking-block.thinking-live .thinking-content {
+  max-height: min(40vh, 360px);
 }
 .thinking-block.thinking-live summary::after {
   content: "";
@@ -537,6 +542,14 @@ body.sidebar-resizing {
   border-radius: 50%;
   background: var(--color-accent-thinking);
   animation: blink 0.9s ease-in-out infinite;
+}
+.thinking-block.thinking-complete {
+  padding: 8px 12px;
+  color: var(--color-text-thinking);
+  font-weight: 600;
+}
+.thinking-complete-label {
+  font-size: var(--font-size-small);
 }
 
 /* Diagrams and charts */
@@ -788,6 +801,15 @@ body.sidebar-resizing {
   font-size: 12px;
   font-weight: 600;
 }
+.tool-usage-static-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
 .tool-usage-block summary::-webkit-details-marker {
   display: none;
 }
@@ -835,6 +857,10 @@ body.sidebar-resizing {
 }
 .tool-usage-block.status-error .tool-usage-summary-text {
   color: var(--color-accent-danger);
+}
+.tool-usage-summary-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .tool-usage-live-description {
   padding: 0 12px 10px 38px;

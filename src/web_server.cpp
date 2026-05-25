@@ -33,6 +33,7 @@
 #include "mcp_manager.h"
 #include "openai_client.h"
 #include "rag_tool_bridge.h"
+#include "resource.h"
 #include "util.h"
 #include "variable_resolver.h"
 #include <nlohmann/json.hpp>
@@ -1395,6 +1396,182 @@ std::string BuildWebFormattingContext(const std::string& server_address,
         context += "\n- Current chat_id: " + chat_id;
     }
     return context;
+}
+
+constexpr size_t kLiveDisplayPreviewBytes = 8 * 1024;
+constexpr size_t kLiveToolDisplayPreviewBytes = 5 * 1024;
+constexpr const char* kCompletedThinkingWebMarker =
+    "[Thinking completed. Enable debugging to inspect details.]";
+
+std::string LiveDisplayPreviewForWeb(const std::string& content, bool active) {
+    if (!active || content.size() <= kLiveDisplayPreviewBytes) {
+        return content;
+    }
+
+    size_t start = content.size() - kLiveDisplayPreviewBytes;
+    while (start < content.size() &&
+           (static_cast<unsigned char>(content[start]) & 0xC0) == 0x80) {
+        ++start;
+    }
+
+    const auto last_open = content.rfind("<think>");
+    const auto last_close = content.rfind("</think>");
+    const bool thinking_open =
+        last_open != std::string::npos &&
+        (last_close == std::string::npos || last_open > last_close);
+    const std::string prefix = thinking_open
+        ? "<think>[Earlier thinking hidden while the response is running.]\n\n"
+        : "[Earlier streamed output hidden while the response is running.]\n\n";
+    return prefix + content.substr(start);
+}
+
+void AppendLiveDisplayText(std::string& content, const std::string& delta) {
+    content += delta;
+    content = LiveDisplayPreviewForWeb(content, true);
+}
+
+std::string HideCompletedThinkingForWeb(const std::string& content) {
+    const std::string lowered = LowerAscii(content);
+    const std::string marker =
+        std::string("<think>") + kCompletedThinkingWebMarker + "</think>";
+    std::string visible;
+    size_t cursor = 0;
+
+    for (;;) {
+        const size_t think_open = lowered.find("<think>", cursor);
+        const size_t thinking_open = lowered.find("<thinking>", cursor);
+        size_t open = std::min(think_open, thinking_open);
+        if (think_open == std::string::npos) open = thinking_open;
+        if (thinking_open == std::string::npos) open = think_open;
+        if (open == std::string::npos) {
+            visible += content.substr(cursor);
+            return visible;
+        }
+
+        const bool long_tag = open == thinking_open;
+        const std::string close_tag = long_tag ? "</thinking>" : "</think>";
+        const size_t close = lowered.find(
+            close_tag, open + (long_tag ? std::string("<thinking>").size()
+                                       : std::string("<think>").size()));
+        visible += content.substr(cursor, open - cursor);
+        visible += marker;
+        if (close == std::string::npos) {
+            return visible;
+        }
+        cursor = close + close_tag.size();
+    }
+}
+
+std::string LiveToolDetailPreviewForWeb(const std::string& content,
+                                        const std::string& status) {
+    if (status != "live" || content.size() <= kLiveToolDisplayPreviewBytes) {
+        return status == "live" ? content : "";
+    }
+
+    size_t end = kLiveToolDisplayPreviewBytes;
+    while (end > 0 &&
+           (static_cast<unsigned char>(content[end]) & 0xC0) == 0x80) {
+        --end;
+    }
+    return content.substr(0, end) +
+        "\n[Active tool detail clipped in the live view.]";
+}
+
+std::string CompactToolSummaryValue(std::string value, size_t max_chars = 76) {
+    value = Trim(value);
+    std::string compact;
+    compact.reserve(std::min(value.size(), max_chars));
+    bool pending_space = false;
+    for (unsigned char ch : value) {
+        if (std::isspace(ch)) {
+            pending_space = !compact.empty();
+            continue;
+        }
+        if (pending_space) {
+            compact.push_back(' ');
+            pending_space = false;
+        }
+        compact.push_back(static_cast<char>(ch));
+        if (compact.size() > max_chars) {
+            compact.resize(max_chars > 3 ? max_chars - 3 : max_chars);
+            if (max_chars > 3) compact += "...";
+            break;
+        }
+    }
+    return compact;
+}
+
+json ParseToolPayloadForSummary(const std::string& value) {
+    if (Trim(value).empty()) return json::object();
+    try {
+        const auto parsed = json::parse(value);
+        return parsed.is_object() ? parsed : json::object();
+    } catch (...) {
+        return json::object();
+    }
+}
+
+std::string ToolSummaryTextField(const json& primary,
+                                 const json& fallback,
+                                 const std::string& key) {
+    for (const auto* source : {&primary, &fallback}) {
+        if (!source->contains(key)) continue;
+        const auto& value = (*source)[key];
+        if (value.is_string()) return CompactToolSummaryValue(value.get<std::string>());
+        if (value.is_number_integer()) return std::to_string(value.get<long long>());
+        if (value.is_number_unsigned()) return std::to_string(value.get<unsigned long long>());
+    }
+    return {};
+}
+
+std::string ToolActivitySummaryForWeb(const std::string& tool_name,
+                                      const std::string& arguments_json,
+                                      const std::string& result_json) {
+    const json args = ParseToolPayloadForSummary(arguments_json);
+    const json result = ParseToolPayloadForSummary(result_json);
+
+    if (tool_name == built_in_tools::kFilesystemToolName) {
+        const std::string action = ToolSummaryTextField(result, args, "action");
+        const std::string path = ToolSummaryTextField(result, args, "path");
+        std::string verb = action;
+        if (action == "read") verb = "read";
+        else if (action == "write") verb = "wrote";
+        else if (action == "edit") verb = "edited";
+        else if (action == "list_directory") verb = "listed";
+        else if (action == "create_directory") verb = "created folder";
+        return CompactToolSummaryValue(
+            verb + (path.empty() ? "" : " " + path), 96);
+    }
+    if (tool_name == built_in_tools::kPlannerToolName) {
+        const std::string action = ToolSummaryTextField(result, args, "action");
+        const std::string section = ToolSummaryTextField(result, args, "section");
+        return CompactToolSummaryValue(
+            action + (section.empty() ? "" : " " + section), 72);
+    }
+    if (tool_name == built_in_tools::kCompletionDriverToolName) {
+        if (result.contains("completed") && result["completed"].is_boolean()) {
+            return result["completed"].get<bool>() ? "completed" : "continuing";
+        }
+        if (args.contains("completed") && args["completed"].is_boolean()) {
+            return args["completed"].get<bool>() ? "completed" : "continuing";
+        }
+        return ToolSummaryTextField(result, args, "status");
+    }
+    if (tool_name == built_in_tools::kSleepToolName) {
+        std::string seconds = ToolSummaryTextField(result, args, "requested_seconds");
+        if (seconds.empty()) seconds = ToolSummaryTextField(result, args, "seconds");
+        return seconds.empty() ? "" : "waited " + seconds + "s";
+    }
+    if (tool_name == artifact_memory_tools::kGetArtifactToolName ||
+        tool_name == artifact_memory_tools::kGetLatestToolName ||
+        tool_name == artifact_memory_tools::kGetVersionToolName ||
+        tool_name == artifact_memory_tools::kRestoreVersionToolName ||
+        tool_name == artifact_memory_tools::kCodeGetVersionToolName ||
+        tool_name == artifact_memory_tools::kCodeRestoreVersionToolName) {
+        const std::string key = ToolSummaryTextField(result, args, "artifact_key");
+        return key.empty() ? "" : "artifact " + key;
+    }
+    return {};
 }
 
 void AppendAssistantToolRequest(std::vector<MessageRecord>& messages,
@@ -3558,7 +3735,7 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
         if (text.empty()) return;
         pending_ui_trace.push_back({
             {"type", "text"},
-            {"content", text},
+            {"content", full_debug_payload ? text : HideCompletedThinkingForWeb(text)},
         });
     };
 
@@ -3618,12 +3795,16 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
                         {"updated_at", created_at},
                     };
                 } else {
+                    const std::string summary =
+                        ToolActivitySummaryForWeb(tool_name, arguments_json, "");
                     segment = {
                         {"type", "tool_usage"},
                         {"tool_call_id", tool_call_id},
                         {"tool_name", tool_name},
-                        {"arguments", arguments_json},
+                        {"arguments", full_debug_payload ? arguments_json : ""},
+                        {"summary", summary},
                         {"status", "done"},
+                        {"details_hidden", !full_debug_payload},
                         {"started_at", created_at},
                         {"updated_at", created_at},
                     };
@@ -3673,8 +3854,12 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
                 } catch (...) {}
                 return;
             }
-            current["result"] = message.content;
+            current["result"] = full_debug_payload ? message.content : "";
+            const std::string result_summary =
+                ToolActivitySummaryForWeb(message.name, "", message.content);
+            if (!result_summary.empty()) current["summary"] = result_summary;
             current["status"] = "done";
+            current["details_hidden"] = !full_debug_payload;
             if (current.value("started_at", "").empty()) {
                 current["started_at"] = message.created_at;
             }
@@ -3696,6 +3881,15 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
                         }
                     }
                 } catch (...) {}
+            }
+            if (message.name != built_in_tools::kQuestionnaireToolName &&
+                !full_debug_payload) {
+                segment["result"] = "";
+                segment["details_hidden"] = true;
+            }
+            if (message.name != built_in_tools::kQuestionnaireToolName) {
+                segment["summary"] =
+                    ToolActivitySummaryForWeb(message.name, "", message.content);
             }
             pending_ui_trace.push_back(segment);
             if (!message.tool_call_id.empty()) {
@@ -3743,7 +3937,10 @@ void WebServer::HandleGetMessages(const void* req_ptr, void* res_ptr) {
                 continue;
             }
             if (m.content.empty()) continue;
-            json item = {{"role", m.role}, {"content", m.content},
+            json item = {{"role", m.role},
+                       {"content", full_debug_payload
+                           ? m.content
+                           : HideCompletedThinkingForWeb(m.content)},
                        {"created_at", m.created_at}};
             if (!m.name.empty()) item["name"] = m.name;
             arr.push_back(item);
@@ -6093,6 +6290,9 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
 
     const auto project_id = FindAccessibleProjectForChat(*session, chat_id, res_ptr);
     if (!project_id) return;
+    const bool full_web_debug_requested =
+        web_debug_requested &&
+        storage_->LoadProjectSettings(*project_id).enable_web_debugging;
     const std::string selected_provider_id = body_j.value("selected_provider_id", "");
     const std::string selected_model_id = body_j.value("selected_model_id", "");
     if (!selected_provider_id.empty() && !selected_model_id.empty()) {
@@ -6163,7 +6363,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
 
     // ── Producer thread — runs the model, enqueues SSE events ─────────────────
     std::thread producer([this, pipe, proj_id, chat_id, content, sess_user,
-                          encode_sse, attachments, web_debug_requested,
+                          encode_sse, attachments, full_web_debug_requested,
                           cancel_token, stream_key, active_run]() {
         std::string err;
         auto update_run = [&](const std::function<void(ActiveChatRun&)>& fn) {
@@ -6235,15 +6435,15 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
             [&](const std::string& delta) -> bool {
                 update_run([&](ActiveChatRun& run) {
                     const std::string timestamp = NowIso();
-                    run.live_response += delta;
+                    AppendLiveDisplayText(run.live_response, delta);
                     if (!run.live_trace.empty() &&
                         run.live_trace.back().type == "text") {
-                        run.live_trace.back().content += delta;
+                        AppendLiveDisplayText(run.live_trace.back().content, delta);
                         run.live_trace.back().updated_at = timestamp;
                     } else {
                         AutomationLiveTraceSegment segment;
                         segment.type = "text";
-                        segment.content = delta;
+                        segment.content = LiveDisplayPreviewForWeb(delta, true);
                         segment.started_at = timestamp;
                         segment.updated_at = timestamp;
                         run.live_trace.push_back(std::move(segment));
@@ -6360,8 +6560,18 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 const std::string& tool_arguments,
                 const std::string& tool_result,
                 const std::string& tool_status) {
+                const std::string tool_summary =
+                    ToolActivitySummaryForWeb(
+                        tool_name, tool_arguments, tool_result);
                 update_run([&](ActiveChatRun& run) {
                     const std::string timestamp = NowIso();
+                    run.live_response = HideCompletedThinkingForWeb(run.live_response);
+                    for (auto& segment : run.live_trace) {
+                        if (segment.type == "text") {
+                            segment.content =
+                                HideCompletedThinkingForWeb(segment.content);
+                        }
+                    }
                     run.current_tool_name = tool_name;
                     run.current_tool_status = tool_status;
                     run.current_tool_at = timestamp;
@@ -6386,8 +6596,11 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                     }
                     trace_it->tool_call_id = tool_call_id;
                     trace_it->tool_name = tool_name;
-                    trace_it->arguments_json = tool_arguments;
-                    trace_it->result_json = tool_result;
+                    trace_it->arguments_json =
+                        LiveToolDetailPreviewForWeb(tool_arguments, tool_status);
+                    trace_it->result_json =
+                        LiveToolDetailPreviewForWeb(tool_result, tool_status);
+                    trace_it->summary = tool_summary;
                     trace_it->status = tool_status;
                     if (trace_it->started_at.empty()) trace_it->started_at = timestamp;
                     trace_it->updated_at = timestamp;
@@ -6428,8 +6641,9 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                         {"tool_event", tool_status == "live" ? "start" : "finish"},
                         {"tool_call_id", tool_call_id},
                         {"tool_name", tool_name},
-                        {"tool_arguments", tool_arguments},
-                        {"tool_result", tool_result},
+                        {"tool_arguments", full_web_debug_requested ? tool_arguments : ""},
+                        {"tool_result", full_web_debug_requested ? tool_result : ""},
+                        {"tool_summary", tool_summary},
                         {"tool_status", tool_status},
                         {"started_at", timestamp},
                         {"updated_at", timestamp},
@@ -6438,7 +6652,7 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 }
                 pipe->cv.notify_one();
             },
-            web_debug_requested,
+            full_web_debug_requested,
             [&](const std::string& system_prompt,
                 const std::string& user_prompt,
                 const std::vector<MessageRecord>& request_messages) {
@@ -6468,6 +6682,13 @@ void WebServer::HandleStreamMessage(const void* req_ptr, void* res_ptr) {
                 bool allow_multiple) {
                 update_run([&](ActiveChatRun& run) {
                     const std::string timestamp = NowIso();
+                    run.live_response = HideCompletedThinkingForWeb(run.live_response);
+                    for (auto& segment : run.live_trace) {
+                        if (segment.type == "text") {
+                            segment.content =
+                                HideCompletedThinkingForWeb(segment.content);
+                        }
+                    }
                     run.message = "Chat run is waiting for questionnaire input.";
                     auto live_it = std::find_if(
                         run.live_trace.begin(),
@@ -6738,8 +6959,9 @@ std::string WebServer::SerializeActiveChatRun(
         live_tool_trace.push_back({
             {"tool_call_id", item.tool_call_id},
             {"tool_name", item.tool_name},
-            {"arguments", item.arguments_json},
-            {"result", item.result_json},
+            {"arguments", LiveToolDetailPreviewForWeb(item.arguments_json, item.status)},
+            {"result", LiveToolDetailPreviewForWeb(item.result_json, item.status)},
+            {"summary", item.summary},
             {"status", item.status},
             {"started_at", item.started_at},
             {"updated_at", item.updated_at},
@@ -6751,7 +6973,9 @@ std::string WebServer::SerializeActiveChatRun(
         if (segment.type == "text") {
             live_trace.push_back({
                 {"type", "text"},
-                {"content", segment.content},
+                {"content", active
+                    ? LiveDisplayPreviewForWeb(segment.content, true)
+                    : HideCompletedThinkingForWeb(segment.content)},
                 {"live", active},
                 {"started_at", segment.started_at},
                 {"updated_at", segment.updated_at},
@@ -6761,8 +6985,11 @@ std::string WebServer::SerializeActiveChatRun(
                 {"type", "tool_usage"},
                 {"tool_call_id", segment.tool.tool_call_id},
                 {"tool_name", segment.tool.tool_name},
-                {"arguments", segment.tool.arguments_json},
-                {"result", segment.tool.result_json},
+                {"arguments", LiveToolDetailPreviewForWeb(
+                    segment.tool.arguments_json, segment.tool.status)},
+                {"result", LiveToolDetailPreviewForWeb(
+                    segment.tool.result_json, segment.tool.status)},
+                {"summary", segment.tool.summary},
                 {"status", segment.tool.status},
                 {"started_at", segment.tool.started_at},
                 {"updated_at", segment.tool.updated_at},
@@ -6794,7 +7021,9 @@ std::string WebServer::SerializeActiveChatRun(
         {"activity_message", run->activity_message},
         {"queue_state", run->queue_state},
         {"queue_provider", run->queue_provider},
-        {"live_response", run->live_response},
+        {"live_response", active
+            ? LiveDisplayPreviewForWeb(run->live_response, true)
+            : HideCompletedThinkingForWeb(run->live_response)},
         {"live_mode_name", run->live_mode_name},
         {"live_started_at", run->live_started_at},
         {"current_tool_name", run->current_tool_name},
@@ -6834,8 +7063,9 @@ std::string WebServer::SerializeAutomationJob(
         live_tool_trace.push_back({
             {"tool_call_id", item.tool_call_id},
             {"tool_name", item.tool_name},
-            {"arguments", item.arguments_json},
-            {"result", item.result_json},
+            {"arguments", LiveToolDetailPreviewForWeb(item.arguments_json, item.status)},
+            {"result", LiveToolDetailPreviewForWeb(item.result_json, item.status)},
+            {"summary", item.summary},
             {"status", item.status},
             {"started_at", item.started_at},
             {"updated_at", item.updated_at},
@@ -6846,7 +7076,9 @@ std::string WebServer::SerializeAutomationJob(
         if (segment.type == "text") {
             live_trace.push_back({
                 {"type", "text"},
-                {"content", segment.content},
+                {"content", active
+                    ? LiveDisplayPreviewForWeb(segment.content, true)
+                    : HideCompletedThinkingForWeb(segment.content)},
                 {"live", active},
                 {"started_at", segment.started_at},
                 {"updated_at", segment.updated_at},
@@ -6884,8 +7116,11 @@ std::string WebServer::SerializeAutomationJob(
                 {"type", "tool_usage"},
                 {"tool_call_id", segment.tool.tool_call_id},
                 {"tool_name", segment.tool.tool_name},
-                {"arguments", segment.tool.arguments_json},
-                {"result", segment.tool.result_json},
+                {"arguments", LiveToolDetailPreviewForWeb(
+                    segment.tool.arguments_json, segment.tool.status)},
+                {"result", LiveToolDetailPreviewForWeb(
+                    segment.tool.result_json, segment.tool.status)},
+                {"summary", segment.tool.summary},
                 {"status", segment.tool.status},
                 {"started_at", segment.tool.started_at},
                 {"updated_at", segment.tool.updated_at},
@@ -6904,7 +7139,9 @@ std::string WebServer::SerializeAutomationJob(
         {"activity_message", job->activity_message},
         {"queue_state", job->queue_state},
         {"queue_provider", job->queue_provider},
-        {"live_response", job->live_response},
+        {"live_response", active
+            ? LiveDisplayPreviewForWeb(job->live_response, true)
+            : HideCompletedThinkingForWeb(job->live_response)},
         {"live_mode_name", job->live_mode_name},
         {"live_started_at", job->live_started_at},
         {"current_tool_name", job->current_tool_name},
@@ -7301,15 +7538,15 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                         const auto now = std::chrono::steady_clock::now();
                         update([&](AutomationJob& j) {
                             const std::string timestamp = NowIso();
-                            j.live_response += delta;
+                            AppendLiveDisplayText(j.live_response, delta);
                             if (!j.live_trace.empty() &&
                                 j.live_trace.back().type == "text") {
-                                j.live_trace.back().content += delta;
+                                AppendLiveDisplayText(j.live_trace.back().content, delta);
                                 j.live_trace.back().updated_at = timestamp;
                             } else {
                                 AutomationLiveTraceSegment segment;
                                 segment.type = "text";
-                                segment.content = delta;
+                                segment.content = LiveDisplayPreviewForWeb(delta, true);
                                 segment.started_at = timestamp;
                                 segment.updated_at = timestamp;
                                 j.live_trace.push_back(std::move(segment));
@@ -7375,8 +7612,18 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                         const std::string& tool_arguments,
                         const std::string& tool_result,
                         const std::string& tool_status) {
+                        const std::string tool_summary =
+                            ToolActivitySummaryForWeb(
+                                tool_name, tool_arguments, tool_result);
                         update([&](AutomationJob& j) {
                             const std::string timestamp = NowIso();
+                            j.live_response = HideCompletedThinkingForWeb(j.live_response);
+                            for (auto& segment : j.live_trace) {
+                                if (segment.type == "text") {
+                                    segment.content =
+                                        HideCompletedThinkingForWeb(segment.content);
+                                }
+                            }
                             j.current_tool_name = tool_name;
                             j.current_tool_status = tool_status;
                             j.current_tool_at = timestamp;
@@ -7404,8 +7651,11 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                             }
                             trace_it->tool_call_id = tool_call_id;
                             trace_it->tool_name = tool_name;
-                            trace_it->arguments_json = tool_arguments;
-                            trace_it->result_json = tool_result;
+                            trace_it->arguments_json =
+                                LiveToolDetailPreviewForWeb(tool_arguments, tool_status);
+                            trace_it->result_json =
+                                LiveToolDetailPreviewForWeb(tool_result, tool_status);
+                            trace_it->summary = tool_summary;
                             trace_it->status = tool_status;
                             if (trace_it->started_at.empty()) {
                                 trace_it->started_at = timestamp;
@@ -7460,6 +7710,13 @@ void WebServer::RunAutomationJob(std::shared_ptr<AutomationJob> job) {
                         bool allow_multiple) {
                         update([&](AutomationJob& j) {
                             const std::string timestamp = NowIso();
+                            j.live_response = HideCompletedThinkingForWeb(j.live_response);
+                            for (auto& segment : j.live_trace) {
+                                if (segment.type == "text") {
+                                    segment.content =
+                                        HideCompletedThinkingForWeb(segment.content);
+                                }
+                            }
                             j.questionnaire_tool_call_id = tool_call_id;
                             j.questionnaire_question = question;
                             j.questionnaire_options = options;
@@ -8337,6 +8594,25 @@ void WebServer::RegisterRoutes() {
     });
 
     // ── Static files & HTML pages ─────────────────────────────────────────
+    srv.Get("/favicon.png", [this](const httplib::Request&, httplib::Response& res) {
+        if (ServeFile(ResolveWebRoot() / "favicon.png", &res)) return;
+
+        const HMODULE module = GetModuleHandleW(nullptr);
+        const HRSRC resource = FindResourceW(
+            module, MAKEINTRESOURCEW(IDR_APP_FAVICON_PNG), RT_RCDATA);
+        const DWORD size = resource ? SizeofResource(module, resource) : 0;
+        const HGLOBAL loaded = resource ? LoadResource(module, resource) : nullptr;
+        const void* data = loaded ? LockResource(loaded) : nullptr;
+        if (size == 0 || !data) {
+            res.status = 404;
+            res.set_content("Not found", "text/plain");
+            return;
+        }
+        res.status = 200;
+        res.set_content(static_cast<const char*>(data), size, "image/png");
+        res.set_header("Cache-Control", "max-age=3600");
+    });
+
     // login.html served without auth check
     srv.Get("/login", [this](const httplib::Request& req, httplib::Response& res) {
         PurgeExpiredSessions();

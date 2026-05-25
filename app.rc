@@ -1,5 +1,7 @@
 #define RT_MANIFEST 24
-#define IDR_DEFAULT_CONFIG_ZIP 101
+#include "src/resource.h"
 
 1 RT_MANIFEST "app.manifest"
 IDR_DEFAULT_CONFIG_ZIP RCDATA ".config.zip"
+IDI_APP_ICON ICON "app.ico"
+IDR_APP_FAVICON_PNG RCDATA "www\favicon.png"
