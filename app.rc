@@ -5,3 +5,4 @@
 IDR_DEFAULT_CONFIG_ZIP RCDATA ".config.zip"
 IDI_APP_ICON ICON "app.ico"
 IDR_APP_FAVICON_PNG RCDATA "www\favicon.png"
+IDR_AGENT_APP_DOCUMENTATION_RAG RCDATA "docs\\Guides\\Agent_App_Documentation-001.rag"

@@ -68,6 +68,8 @@ constexpr UINT kStartupInitializeMessage = WM_APP + 6;
 constexpr UINT kStartupServicesFinishedMessage = WM_APP + 7;
 constexpr UINT kSetupSystemFinishedMessage = WM_APP + 8;
 constexpr int kDefaultConfigZipResourceId = IDR_DEFAULT_CONFIG_ZIP;
+constexpr int kDocumentationRagResourceId = IDR_AGENT_APP_DOCUMENTATION_RAG;
+constexpr char kDocumentationRagName[] = "Agent App Documentation";
 constexpr std::uintmax_t kDesktopTranscriptLoadLimitBytes = 8ull * 1024ull * 1024ull;
 
 HICON LoadApplicationIcon(HINSTANCE instance, bool use_small_icon) {
@@ -89,6 +91,7 @@ void ApplyApplicationIcons(WNDCLASSEXW& wc, HINSTANCE instance) {
 enum ControlId : int {
     kTree = 3001,
     kNewProject = 3002,
+    kCloneProject = 3003,
     kRename = 3004,
     kDelete = 3005,
     kProviders = 3007,
@@ -524,7 +527,7 @@ bool WriteEmbeddedResourceToFile(int resource_id, const std::filesystem::path& o
     HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(resource_id), RT_RCDATA);
     if (!resource) {
         if (error) {
-            *error = L"The embedded setup configuration resource was not found.";
+            *error = L"The embedded setup resource was not found.";
         }
         return false;
     }
@@ -534,7 +537,7 @@ bool WriteEmbeddedResourceToFile(int resource_id, const std::filesystem::path& o
     const void* data = loaded ? LockResource(loaded) : nullptr;
     if (size == 0 || !data) {
         if (error) {
-            *error = L"The embedded setup configuration resource could not be loaded.";
+            *error = L"The embedded setup resource could not be loaded.";
         }
         return false;
     }
@@ -551,14 +554,14 @@ bool WriteEmbeddedResourceToFile(int resource_id, const std::filesystem::path& o
     std::ofstream out(output_path, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
         if (error) {
-            *error = L"Could not write temporary setup configuration zip.";
+            *error = L"Could not write a temporary setup resource file.";
         }
         return false;
     }
     out.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
     if (!out.good()) {
         if (error) {
-            *error = L"Failed while writing temporary setup configuration zip.";
+            *error = L"Failed while writing a temporary setup resource file.";
         }
         return false;
     }
@@ -3336,6 +3339,7 @@ private:
     void OnCommand(int control_id, int notification_code);
     void OnNotify(NMHDR* header);
     void CreateProject();
+    void CloneProject();
     void RenameSelection();
     void DeleteSelection();
     void OpenProviderManager();
@@ -3346,6 +3350,7 @@ private:
     void EditProjectSettings();
     void RunSetupSystem();
     bool ApplyEmbeddedConfigPackage(std::wstring* error);
+    bool EnsureEmbeddedDocumentationRag(std::wstring* error);
     void OnSetupSystemFinished();
     void RestartApplication();
     void EnsureWebServer();   // lazily creates web_server_ if not yet constructed
@@ -3385,6 +3390,7 @@ private:
     HWND hwnd_ = nullptr;
     HWND tree_ = nullptr;
     HWND new_project_button_ = nullptr;
+    HWND clone_project_button_ = nullptr;
     HWND rename_button_ = nullptr;
     HWND delete_button_ = nullptr;
     HWND providers_button_ = nullptr;
@@ -3558,6 +3564,7 @@ void MainWindow::OnCreate() {
     font_ = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 
     new_project_button_ = CreateWindowExW(0, L"BUTTON", L"New Project", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kNewProject), nullptr, nullptr);
+    clone_project_button_ = CreateWindowExW(0, L"BUTTON", L"Clone Project", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCloneProject), nullptr, nullptr);
     rename_button_ = CreateWindowExW(0, L"BUTTON", L"Rename", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRename), nullptr, nullptr);
     delete_button_ = CreateWindowExW(0, L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kDelete), nullptr, nullptr);
 
@@ -3581,7 +3588,7 @@ void MainWindow::OnCreate() {
     context_messages_button_ = CreateWindowExW(0, L"BUTTON", L"Check Context", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextMessages), nullptr, nullptr);
     status_label_ = CreateWindowExW(0, L"STATIC", L"Initializing...", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
 
-    for (HWND control : {new_project_button_, rename_button_, delete_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, agentic_modes_button_, web_config_button_, admin_config_button_, remote_ollama_setup_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
+    for (HWND control : {new_project_button_, clone_project_button_, rename_button_, delete_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, agentic_modes_button_, web_config_button_, admin_config_button_, remote_ollama_setup_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
 
@@ -3730,7 +3737,8 @@ void MainWindow::LayoutControls(int width, int height) {
     const int tool_trace_height = std::max(Scale(hwnd_, 180), height / 4);
 
     const int left_button_width = (left_width - gutter) / 2;
-    MoveWindow(new_project_button_, margin, margin, left_width, button_height, TRUE);
+    MoveWindow(new_project_button_, margin, margin, left_button_width, button_height, TRUE);
+    MoveWindow(clone_project_button_, margin + left_button_width + gutter, margin, left_button_width, button_height, TRUE);
     MoveWindow(rename_button_, margin, margin + button_height + gutter, left_button_width, button_height, TRUE);
     MoveWindow(delete_button_, margin + left_button_width + gutter, margin + button_height + gutter, left_button_width, button_height, TRUE);
     const int rag_button_y = height - margin - button_height;
@@ -3782,6 +3790,9 @@ void MainWindow::OnCommand(int control_id, int notification_code) {
     switch (control_id) {
     case kNewProject:
         CreateProject();
+        break;
+    case kCloneProject:
+        CloneProject();
         break;
     case kRename:
         RenameSelection();
@@ -3893,6 +3904,79 @@ void MainWindow::CreateProject() {
     const ProjectInfo project = storage_.CreateProject(result->project_name);
     mcp_manager_.SaveProjectBindings(project.id, result->bindings);
     ReloadProjects(project.id, "");
+}
+
+void MainWindow::CloneProject() {
+    if (active_project_id_.empty()) {
+        MessageBoxW(hwnd_, L"Select a project to clone first.", L"No Project Selected", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    ProjectRecord* source_project = FindProject(active_project_id_);
+    if (!source_project) {
+        MessageBoxW(hwnd_, L"The selected project could not be found.", L"Project Not Found", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    const auto name = ShowPromptDialog(
+        hwnd_,
+        PromptOptions{
+            L"Clone Project",
+            L"New project name",
+            Utf8ToWide(source_project->info.name + " Copy")});
+    if (!name || TrimWide(*name).empty()) {
+        return;
+    }
+
+    const std::string source_project_id = source_project->info.id;
+    const std::string source_project_name = source_project->info.name;
+    const std::string cloned_name = WideToUtf8(TrimWide(*name));
+    ProjectInfo cloned_project;
+
+    try {
+        ProjectSettings cloned_settings = storage_.LoadProjectSettings(source_project_id);
+        auto cloned_mcp_bindings = mcp_manager_.GetProjectBindings(source_project_id);
+        if (cloned_mcp_bindings.empty() && !cloned_settings.mcp_bindings.empty()) {
+            cloned_mcp_bindings = cloned_settings.mcp_bindings;
+        }
+        auto cloned_rag_bindings = rag_service_.LoadProjectBindings(source_project_id);
+        if (cloned_rag_bindings.empty() && !cloned_settings.rag_bindings.empty()) {
+            cloned_rag_bindings = cloned_settings.rag_bindings;
+        }
+
+        cloned_project = storage_.CreateProject(cloned_name);
+        cloned_settings.project_name = cloned_name;
+        cloned_settings.mcp_bindings = cloned_mcp_bindings;
+        cloned_settings.rag_bindings = cloned_rag_bindings;
+        storage_.SaveProjectSettings(cloned_project.id, cloned_settings);
+        storage_.SaveProjectCompressionSettings(
+            cloned_project.id,
+            ProjectCompressionSettings{
+                !cloned_settings.selected_compression_config_id.empty(),
+                cloned_settings.selected_compression_config_id});
+        mcp_manager_.SaveProjectBindings(cloned_project.id, cloned_mcp_bindings);
+        rag_service_.SaveProjectBindings(cloned_project.id, cloned_rag_bindings);
+    } catch (const std::exception& ex) {
+        if (!cloned_project.id.empty()) {
+            try {
+                mcp_manager_.SaveProjectBindings(cloned_project.id, {});
+                storage_.DeleteProject(cloned_project.id);
+            } catch (...) {
+                // Preserve the original error; a partial clone can be deleted manually.
+            }
+        }
+        MessageBoxW(
+            hwnd_,
+            Utf8ToWide(std::string("Could not clone the project: ") + ex.what()).c_str(),
+            L"Clone Failed",
+            MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    ReloadProjects(cloned_project.id, "");
+    UpdateStatus(
+        L"Cloned project \"" + Utf8ToWide(source_project_name) +
+        L"\" as \"" + Utf8ToWide(cloned_name) + L"\".");
 }
 
 void MainWindow::RenameSelection() {
@@ -4421,12 +4505,88 @@ bool MainWindow::ApplyEmbeddedConfigPackage(std::wstring* error) {
     return true;
 }
 
+bool MainWindow::EnsureEmbeddedDocumentationRag(std::wstring* error) {
+    std::optional<RagLibraryConfig> library;
+    for (const auto& existing : rag_service_.ListLibraries()) {
+        if (existing.name == kDocumentationRagName) {
+            library = existing;
+            break;
+        }
+    }
+
+    if (!library) {
+        wchar_t temp_dir[MAX_PATH]{};
+        const DWORD temp_len = GetTempPathW(static_cast<DWORD>(std::size(temp_dir)), temp_dir);
+        if (temp_len == 0 || temp_len >= std::size(temp_dir)) {
+            if (error) {
+                *error = L"Could not resolve the Windows temporary directory for the documentation RAG.";
+            }
+            return false;
+        }
+
+        wchar_t temp_file[MAX_PATH]{};
+        if (GetTempFileNameW(temp_dir, L"agr", 0, temp_file) == 0) {
+            if (error) {
+                *error = L"Could not create a temporary filename for the documentation RAG.";
+            }
+            return false;
+        }
+
+        std::filesystem::path temp_seed(temp_file);
+        std::filesystem::path temp_rag = temp_seed;
+        temp_rag.replace_extension(L".rag");
+        std::error_code cleanup_ec;
+        std::filesystem::remove(temp_seed, cleanup_ec);
+        std::filesystem::remove(temp_rag, cleanup_ec);
+
+        auto cleanup = [&]() {
+            std::error_code ec;
+            std::filesystem::remove(temp_seed, ec);
+            std::filesystem::remove(temp_rag, ec);
+        };
+
+        std::wstring write_error;
+        if (!WriteEmbeddedResourceToFile(kDocumentationRagResourceId, temp_rag, &write_error)) {
+            cleanup();
+            if (error) {
+                *error = write_error;
+            }
+            return false;
+        }
+
+        const std::filesystem::path import_root = storage_.data_root() / ".app_rag";
+        const RagImportResult import_result = rag_service_.ImportLibrary(temp_rag, import_root);
+        cleanup();
+        if (!import_result.success) {
+            if (error) {
+                *error = L"Could not import the built-in Agent App Documentation RAG.\n\n" +
+                    Utf8ToWide(import_result.error);
+            }
+            return false;
+        }
+        library = rag_service_.GetLibrary(import_result.rag_id);
+        if (!library) {
+            if (error) {
+                *error = L"The built-in documentation RAG was imported but could not be loaded.";
+            }
+            return false;
+        }
+        Logger::Info(
+            "Setup System imported built-in documentation RAG into " +
+            WideToUtf8(import_root.wstring()));
+    } else {
+        Logger::Info("Setup System found the built-in documentation RAG already registered; import skipped.");
+    }
+    return true;
+}
+
 void MainWindow::RunSetupSystem() {
     // --- Overwrite confirmation ---
     std::wstring confirm_msg =
         L"Setup System will OVERWRITE your current configuration:\n\n"
         L"- All existing projects and project chat data will be deleted.\n"
         L"- The embedded .config.zip package will be extracted into the app .config folder.\n"
+        L"- The built-in Agent App Documentation RAG will be imported if absent, without adding project access.\n"
         L"- Any config files inside that package will overwrite the current files.\n\n"
         L"Config files that are not included in .config.zip will be left in place.\n\n"
         L"Then it will install required system tools (Node.js, uv, Poppler,\n"
@@ -4474,6 +4634,15 @@ void MainWindow::RunSetupSystem() {
         return;
     }
     MigrateLegacyWebSettings(storage_.runtime_paths());
+
+    std::wstring documentation_rag_error;
+    if (!EnsureEmbeddedDocumentationRag(&documentation_rag_error)) {
+        MessageBoxW(hwnd_,
+            (L"Setup System could not prepare the built-in documentation RAG.\n\n" +
+                documentation_rag_error).c_str(),
+            L"Setup System", MB_OK | MB_ICONERROR);
+        return;
+    }
 
     // Reload the project list so the UI reflects the new state
     ReloadProjects("", "");
@@ -4663,6 +4832,8 @@ void MainWindow::RunSetupSystem() {
         L"Setup terminal launched.\n\n"
         L"Follow the progress in the terminal window.\n"
         L"\nThe embedded .config.zip package has been restored into the app .config folder.\n"
+        L"The Agent App Documentation RAG is registered if it was not already present.\n"
+        L"Only configured project bindings grant model access to that library.\n"
         L"The app will offer to restart after the setup terminal closes.\n";
 
     MessageBoxW(hwnd_, done_msg.c_str(), L"Setup System", MB_OK | MB_ICONINFORMATION);

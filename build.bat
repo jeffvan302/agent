@@ -73,6 +73,12 @@ if not exist "%SCRIPT_DIR%.config.zip" (
     exit /b 1
 )
 
+if not exist "%SCRIPT_DIR%docs\Guides\Agent_App_Documentation-001.rag" (
+    echo ERROR: docs\Guides\Agent_App_Documentation-001.rag was not found. Setup System embeds this documentation RAG into agent.exe at build time.
+    popd
+    exit /b 1
+)
+
 set OUT_DIR=%SCRIPT_DIR%build
 if exist "%OUT_DIR%" rmdir /s /q "%OUT_DIR%"
 mkdir "%OUT_DIR%"
