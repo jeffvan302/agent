@@ -453,8 +453,8 @@ bool LooksLikeWebResearchServer(const McpServerConfig& config) {
     return false;
 }
 
-std::string WebResearchUsageContextText() {
-    return
+std::string WebResearchUsageContextText(bool browser_search_primary) {
+    std::string text =
         "Web Research MCP Instructions:\n"
         "- A DuckDuckGo/web research MCP server is available in this chat. Use it when the answer depends on external web pages, current information, online documentation, release notes, command syntax, package behavior, or a user-provided URL/document.\n"
         "- Prefer a web/search tool before guessing about unfamiliar or version-sensitive commands, APIs, model/provider behavior, or documentation-backed details.\n"
@@ -463,6 +463,11 @@ std::string WebResearchUsageContextText() {
         "- If DuckDuckGo returns repeated suspicious 'no results' responses with bot-detection or retry-later wording, treat that as temporary throttling. Stop retrying the same broad search, use a known URL/fetch tool or another source, and tell the user web search is temporarily limited.\n"
         "- Summarize findings in your own words and include source URLs when the answer relies on web research.\n"
         "- Do not use web research for purely local codebase facts that can be answered from project files or local tools.";
+    if (browser_search_primary) {
+        text +=
+            "\n- This project marks the built-in browser_web_search tool as the primary web search path. Use DuckDuckGo/web MCP as a fallback, comparison source, or retrieval/download path for known URLs when it is the better fit.";
+    }
+    return text;
 }
 
 std::string AugmentToolDescription(const McpServerConfig& config, const McpToolDefinition& tool) {
@@ -1990,6 +1995,13 @@ std::vector<McpExposedTool> McpManager::GetExposedToolsForProject(
 }
 
 std::string McpManager::BuildWebResearchUsageContext(const std::string& project_id) const {
+    bool browser_search_primary = false;
+    if (storage_ && !project_id.empty()) {
+        const auto settings = storage_->LoadProjectSettings(project_id);
+        browser_search_primary =
+            settings.built_in_browser_search_enabled &&
+            settings.browser_search_primary;
+    }
     for (const auto& config : configs_) {
         if (!config.enabled || !LooksLikeWebResearchServer(config)) {
             continue;
@@ -1997,7 +2009,7 @@ std::string McpManager::BuildWebResearchUsageContext(const std::string& project_
         if (!project_id.empty() && !IsServerSelectedForProject(project_id, config.id)) {
             continue;
         }
-        return WebResearchUsageContextText();
+        return WebResearchUsageContextText(browser_search_primary);
     }
     return {};
 }

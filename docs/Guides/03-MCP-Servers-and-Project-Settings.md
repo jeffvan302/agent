@@ -127,8 +127,18 @@ Select a built-in tool in the list to display its tool settings. The visible too
 | `Auto-archive file reads/writes into Artifact/Code Memory` | Captures filesystem activity into memory when both workflows are used. |
 | `Enable Sleep / Pause tool` | Allows deliberate waiting/pause operations. |
 | `Max sleep (seconds, 0 = unlimited)` | Upper limit on a sleep request. |
+| `Enable Browser Web Search` | Exposes the built-in `browser_web_search` tool for undetected-playwright-backed Google/Bing search, rendered page text/HTML retrieval, and PDF capture. |
+| `Primary web search tool` | Marks `browser_web_search` as the preferred broad-search path; DuckDuckGo/web MCP remains available as fallback, comparison, or URL retrieval when enabled. |
+| `Configure...` | Opens the Browser Web Search configuration window for allowed engines, engine priority, default engine, visible/headless browser behavior, default content type, delay ranges, timeout, and the model-visible tool description. |
+| `Enable Window Automation` | Exposes the built-in `window_automation` tool for listing top-level Windows, bringing a window forward, inspecting its native UI Automation tree, clicking controls, filling text fields, and inspecting/interacting with WebView2 DOM content through CDP when a remote debugging port is available. |
 
 The tool definitions supplied to models include usage guidance. For PowerShell, still ensure the working directory and project instructions describe Windows-specific constraints when commands are important.
+
+Browser Web Search uses a project-local `.agent/browser_search` folder for cookies and generated PDF output by default. The tool can perform `search`, `fetch`, or `search_and_fetch`, so a model can search and retrieve the selected result content in one tool call when exact page content is needed. `Setup System` installs the Python, Playwright, undetected-playwright, and Chromium dependencies for this tool. For manual setup, run `python -m pip install -r scripts/built_in_browser_search_requirements.txt`, then `python -m playwright install chromium` before enabling the tool on a machine for the first time.
+
+Window Automation uses Windows UI Automation directly for native controls, so it does not need FlaUI or .NET at runtime. Some apps expose richer UIA trees than others; inspect the window first and prefer `automation_id` or exact `name` plus `control_type` selectors before using element indexes.
+
+For WebView2 panes, UIA usually sees the host control but not the Chromium DOM. The same `window_automation` tool has `webview2_list_targets`, `webview2_inspect`, `webview2_click`, `webview2_set_text`, and `webview2_type_text` actions that attach through Chrome DevTools Protocol. Start the target app with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` before the WebView2 control is created, then call the tool with `debug_port: 9222`. `Setup System` installs the Playwright dependency used by this CDP path.
 
 ### RAG services
 
@@ -204,4 +214,3 @@ The unified settings are stored at `.config/projects/<project_id>/project_settin
 - `.config/projects/<project_id>/mcp_consent.json`
 - `.config/projects/<project_id>/project_rag.json`
 - `.config/projects/<project_id>/context_compression.json`
-

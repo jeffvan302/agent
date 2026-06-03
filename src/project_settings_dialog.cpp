@@ -33,6 +33,7 @@ constexpr int kScrollPanelColorIndex = COLOR_WINDOW;
 
 constexpr wchar_t kContextPreviewClassName[] = L"AgentContextPreviewWindow";
 constexpr int kContextPreviewTextBoxId = 9001;
+constexpr wchar_t kBrowserSearchConfigClassName[] = L"AgentBrowserSearchConfigWindow";
 
 HBRUSH SettingsScrollBrush() {
     return GetSysColorBrush(kScrollPanelColorIndex);
@@ -167,6 +168,12 @@ enum ControlId : int {
     kSleepMaxSecondsLabel = 6506,
     kSleepMaxSecondsEdit = 6507,
     kSleepNoteLabel = 6508,
+    kBrowserSearchEnabledCheck = 6517,
+    kBrowserSearchPrimaryCheck = 6518,
+    kBrowserSearchConfigureButton = 6519,
+    kBrowserSearchNoteLabel = 6520,
+    kWindowAutomationEnabledCheck = 6521,
+    kWindowAutomationNoteLabel = 6522,
 
     // Right panel scrollable host
     kSettingsScrollPanel = 6480,
@@ -226,12 +233,140 @@ struct ContextPreviewWindowState {
     HFONT mono_font = nullptr;
 };
 
+struct BrowserSearchConfigDraft {
+    bool primary = false;
+    bool google_enabled = true;
+    bool bing_enabled = true;
+    std::vector<std::string> engine_order = {"google", "bing"};
+    std::string default_engine = "google";
+    bool open_visual_browser = false;
+    std::string default_content_mode = "text";
+    std::string context_description = kDefaultBrowserSearchDescription;
+    int page_load_min_ms = kDefaultBrowserSearchPageLoadDelayMinMs;
+    int page_load_max_ms = kDefaultBrowserSearchPageLoadDelayMaxMs;
+    int keystroke_min_ms = kDefaultBrowserSearchKeystrokeDelayMinMs;
+    int keystroke_max_ms = kDefaultBrowserSearchKeystrokeDelayMaxMs;
+    int click_min_ms = kDefaultBrowserSearchClickDelayMinMs;
+    int click_max_ms = kDefaultBrowserSearchClickDelayMaxMs;
+    int pre_submit_min_ms = kDefaultBrowserSearchPreSubmitDelayMinMs;
+    int pre_submit_max_ms = kDefaultBrowserSearchPreSubmitDelayMaxMs;
+    int post_results_min_ms = kDefaultBrowserSearchPostResultsDelayMinMs;
+    int post_results_max_ms = kDefaultBrowserSearchPostResultsDelayMaxMs;
+    int timeout_seconds = kDefaultBrowserSearchTimeoutSeconds;
+};
+
+enum BrowserSearchConfigControlId : int {
+    kBrowserCfgPrimary = 7601,
+    kBrowserCfgGoogle = 7602,
+    kBrowserCfgBing = 7603,
+    kBrowserCfgDefaultEngine = 7604,
+    kBrowserCfgPriority = 7605,
+    kBrowserCfgVisible = 7606,
+    kBrowserCfgContentMode = 7607,
+    kBrowserCfgTimeout = 7608,
+    kBrowserCfgPageLoadMin = 7610,
+    kBrowserCfgPageLoadMax = 7611,
+    kBrowserCfgKeystrokeMin = 7612,
+    kBrowserCfgKeystrokeMax = 7613,
+    kBrowserCfgClickMin = 7614,
+    kBrowserCfgClickMax = 7615,
+    kBrowserCfgPreSubmitMin = 7616,
+    kBrowserCfgPreSubmitMax = 7617,
+    kBrowserCfgPostResultsMin = 7618,
+    kBrowserCfgPostResultsMax = 7619,
+    kBrowserCfgDescription = 7620,
+    kBrowserCfgDefaultDescription = 7621,
+    kBrowserCfgOk = IDOK,
+    kBrowserCfgCancel = IDCANCEL,
+};
+
+struct BrowserSearchConfigWindowState {
+    BrowserSearchConfigDraft draft;
+    HWND owner = nullptr;
+    HFONT font = nullptr;
+    HWND default_engine_combo = nullptr;
+    HWND priority_combo = nullptr;
+    HWND content_mode_combo = nullptr;
+    HWND timeout_edit = nullptr;
+    HWND page_load_min_edit = nullptr;
+    HWND page_load_max_edit = nullptr;
+    HWND keystroke_min_edit = nullptr;
+    HWND keystroke_max_edit = nullptr;
+    HWND click_min_edit = nullptr;
+    HWND click_max_edit = nullptr;
+    HWND pre_submit_min_edit = nullptr;
+    HWND pre_submit_max_edit = nullptr;
+    HWND post_results_min_edit = nullptr;
+    HWND post_results_max_edit = nullptr;
+    HWND description_edit = nullptr;
+    std::optional<BrowserSearchConfigDraft> result;
+};
+
 bool IsProjectFolderVariableName(const std::string& name) {
     return variable_resolver::ToLookupKey(name) == "projectfolder";
 }
 
 int Scale(HWND hwnd, int value) {
     return MulDiv(value, GetDpiForWindow(hwnd), 96);
+}
+
+std::string LowerTrimAscii(std::string value) {
+    value = Trim(value);
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+std::wstring BrowserSearchContentModeLabel(const std::string& mode) {
+    const std::string normalized = LowerTrimAscii(mode);
+    if (normalized == "html") return L"Rendered HTML";
+    if (normalized == "text_html") return L"Text + rendered HTML";
+    if (normalized == "pdf") return L"PDF";
+    if (normalized == "all") return L"Text + HTML + PDF";
+    return L"Text";
+}
+
+std::string BrowserSearchContentModeFromCombo(HWND combo) {
+    switch (ComboBox_GetCurSel(combo)) {
+    case 1: return "html";
+    case 2: return "text_html";
+    case 3: return "pdf";
+    case 4: return "all";
+    default: return "text";
+    }
+}
+
+int BrowserSearchContentModeIndex(const std::string& mode) {
+    const std::string normalized = LowerTrimAscii(mode);
+    if (normalized == "html") return 1;
+    if (normalized == "text_html") return 2;
+    if (normalized == "pdf") return 3;
+    if (normalized == "all") return 4;
+    return 0;
+}
+
+bool BrowserSearchGoogleFirst(const std::vector<std::string>& order) {
+    for (const auto& engine : order) {
+        const std::string normalized = LowerTrimAscii(engine);
+        if (normalized == "google") return true;
+        if (normalized == "bing") return false;
+    }
+    return true;
+}
+
+int ReadDialogInt(HWND edit, int fallback, int min_value, int max_value) {
+    try {
+        const std::wstring text = TrimWide(GetWindowTextString(edit));
+        if (text.empty()) return fallback;
+        int value = std::stoi(text);
+        return std::clamp(value, min_value, max_value);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+void SetIntEdit(HWND edit, int value) {
+    SetWindowTextW(edit, std::to_wstring(value).c_str());
 }
 
 std::string MakeId() {
@@ -345,6 +480,320 @@ const RagLibraryConfig* FindRagLibrary(
             return library.id == id;
         });
     return it == libraries.end() ? nullptr : &*it;
+}
+
+void RegisterBrowserSearchConfigClass(HINSTANCE instance) {
+    static bool registered = false;
+    if (registered) return;
+
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.hInstance = instance;
+    wc.lpfnWndProc = [](HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) -> LRESULT {
+        auto* state = reinterpret_cast<BrowserSearchConfigWindowState*>(
+            GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+            state = reinterpret_cast<BrowserSearchConfigWindowState*>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+        }
+        if (!state) return DefWindowProcW(hwnd, message, w_param, l_param);
+
+        const auto make_label = [&](const wchar_t* text, int x, int y, int w, int h) {
+            HWND label = CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE,
+                x, y, w, h, hwnd, nullptr, nullptr, nullptr);
+            SendMessageW(label, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+            return label;
+        };
+        const auto make_edit = [&](int id, int x, int y, int w, int h, const std::wstring& text) {
+            HWND edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", text.c_str(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
+                x, y, w, h, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+            SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+            return edit;
+        };
+        const auto make_check = [&](int id, const wchar_t* text, int x, int y, int w, bool checked) {
+            HWND check = CreateWindowExW(0, L"BUTTON", text,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                x, y, w, Scale(hwnd, 22), hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+            SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+            Button_SetCheck(check, checked ? BST_CHECKED : BST_UNCHECKED);
+            return check;
+        };
+
+        switch (message) {
+        case WM_CREATE: {
+            state->font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+            const int margin = Scale(hwnd, 14);
+            const int gutter = Scale(hwnd, 8);
+            const int label_h = Scale(hwnd, 18);
+            const int edit_h = Scale(hwnd, 22);
+            const int button_h = Scale(hwnd, 28);
+            const int desired_client_w = Scale(hwnd, 840);
+            const int target_client_h = Scale(hwnd, 640);
+            int desired_client_h = target_client_h;
+            MONITORINFO monitor_info{};
+            monitor_info.cbSize = sizeof(monitor_info);
+            if (HMONITOR monitor = MonitorFromWindow(state->owner ? state->owner : hwnd, MONITOR_DEFAULTTONEAREST);
+                monitor && GetMonitorInfoW(monitor, &monitor_info)) {
+                RECT target_rect{0, 0, desired_client_w, target_client_h};
+                AdjustWindowRectEx(&target_rect,
+                    static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)),
+                    FALSE,
+                    static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)));
+                const int frame_h = (target_rect.bottom - target_rect.top) - target_client_h;
+                const int work_h = monitor_info.rcWork.bottom - monitor_info.rcWork.top;
+                const int max_client_h = std::max(
+                    Scale(hwnd, 520),
+                    work_h - Scale(hwnd, 24) - frame_h);
+                desired_client_h = std::min(target_client_h, max_client_h);
+            }
+            RECT adjusted{0, 0, desired_client_w, desired_client_h};
+            AdjustWindowRectEx(&adjusted,
+                static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)),
+                FALSE,
+                static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)));
+            SetWindowPos(hwnd, nullptr, 0, 0,
+                adjusted.right - adjusted.left,
+                adjusted.bottom - adjusted.top,
+                SWP_NOMOVE | SWP_NOZORDER);
+
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            const int width = client.right - client.left;
+            const int height = client.bottom - client.top;
+
+            int y = margin;
+            make_check(kBrowserCfgPrimary,
+                L"Use browser_web_search as primary web search tool",
+                margin, y, width - margin * 2, state->draft.primary);
+            y += Scale(hwnd, 26);
+            make_check(kBrowserCfgVisible,
+                L"Open the visual browser by default",
+                margin, y, width - margin * 2, state->draft.open_visual_browser);
+            y += Scale(hwnd, 30);
+
+            make_label(L"Allowed search engines:", margin, y + Scale(hwnd, 3), Scale(hwnd, 150), label_h);
+            make_check(kBrowserCfgGoogle, L"Google", margin + Scale(hwnd, 160), y, Scale(hwnd, 90), state->draft.google_enabled);
+            make_check(kBrowserCfgBing, L"Bing", margin + Scale(hwnd, 260), y, Scale(hwnd, 90), state->draft.bing_enabled);
+            y += Scale(hwnd, 30);
+
+            make_label(L"Default engine:", margin, y + Scale(hwnd, 3), Scale(hwnd, 120), label_h);
+            state->default_engine_combo = CreateWindowExW(0, L"COMBOBOX", nullptr,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+                margin + Scale(hwnd, 130), y, Scale(hwnd, 150), Scale(hwnd, 100),
+                hwnd, reinterpret_cast<HMENU>(kBrowserCfgDefaultEngine), nullptr, nullptr);
+            ComboBox_AddString(state->default_engine_combo, L"Google");
+            ComboBox_AddString(state->default_engine_combo, L"Bing");
+            ComboBox_SetCurSel(state->default_engine_combo, LowerTrimAscii(state->draft.default_engine) == "bing" ? 1 : 0);
+            SendMessageW(state->default_engine_combo, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+
+            make_label(L"Priority:", margin + Scale(hwnd, 310), y + Scale(hwnd, 3), Scale(hwnd, 70), label_h);
+            state->priority_combo = CreateWindowExW(0, L"COMBOBOX", nullptr,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+                margin + Scale(hwnd, 385), y, Scale(hwnd, 190), Scale(hwnd, 100),
+                hwnd, reinterpret_cast<HMENU>(kBrowserCfgPriority), nullptr, nullptr);
+            ComboBox_AddString(state->priority_combo, L"Google, then Bing");
+            ComboBox_AddString(state->priority_combo, L"Bing, then Google");
+            ComboBox_SetCurSel(state->priority_combo, BrowserSearchGoogleFirst(state->draft.engine_order) ? 0 : 1);
+            SendMessageW(state->priority_combo, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+            y += Scale(hwnd, 34);
+
+            make_label(L"Default content:", margin, y + Scale(hwnd, 3), Scale(hwnd, 120), label_h);
+            state->content_mode_combo = CreateWindowExW(0, L"COMBOBOX", nullptr,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+                margin + Scale(hwnd, 130), y, Scale(hwnd, 190), Scale(hwnd, 140),
+                hwnd, reinterpret_cast<HMENU>(kBrowserCfgContentMode), nullptr, nullptr);
+            ComboBox_AddString(state->content_mode_combo, L"Text");
+            ComboBox_AddString(state->content_mode_combo, L"Rendered HTML");
+            ComboBox_AddString(state->content_mode_combo, L"Text + rendered HTML");
+            ComboBox_AddString(state->content_mode_combo, L"PDF");
+            ComboBox_AddString(state->content_mode_combo, L"Text + HTML + PDF");
+            ComboBox_SetCurSel(state->content_mode_combo, BrowserSearchContentModeIndex(state->draft.default_content_mode));
+            SendMessageW(state->content_mode_combo, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+
+            make_label(L"Timeout seconds:", margin + Scale(hwnd, 350), y + Scale(hwnd, 3), Scale(hwnd, 125), label_h);
+            state->timeout_edit = make_edit(kBrowserCfgTimeout, margin + Scale(hwnd, 480), y, Scale(hwnd, 70), edit_h,
+                std::to_wstring(state->draft.timeout_seconds));
+            y += Scale(hwnd, 40);
+
+            make_label(L"Delay ranges in milliseconds", margin, y, Scale(hwnd, 240), label_h);
+            make_label(L"Min", margin + Scale(hwnd, 300), y, Scale(hwnd, 50), label_h);
+            make_label(L"Max", margin + Scale(hwnd, 380), y, Scale(hwnd, 50), label_h);
+            y += label_h + gutter;
+
+            const auto delay_row = [&](const wchar_t* label, int min_id, int max_id, int min_value, int max_value,
+                                       HWND* min_hwnd, HWND* max_hwnd) {
+                make_label(label, margin, y + Scale(hwnd, 3), Scale(hwnd, 285), label_h);
+                *min_hwnd = make_edit(min_id, margin + Scale(hwnd, 300), y, Scale(hwnd, 65), edit_h, std::to_wstring(min_value));
+                *max_hwnd = make_edit(max_id, margin + Scale(hwnd, 380), y, Scale(hwnd, 65), edit_h, std::to_wstring(max_value));
+                y += Scale(hwnd, 28);
+            };
+            delay_row(L"After page load", kBrowserCfgPageLoadMin, kBrowserCfgPageLoadMax,
+                state->draft.page_load_min_ms, state->draft.page_load_max_ms,
+                &state->page_load_min_edit, &state->page_load_max_edit);
+            delay_row(L"Between keystrokes", kBrowserCfgKeystrokeMin, kBrowserCfgKeystrokeMax,
+                state->draft.keystroke_min_ms, state->draft.keystroke_max_ms,
+                &state->keystroke_min_edit, &state->keystroke_max_edit);
+            delay_row(L"After clicks", kBrowserCfgClickMin, kBrowserCfgClickMax,
+                state->draft.click_min_ms, state->draft.click_max_ms,
+                &state->click_min_edit, &state->click_max_edit);
+            delay_row(L"Before submitting query", kBrowserCfgPreSubmitMin, kBrowserCfgPreSubmitMax,
+                state->draft.pre_submit_min_ms, state->draft.pre_submit_max_ms,
+                &state->pre_submit_min_edit, &state->pre_submit_max_edit);
+            delay_row(L"After results/content loads", kBrowserCfgPostResultsMin, kBrowserCfgPostResultsMax,
+                state->draft.post_results_min_ms, state->draft.post_results_max_ms,
+                &state->post_results_min_edit, &state->post_results_max_edit);
+
+            y += gutter;
+            make_label(L"Context/tool description shown to the model:", margin, y, width - margin * 2, label_h);
+            y += label_h + gutter;
+            const int action_y = height - margin - button_h;
+            const int button_w = Scale(hwnd, 90);
+            const int description_h = std::max(Scale(hwnd, 80), action_y - gutter - y);
+            state->description_edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT",
+                Utf8ToWide(state->draft.context_description).c_str(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                    ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
+                margin, y, width - margin * 2, description_h,
+                hwnd, reinterpret_cast<HMENU>(kBrowserCfgDescription), nullptr, nullptr);
+            SendMessageW(state->description_edit, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+            SendMessageW(state->description_edit, EM_SETLIMITTEXT, static_cast<WPARAM>(20000), 0);
+
+            HWND restore = CreateWindowExW(0, L"BUTTON", L"Restore default description",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                margin, action_y, Scale(hwnd, 210), button_h,
+                hwnd, reinterpret_cast<HMENU>(kBrowserCfgDefaultDescription), nullptr, nullptr);
+            SendMessageW(restore, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+
+            HWND ok = CreateWindowExW(0, L"BUTTON", L"OK",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                width - margin - button_w * 2 - gutter, action_y,
+                button_w, button_h,
+                hwnd, reinterpret_cast<HMENU>(kBrowserCfgOk), nullptr, nullptr);
+            HWND cancel = CreateWindowExW(0, L"BUTTON", L"Cancel",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                width - margin - button_w, action_y,
+                button_w, button_h,
+                hwnd, reinterpret_cast<HMENU>(kBrowserCfgCancel), nullptr, nullptr);
+            SendMessageW(ok, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+            SendMessageW(cancel, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+
+            CenterWindowToOwner(hwnd, state->owner);
+            return 0;
+        }
+        case WM_COMMAND: {
+            const int id = LOWORD(w_param);
+            if (id == kBrowserCfgDefaultDescription) {
+                SetWindowTextW(state->description_edit, Utf8ToWide(kDefaultBrowserSearchDescription).c_str());
+                return 0;
+            }
+            if (id == kBrowserCfgCancel) {
+                DestroyWindow(hwnd);
+                return 0;
+            }
+            if (id == kBrowserCfgOk) {
+                BrowserSearchConfigDraft draft;
+                draft.primary = IsDlgButtonChecked(hwnd, kBrowserCfgPrimary) == BST_CHECKED;
+                draft.google_enabled = IsDlgButtonChecked(hwnd, kBrowserCfgGoogle) == BST_CHECKED;
+                draft.bing_enabled = IsDlgButtonChecked(hwnd, kBrowserCfgBing) == BST_CHECKED;
+                if (!draft.google_enabled && !draft.bing_enabled) {
+                    MessageBoxW(hwnd, L"Enable at least one search engine.", L"Browser Web Search",
+                        MB_OK | MB_ICONINFORMATION);
+                    return 0;
+                }
+                draft.default_engine = ComboBox_GetCurSel(state->default_engine_combo) == 1 ? "bing" : "google";
+                if (draft.default_engine == "google" && !draft.google_enabled) draft.default_engine = "bing";
+                if (draft.default_engine == "bing" && !draft.bing_enabled) draft.default_engine = "google";
+                draft.engine_order = ComboBox_GetCurSel(state->priority_combo) == 1
+                    ? std::vector<std::string>{"bing", "google"}
+                    : std::vector<std::string>{"google", "bing"};
+                draft.open_visual_browser = IsDlgButtonChecked(hwnd, kBrowserCfgVisible) == BST_CHECKED;
+                draft.default_content_mode = BrowserSearchContentModeFromCombo(state->content_mode_combo);
+                draft.timeout_seconds = ReadDialogInt(state->timeout_edit,
+                    kDefaultBrowserSearchTimeoutSeconds, 1, 600);
+
+                draft.page_load_min_ms = ReadDialogInt(state->page_load_min_edit, kDefaultBrowserSearchPageLoadDelayMinMs, 0, 60000);
+                draft.page_load_max_ms = ReadDialogInt(state->page_load_max_edit, kDefaultBrowserSearchPageLoadDelayMaxMs, draft.page_load_min_ms, 60000);
+                draft.keystroke_min_ms = ReadDialogInt(state->keystroke_min_edit, kDefaultBrowserSearchKeystrokeDelayMinMs, 0, 60000);
+                draft.keystroke_max_ms = ReadDialogInt(state->keystroke_max_edit, kDefaultBrowserSearchKeystrokeDelayMaxMs, draft.keystroke_min_ms, 60000);
+                draft.click_min_ms = ReadDialogInt(state->click_min_edit, kDefaultBrowserSearchClickDelayMinMs, 0, 60000);
+                draft.click_max_ms = ReadDialogInt(state->click_max_edit, kDefaultBrowserSearchClickDelayMaxMs, draft.click_min_ms, 60000);
+                draft.pre_submit_min_ms = ReadDialogInt(state->pre_submit_min_edit, kDefaultBrowserSearchPreSubmitDelayMinMs, 0, 60000);
+                draft.pre_submit_max_ms = ReadDialogInt(state->pre_submit_max_edit, kDefaultBrowserSearchPreSubmitDelayMaxMs, draft.pre_submit_min_ms, 60000);
+                draft.post_results_min_ms = ReadDialogInt(state->post_results_min_edit, kDefaultBrowserSearchPostResultsDelayMinMs, 0, 60000);
+                draft.post_results_max_ms = ReadDialogInt(state->post_results_max_edit, kDefaultBrowserSearchPostResultsDelayMaxMs, draft.post_results_min_ms, 60000);
+                draft.context_description = Trim(WideToUtf8(GetWindowTextString(state->description_edit)));
+                if (draft.context_description.empty()) {
+                    draft.context_description = kDefaultBrowserSearchDescription;
+                }
+                state->result = std::move(draft);
+                DestroyWindow(hwnd);
+                return 0;
+            }
+            break;
+        }
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        default:
+            break;
+        }
+        return DefWindowProcW(hwnd, message, w_param, l_param);
+    };
+    wc.lpszClassName = kBrowserSearchConfigClassName;
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    RegisterClassExW(&wc);
+    registered = true;
+}
+
+std::optional<BrowserSearchConfigDraft> ShowBrowserSearchConfigDialog(
+    HWND owner,
+    const BrowserSearchConfigDraft& draft) {
+    HINSTANCE instance = reinterpret_cast<HINSTANCE>(GetModuleHandleW(nullptr));
+    RegisterBrowserSearchConfigClass(instance);
+
+    BrowserSearchConfigWindowState state;
+    state.owner = owner;
+    state.draft = draft;
+
+    const DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE;
+    const DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+    if (owner) EnableWindow(owner, FALSE);
+
+    HWND hwnd = CreateWindowExW(
+        ex_style,
+        kBrowserSearchConfigClassName,
+        L"Configure Browser Web Search",
+        style,
+        CW_USEDEFAULT, CW_USEDEFAULT, Scale(owner, 840), Scale(owner, 640),
+        owner,
+        nullptr,
+        instance,
+        &state);
+    if (!hwnd) {
+        if (owner) EnableWindow(owner, TRUE);
+        return std::nullopt;
+    }
+
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+
+    MSG msg{};
+    while (IsWindow(hwnd) && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (!IsDialogMessageW(hwnd, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+
+    if (owner) {
+        EnableWindow(owner, TRUE);
+        SetActiveWindow(owner);
+    }
+    return state.result;
 }
 
 void RegisterContextPreviewClass(HINSTANCE instance) {
@@ -1286,6 +1735,28 @@ private:
             WS_CHILD | WS_VISIBLE,
             0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kSleepNoteLabel), nullptr, nullptr);
 
+        browser_search_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable Browser Web Search",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kBrowserSearchEnabledCheck), nullptr, nullptr);
+        browser_search_primary_check_ = CreateWindowExW(0, L"BUTTON", L"Primary web search tool",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kBrowserSearchPrimaryCheck), nullptr, nullptr);
+        browser_search_configure_button_ = CreateWindowExW(0, L"BUTTON", L"Configure...",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kBrowserSearchConfigureButton), nullptr, nullptr);
+        browser_search_note_label_ = CreateWindowExW(0, L"STATIC",
+            L"Uses a real Playwright Chromium browser for Google/Bing search, rendered text/HTML fetch, and PDF capture.",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kBrowserSearchNoteLabel), nullptr, nullptr);
+
+        window_automation_enabled_check_ = CreateWindowExW(0, L"BUTTON", L"Enable Window Automation",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kWindowAutomationEnabledCheck), nullptr, nullptr);
+        window_automation_note_label_ = CreateWindowExW(0, L"STATIC",
+            L"Uses native Windows UI Automation to list windows, bring them forward, inspect controls, click elements, and fill editable fields. WebView2 DOM access is available through a remote debugging port. This manipulates the real desktop.",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kWindowAutomationNoteLabel), nullptr, nullptr);
+
         // RAG services section
         rag_services_header_ = CreateWindowExW(0, L"STATIC", L"RAG Services:", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, scroll_content_host_, reinterpret_cast<HMENU>(kRagServicesHeader), nullptr, nullptr);
         rag_services_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
@@ -1402,6 +1873,9 @@ private:
             filesystem_enabled_check_, filesystem_auto_archive_check_, filesystem_working_dir_label_,
             filesystem_working_dir_edit_, filesystem_note_label_,
             sleep_enabled_check_, sleep_max_seconds_label_, sleep_max_seconds_edit_, sleep_note_label_,
+            browser_search_enabled_check_, browser_search_primary_check_,
+            browser_search_configure_button_, browser_search_note_label_,
+            window_automation_enabled_check_, window_automation_note_label_,
             rag_services_header_, rag_services_list_, rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_check_,
             rag_priority_label_, rag_priority_edit_, rag_max_chunks_label_, rag_max_chunks_edit_,
@@ -1537,6 +2011,29 @@ private:
             : options_.built_in_filesystem_working_directory;
         sleep_enabled_ = options_.built_in_sleep_enabled;
         sleep_max_seconds_ = std::max(0, options_.built_in_sleep_max_seconds);
+        browser_search_enabled_ = options_.built_in_browser_search_enabled;
+        window_automation_enabled_ = options_.built_in_window_automation_enabled;
+        browser_search_primary_ = options_.browser_search_primary;
+        browser_search_google_enabled_ = options_.browser_search_google_enabled;
+        browser_search_bing_enabled_ = options_.browser_search_bing_enabled;
+        browser_search_engine_order_ = options_.browser_search_engine_order;
+        browser_search_default_engine_ = options_.browser_search_default_engine;
+        browser_search_open_visual_browser_ = options_.browser_search_open_visual_browser;
+        browser_search_default_content_mode_ = options_.browser_search_default_content_mode;
+        browser_search_context_description_ = Trim(options_.browser_search_context_description).empty()
+            ? std::string(kDefaultBrowserSearchDescription)
+            : options_.browser_search_context_description;
+        browser_search_page_load_delay_min_ms_ = options_.browser_search_page_load_delay_min_ms;
+        browser_search_page_load_delay_max_ms_ = options_.browser_search_page_load_delay_max_ms;
+        browser_search_keystroke_delay_min_ms_ = options_.browser_search_keystroke_delay_min_ms;
+        browser_search_keystroke_delay_max_ms_ = options_.browser_search_keystroke_delay_max_ms;
+        browser_search_click_delay_min_ms_ = options_.browser_search_click_delay_min_ms;
+        browser_search_click_delay_max_ms_ = options_.browser_search_click_delay_max_ms;
+        browser_search_pre_submit_delay_min_ms_ = options_.browser_search_pre_submit_delay_min_ms;
+        browser_search_pre_submit_delay_max_ms_ = options_.browser_search_pre_submit_delay_max_ms;
+        browser_search_post_results_delay_min_ms_ = options_.browser_search_post_results_delay_min_ms;
+        browser_search_post_results_delay_max_ms_ = options_.browser_search_post_results_delay_max_ms;
+        browser_search_timeout_seconds_ = std::clamp(options_.browser_search_timeout_seconds, 1, 600);
         if (completion_driver_enabled_) {
             CheckDlgButton(scroll_content_host_, kCompletionDriverEnabledCheck, BST_CHECKED);
         }
@@ -1715,6 +2212,20 @@ private:
         MoveWindow(sleep_max_seconds_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25), Scale(hwnd_, 205), label_height, TRUE);
         MoveWindow(sleep_max_seconds_edit_, internal_settings_x + panel_pad + Scale(hwnd_, 208), tool_y + Scale(hwnd_, 22), Scale(hwnd_, 70), Scale(hwnd_, 22), TRUE);
         MoveWindow(sleep_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 52), internal_settings_w - panel_pad * 2, Scale(hwnd_, 56), TRUE);
+
+        MoveWindow(browser_search_enabled_check_, internal_settings_x + panel_pad, tool_y,
+            internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(browser_search_primary_check_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 25),
+            internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(browser_search_configure_button_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 52),
+            Scale(hwnd_, 110), Scale(hwnd_, 26), TRUE);
+        MoveWindow(browser_search_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 84),
+            internal_settings_w - panel_pad * 2, Scale(hwnd_, 92), TRUE);
+
+        MoveWindow(window_automation_enabled_check_, internal_settings_x + panel_pad, tool_y,
+            internal_settings_w - panel_pad * 2, Scale(hwnd_, 20), TRUE);
+        MoveWindow(window_automation_note_label_, internal_settings_x + panel_pad, tool_y + Scale(hwnd_, 28),
+            internal_settings_w - panel_pad * 2, Scale(hwnd_, 112), TRUE);
 
         // RAG services section
         y += internal_h + gutter * 2;
@@ -1948,6 +2459,34 @@ private:
             break;
         case kSleepMaxSecondsEdit:
             break; // ignore EN_CHANGE
+        case kBrowserSearchEnabledCheck:
+            if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
+                browser_search_enabled_ =
+                    (IsDlgButtonChecked(scroll_content_host_, kBrowserSearchEnabledCheck) == BST_CHECKED);
+                RefreshInternalToolsList();
+            }
+            break;
+        case kBrowserSearchPrimaryCheck:
+            if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
+                browser_search_primary_ =
+                    (IsDlgButtonChecked(scroll_content_host_, kBrowserSearchPrimaryCheck) == BST_CHECKED);
+                if (browser_search_note_label_) {
+                    SetWindowTextW(browser_search_note_label_, BrowserSearchSummaryText().c_str());
+                }
+            }
+            break;
+        case kBrowserSearchConfigureButton:
+            if (notification_code == BN_CLICKED) {
+                ConfigureBrowserSearch();
+            }
+            break;
+        case kWindowAutomationEnabledCheck:
+            if (notification_code == BN_CLICKED && !toggling_internal_tool_) {
+                window_automation_enabled_ =
+                    (IsDlgButtonChecked(scroll_content_host_, kWindowAutomationEnabledCheck) == BST_CHECKED);
+                RefreshInternalToolsList();
+            }
+            break;
         case kCompletionDriverModesList:
             break;
         case kQuestionnaireEnabledCheck:
@@ -2524,6 +3063,86 @@ private:
             RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
     }
 
+    std::wstring BrowserSearchSummaryText() const {
+        std::wstring engines;
+        if (browser_search_google_enabled_) engines += L"Google";
+        if (browser_search_bing_enabled_) {
+            if (!engines.empty()) engines += L", ";
+            engines += L"Bing";
+        }
+        if (engines.empty()) engines = L"(none)";
+        std::wstring order = BrowserSearchGoogleFirst(browser_search_engine_order_)
+            ? L"Google then Bing"
+            : L"Bing then Google";
+        std::wstring text = L"Engines: ";
+        text += engines;
+        text += L"\r\nDefault: ";
+        text += Utf8ToWide(browser_search_default_engine_);
+        text += L"; priority: ";
+        text += order;
+        text += L"\r\nContent: ";
+        text += BrowserSearchContentModeLabel(browser_search_default_content_mode_);
+        text += L"; browser: ";
+        text += browser_search_open_visual_browser_ ? L"visible" : L"headless";
+        text += L"; timeout: ";
+        text += std::to_wstring(browser_search_timeout_seconds_);
+        text += L"s";
+        return text;
+    }
+
+    void ConfigureBrowserSearch() {
+        BrowserSearchConfigDraft draft;
+        draft.primary = browser_search_primary_;
+        draft.google_enabled = browser_search_google_enabled_;
+        draft.bing_enabled = browser_search_bing_enabled_;
+        draft.engine_order = browser_search_engine_order_;
+        draft.default_engine = browser_search_default_engine_;
+        draft.open_visual_browser = browser_search_open_visual_browser_;
+        draft.default_content_mode = browser_search_default_content_mode_;
+        draft.context_description = browser_search_context_description_;
+        draft.page_load_min_ms = browser_search_page_load_delay_min_ms_;
+        draft.page_load_max_ms = browser_search_page_load_delay_max_ms_;
+        draft.keystroke_min_ms = browser_search_keystroke_delay_min_ms_;
+        draft.keystroke_max_ms = browser_search_keystroke_delay_max_ms_;
+        draft.click_min_ms = browser_search_click_delay_min_ms_;
+        draft.click_max_ms = browser_search_click_delay_max_ms_;
+        draft.pre_submit_min_ms = browser_search_pre_submit_delay_min_ms_;
+        draft.pre_submit_max_ms = browser_search_pre_submit_delay_max_ms_;
+        draft.post_results_min_ms = browser_search_post_results_delay_min_ms_;
+        draft.post_results_max_ms = browser_search_post_results_delay_max_ms_;
+        draft.timeout_seconds = browser_search_timeout_seconds_;
+
+        const auto updated = ShowBrowserSearchConfigDialog(hwnd_, draft);
+        if (!updated) return;
+
+        browser_search_primary_ = updated->primary;
+        browser_search_google_enabled_ = updated->google_enabled;
+        browser_search_bing_enabled_ = updated->bing_enabled;
+        browser_search_engine_order_ = updated->engine_order;
+        browser_search_default_engine_ = updated->default_engine;
+        browser_search_open_visual_browser_ = updated->open_visual_browser;
+        browser_search_default_content_mode_ = updated->default_content_mode;
+        browser_search_context_description_ = updated->context_description;
+        browser_search_page_load_delay_min_ms_ = updated->page_load_min_ms;
+        browser_search_page_load_delay_max_ms_ = updated->page_load_max_ms;
+        browser_search_keystroke_delay_min_ms_ = updated->keystroke_min_ms;
+        browser_search_keystroke_delay_max_ms_ = updated->keystroke_max_ms;
+        browser_search_click_delay_min_ms_ = updated->click_min_ms;
+        browser_search_click_delay_max_ms_ = updated->click_max_ms;
+        browser_search_pre_submit_delay_min_ms_ = updated->pre_submit_min_ms;
+        browser_search_pre_submit_delay_max_ms_ = updated->pre_submit_max_ms;
+        browser_search_post_results_delay_min_ms_ = updated->post_results_min_ms;
+        browser_search_post_results_delay_max_ms_ = updated->post_results_max_ms;
+        browser_search_timeout_seconds_ = updated->timeout_seconds;
+
+        CheckDlgButton(scroll_content_host_, kBrowserSearchPrimaryCheck,
+            browser_search_primary_ ? BST_CHECKED : BST_UNCHECKED);
+        if (browser_search_note_label_) {
+            SetWindowTextW(browser_search_note_label_, BrowserSearchSummaryText().c_str());
+        }
+        RefreshInternalToolsList();
+    }
+
     void SaveCurrentInternalToolSettings() {
         if (selected_internal_tool_index_ == 0 && internal_powershell_workdir_edit_) {
             workdir_ = Trim(WideToUtf8(GetWindowTextString(internal_powershell_workdir_edit_)));
@@ -2583,10 +3202,20 @@ private:
                 sleep_max_seconds_ = 0;
             }
         }
+        if (selected_internal_tool_index_ == 7 && browser_search_enabled_check_) {
+            browser_search_enabled_ =
+                (IsDlgButtonChecked(scroll_content_host_, kBrowserSearchEnabledCheck) == BST_CHECKED);
+            browser_search_primary_ =
+                (IsDlgButtonChecked(scroll_content_host_, kBrowserSearchPrimaryCheck) == BST_CHECKED);
+        }
+        if (selected_internal_tool_index_ == 8 && window_automation_enabled_check_) {
+            window_automation_enabled_ =
+                (IsDlgButtonChecked(scroll_content_host_, kWindowAutomationEnabledCheck) == BST_CHECKED);
+        }
     }
 
     void ToggleInternalToolEnabled(int index) {
-        if (index < 0 || index > 6) return;
+        if (index < 0 || index > 8) return;
         SaveCurrentInternalToolSettings();
         selected_internal_tool_index_ = index;
         if (index == 0) {
@@ -2605,12 +3234,16 @@ private:
             filesystem_enabled_ = !filesystem_enabled_;
         } else if (index == 6) {
             sleep_enabled_ = !sleep_enabled_;
+        } else if (index == 7) {
+            browser_search_enabled_ = !browser_search_enabled_;
+        } else if (index == 8) {
+            window_automation_enabled_ = !window_automation_enabled_;
         }
         RefreshInternalToolsList(false);
     }
 
     void SelectInternalTool(int index) {
-        if (index < 0 || index > 6) return;
+        if (index < 0 || index > 8) return;
         SaveCurrentInternalToolSettings();
         selected_internal_tool_index_ = index;
         ListBox_SetCurSel(internal_tools_list_, index);
@@ -2726,9 +3359,13 @@ private:
             (std::wstring(filesystem_enabled_ ? L"[x] " : L"[ ] ") + L"Project Filesystem").c_str());
         ListBox_AddString(internal_tools_list_,
             (std::wstring(sleep_enabled_ ? L"[x] " : L"[ ] ") + L"Sleep / Pause").c_str());
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(browser_search_enabled_ ? L"[x] " : L"[ ] ") + L"Browser Web Search").c_str());
+        ListBox_AddString(internal_tools_list_,
+            (std::wstring(window_automation_enabled_ ? L"[x] " : L"[ ] ") + L"Window Automation").c_str());
 
         int sel = selected_internal_tool_index_;
-        if (sel < 0 || sel > 6) sel = 0;
+        if (sel < 0 || sel > 8) sel = 0;
         ListBox_SetCurSel(internal_tools_list_, sel);
         toggling_internal_tool_ = false;
         ShowInternalToolSettings(sel);
@@ -2763,6 +3400,12 @@ private:
         ShowWindow(sleep_max_seconds_label_, SW_HIDE);
         ShowWindow(sleep_max_seconds_edit_, SW_HIDE);
         ShowWindow(sleep_note_label_, SW_HIDE);
+        ShowWindow(browser_search_enabled_check_, SW_HIDE);
+        ShowWindow(browser_search_primary_check_, SW_HIDE);
+        ShowWindow(browser_search_configure_button_, SW_HIDE);
+        ShowWindow(browser_search_note_label_, SW_HIDE);
+        ShowWindow(window_automation_enabled_check_, SW_HIDE);
+        ShowWindow(window_automation_note_label_, SW_HIDE);
         ShowWindow(questionnaire_enabled_check_, SW_HIDE);
         ShowWindow(questionnaire_max_options_label_, SW_HIDE);
         ShowWindow(questionnaire_max_options_edit_, SW_HIDE);
@@ -2867,6 +3510,27 @@ private:
             EnableWindow(sleep_max_seconds_label_, sleep_enabled_ ? TRUE : FALSE);
             EnableWindow(sleep_max_seconds_edit_, sleep_enabled_ ? TRUE : FALSE);
         }
+        if (index == 7) {
+            panel_has_content = true;
+            ShowWindow(browser_search_enabled_check_, SW_SHOW);
+            ShowWindow(browser_search_primary_check_, SW_SHOW);
+            ShowWindow(browser_search_configure_button_, SW_SHOW);
+            ShowWindow(browser_search_note_label_, SW_SHOW);
+            CheckDlgButton(scroll_content_host_, kBrowserSearchEnabledCheck,
+                browser_search_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+            CheckDlgButton(scroll_content_host_, kBrowserSearchPrimaryCheck,
+                browser_search_primary_ ? BST_CHECKED : BST_UNCHECKED);
+            EnableWindow(browser_search_primary_check_, TRUE);
+            EnableWindow(browser_search_configure_button_, TRUE);
+            SetWindowTextW(browser_search_note_label_, BrowserSearchSummaryText().c_str());
+        }
+        if (index == 8) {
+            panel_has_content = true;
+            ShowWindow(window_automation_enabled_check_, SW_SHOW);
+            ShowWindow(window_automation_note_label_, SW_SHOW);
+            CheckDlgButton(scroll_content_host_, kWindowAutomationEnabledCheck,
+                window_automation_enabled_ ? BST_CHECKED : BST_UNCHECKED);
+        }
         if (panel_has_content) {
             std::wstring title;
             switch (index) {
@@ -2877,6 +3541,8 @@ private:
             case 4: title = L"Completion Driver Settings"; break;
             case 5: title = L"Filesystem Settings"; break;
             case 6: title = L"Sleep / Pause Settings"; break;
+            case 7: title = L"Browser Web Search Settings"; break;
+            case 8: title = L"Window Automation Settings"; break;
             default: title = L"Tool Settings"; break;
             }
             SetWindowTextW(internal_tool_settings_panel_, title.c_str());
@@ -3462,6 +4128,48 @@ private:
         }
         result.built_in_sleep_enabled = sleep_enabled_;
         result.built_in_sleep_max_seconds = std::max(0, sleep_max_seconds_);
+        result.built_in_browser_search_enabled = browser_search_enabled_;
+        result.built_in_window_automation_enabled = window_automation_enabled_;
+        result.browser_search_primary = browser_search_primary_;
+        result.browser_search_google_enabled = browser_search_google_enabled_;
+        result.browser_search_bing_enabled = browser_search_bing_enabled_;
+        if (!result.browser_search_google_enabled && !result.browser_search_bing_enabled) {
+            result.browser_search_google_enabled = true;
+        }
+        result.browser_search_engine_order = browser_search_engine_order_;
+        result.browser_search_default_engine = browser_search_default_engine_;
+        if (result.browser_search_default_engine == "google" && !result.browser_search_google_enabled) {
+            result.browser_search_default_engine = "bing";
+        }
+        if (result.browser_search_default_engine == "bing" && !result.browser_search_bing_enabled) {
+            result.browser_search_default_engine = "google";
+        }
+        result.browser_search_open_visual_browser = browser_search_open_visual_browser_;
+        result.browser_search_default_content_mode = browser_search_default_content_mode_;
+        result.browser_search_context_description = Trim(browser_search_context_description_).empty()
+            ? std::string(kDefaultBrowserSearchDescription)
+            : browser_search_context_description_;
+        result.browser_search_page_load_delay_min_ms = std::max(0, browser_search_page_load_delay_min_ms_);
+        result.browser_search_page_load_delay_max_ms = std::max(
+            result.browser_search_page_load_delay_min_ms,
+            browser_search_page_load_delay_max_ms_);
+        result.browser_search_keystroke_delay_min_ms = std::max(0, browser_search_keystroke_delay_min_ms_);
+        result.browser_search_keystroke_delay_max_ms = std::max(
+            result.browser_search_keystroke_delay_min_ms,
+            browser_search_keystroke_delay_max_ms_);
+        result.browser_search_click_delay_min_ms = std::max(0, browser_search_click_delay_min_ms_);
+        result.browser_search_click_delay_max_ms = std::max(
+            result.browser_search_click_delay_min_ms,
+            browser_search_click_delay_max_ms_);
+        result.browser_search_pre_submit_delay_min_ms = std::max(0, browser_search_pre_submit_delay_min_ms_);
+        result.browser_search_pre_submit_delay_max_ms = std::max(
+            result.browser_search_pre_submit_delay_min_ms,
+            browser_search_pre_submit_delay_max_ms_);
+        result.browser_search_post_results_delay_min_ms = std::max(0, browser_search_post_results_delay_min_ms_);
+        result.browser_search_post_results_delay_max_ms = std::max(
+            result.browser_search_post_results_delay_min_ms,
+            browser_search_post_results_delay_max_ms_);
+        result.browser_search_timeout_seconds = std::clamp(browser_search_timeout_seconds_, 1, 600);
         const std::wstring max_opts_text = TrimWide(GetWindowTextString(questionnaire_max_options_edit_));
         result.built_in_questionnaire_enabled = questionnaire_enabled_;
         if (!max_opts_text.empty()) {
@@ -3760,6 +4468,24 @@ private:
         if (settings.built_in_filesystem_enabled) {
             if (!context.empty()) context += "\n\n";
             context += built_in_tools::FilesystemSystemPrompt();
+        }
+        if (settings.built_in_browser_search_enabled) {
+            ProjectSettings browser_preview_settings;
+            browser_preview_settings.built_in_browser_search_enabled = settings.built_in_browser_search_enabled;
+            browser_preview_settings.browser_search_primary = settings.browser_search_primary;
+            browser_preview_settings.browser_search_google_enabled = settings.browser_search_google_enabled;
+            browser_preview_settings.browser_search_bing_enabled = settings.browser_search_bing_enabled;
+            browser_preview_settings.browser_search_engine_order = settings.browser_search_engine_order;
+            browser_preview_settings.browser_search_default_engine = settings.browser_search_default_engine;
+            browser_preview_settings.browser_search_open_visual_browser = settings.browser_search_open_visual_browser;
+            browser_preview_settings.browser_search_default_content_mode = settings.browser_search_default_content_mode;
+            browser_preview_settings.browser_search_context_description = settings.browser_search_context_description;
+            if (!context.empty()) context += "\n\n";
+            context += built_in_tools::BrowserSearchSystemPrompt(browser_preview_settings);
+        }
+        if (settings.built_in_window_automation_enabled) {
+            if (!context.empty()) context += "\n\n";
+            context += built_in_tools::WindowAutomationSystemPrompt();
         }
 
         const std::string mcp_context =
@@ -4083,6 +4809,12 @@ private:
     HWND sleep_max_seconds_label_ = nullptr;
     HWND sleep_max_seconds_edit_ = nullptr;
     HWND sleep_note_label_ = nullptr;
+    HWND browser_search_enabled_check_ = nullptr;
+    HWND browser_search_primary_check_ = nullptr;
+    HWND browser_search_configure_button_ = nullptr;
+    HWND browser_search_note_label_ = nullptr;
+    HWND window_automation_enabled_check_ = nullptr;
+    HWND window_automation_note_label_ = nullptr;
     bool internal_powershell_enabled_ = false;
     bool internal_artifact_memory_enabled_ = false;
     bool planner_enabled_ = false;
@@ -4091,6 +4823,27 @@ private:
     bool filesystem_auto_archive_ = false;
     bool sleep_enabled_ = false;
     int sleep_max_seconds_ = 0;
+    bool browser_search_enabled_ = false;
+    bool window_automation_enabled_ = false;
+    bool browser_search_primary_ = false;
+    bool browser_search_google_enabled_ = true;
+    bool browser_search_bing_enabled_ = true;
+    std::vector<std::string> browser_search_engine_order_ = {"google", "bing"};
+    std::string browser_search_default_engine_ = "google";
+    bool browser_search_open_visual_browser_ = false;
+    std::string browser_search_default_content_mode_ = "text";
+    std::string browser_search_context_description_ = kDefaultBrowserSearchDescription;
+    int browser_search_page_load_delay_min_ms_ = kDefaultBrowserSearchPageLoadDelayMinMs;
+    int browser_search_page_load_delay_max_ms_ = kDefaultBrowserSearchPageLoadDelayMaxMs;
+    int browser_search_keystroke_delay_min_ms_ = kDefaultBrowserSearchKeystrokeDelayMinMs;
+    int browser_search_keystroke_delay_max_ms_ = kDefaultBrowserSearchKeystrokeDelayMaxMs;
+    int browser_search_click_delay_min_ms_ = kDefaultBrowserSearchClickDelayMinMs;
+    int browser_search_click_delay_max_ms_ = kDefaultBrowserSearchClickDelayMaxMs;
+    int browser_search_pre_submit_delay_min_ms_ = kDefaultBrowserSearchPreSubmitDelayMinMs;
+    int browser_search_pre_submit_delay_max_ms_ = kDefaultBrowserSearchPreSubmitDelayMaxMs;
+    int browser_search_post_results_delay_min_ms_ = kDefaultBrowserSearchPostResultsDelayMinMs;
+    int browser_search_post_results_delay_max_ms_ = kDefaultBrowserSearchPostResultsDelayMaxMs;
+    int browser_search_timeout_seconds_ = kDefaultBrowserSearchTimeoutSeconds;
     bool toggling_internal_tool_ = false;
     std::vector<bool> agentic_mode_enabled_;
     std::vector<bool> user_model_enabled_;

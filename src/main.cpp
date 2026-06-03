@@ -1923,6 +1923,12 @@ ProjectSettings BuildModelToolBuiltInSettings(
     scoped.built_in_sleep_enabled =
         project_settings.built_in_sleep_enabled &&
         ModelToolHasBuiltInTool(tool, built_in_tools::kSleepToolName);
+    scoped.built_in_browser_search_enabled =
+        project_settings.built_in_browser_search_enabled &&
+        ModelToolHasBuiltInTool(tool, built_in_tools::kBrowserSearchToolName);
+    scoped.built_in_window_automation_enabled =
+        project_settings.built_in_window_automation_enabled &&
+        ModelToolHasBuiltInTool(tool, built_in_tools::kWindowAutomationToolName);
     scoped.built_in_artifact_memory_enabled = false;
     return scoped;
 }
@@ -1934,6 +1940,8 @@ std::string BuiltInToolShortName(const std::string& name) {
     if (name == built_in_tools::kCompletionDriverToolName) return "Completion Driver";
     if (name == built_in_tools::kQuestionnaireToolName) return "Questionnaire";
     if (name == built_in_tools::kSleepToolName) return "Sleep";
+    if (name == built_in_tools::kBrowserSearchToolName) return "Browser Web Search";
+    if (name == built_in_tools::kWindowAutomationToolName) return "Window Automation";
     return name;
 }
 
@@ -2002,6 +2010,12 @@ std::string BuildModelToolBuiltInSystemPrompt(
     }
     if (settings.built_in_filesystem_enabled) {
         AppendPromptSection(prompt, "Project Filesystem", built_in_tools::FilesystemSystemPrompt());
+    }
+    if (settings.built_in_browser_search_enabled) {
+        AppendPromptSection(prompt, "Browser Web Search", built_in_tools::BrowserSearchSystemPrompt(settings));
+    }
+    if (settings.built_in_window_automation_enabled) {
+        AppendPromptSection(prompt, "Window Automation", built_in_tools::WindowAutomationSystemPrompt());
     }
     return prompt;
 }
@@ -4215,6 +4229,27 @@ void MainWindow::EditProjectSettings() {
     options.built_in_filesystem_working_directory = project_settings.built_in_filesystem_working_directory;
     options.built_in_sleep_enabled = project_settings.built_in_sleep_enabled;
     options.built_in_sleep_max_seconds = project_settings.built_in_sleep_max_seconds;
+    options.built_in_browser_search_enabled = project_settings.built_in_browser_search_enabled;
+    options.built_in_window_automation_enabled = project_settings.built_in_window_automation_enabled;
+    options.browser_search_primary = project_settings.browser_search_primary;
+    options.browser_search_google_enabled = project_settings.browser_search_google_enabled;
+    options.browser_search_bing_enabled = project_settings.browser_search_bing_enabled;
+    options.browser_search_engine_order = project_settings.browser_search_engine_order;
+    options.browser_search_default_engine = project_settings.browser_search_default_engine;
+    options.browser_search_open_visual_browser = project_settings.browser_search_open_visual_browser;
+    options.browser_search_default_content_mode = project_settings.browser_search_default_content_mode;
+    options.browser_search_context_description = project_settings.browser_search_context_description;
+    options.browser_search_page_load_delay_min_ms = project_settings.browser_search_page_load_delay_min_ms;
+    options.browser_search_page_load_delay_max_ms = project_settings.browser_search_page_load_delay_max_ms;
+    options.browser_search_keystroke_delay_min_ms = project_settings.browser_search_keystroke_delay_min_ms;
+    options.browser_search_keystroke_delay_max_ms = project_settings.browser_search_keystroke_delay_max_ms;
+    options.browser_search_click_delay_min_ms = project_settings.browser_search_click_delay_min_ms;
+    options.browser_search_click_delay_max_ms = project_settings.browser_search_click_delay_max_ms;
+    options.browser_search_pre_submit_delay_min_ms = project_settings.browser_search_pre_submit_delay_min_ms;
+    options.browser_search_pre_submit_delay_max_ms = project_settings.browser_search_pre_submit_delay_max_ms;
+    options.browser_search_post_results_delay_min_ms = project_settings.browser_search_post_results_delay_min_ms;
+    options.browser_search_post_results_delay_max_ms = project_settings.browser_search_post_results_delay_max_ms;
+    options.browser_search_timeout_seconds = project_settings.browser_search_timeout_seconds;
     options.model_timeout_seconds = project_settings.model_timeout_seconds;
 
     // Pre-seed ProjectFolder from MCP global binding values if not already set.
@@ -4288,6 +4323,27 @@ void MainWindow::EditProjectSettings() {
     saved_settings.built_in_filesystem_working_directory = result->built_in_filesystem_working_directory;
     saved_settings.built_in_sleep_enabled = result->built_in_sleep_enabled;
     saved_settings.built_in_sleep_max_seconds = result->built_in_sleep_max_seconds;
+    saved_settings.built_in_browser_search_enabled = result->built_in_browser_search_enabled;
+    saved_settings.built_in_window_automation_enabled = result->built_in_window_automation_enabled;
+    saved_settings.browser_search_primary = result->browser_search_primary;
+    saved_settings.browser_search_google_enabled = result->browser_search_google_enabled;
+    saved_settings.browser_search_bing_enabled = result->browser_search_bing_enabled;
+    saved_settings.browser_search_engine_order = result->browser_search_engine_order;
+    saved_settings.browser_search_default_engine = result->browser_search_default_engine;
+    saved_settings.browser_search_open_visual_browser = result->browser_search_open_visual_browser;
+    saved_settings.browser_search_default_content_mode = result->browser_search_default_content_mode;
+    saved_settings.browser_search_context_description = result->browser_search_context_description;
+    saved_settings.browser_search_page_load_delay_min_ms = result->browser_search_page_load_delay_min_ms;
+    saved_settings.browser_search_page_load_delay_max_ms = result->browser_search_page_load_delay_max_ms;
+    saved_settings.browser_search_keystroke_delay_min_ms = result->browser_search_keystroke_delay_min_ms;
+    saved_settings.browser_search_keystroke_delay_max_ms = result->browser_search_keystroke_delay_max_ms;
+    saved_settings.browser_search_click_delay_min_ms = result->browser_search_click_delay_min_ms;
+    saved_settings.browser_search_click_delay_max_ms = result->browser_search_click_delay_max_ms;
+    saved_settings.browser_search_pre_submit_delay_min_ms = result->browser_search_pre_submit_delay_min_ms;
+    saved_settings.browser_search_pre_submit_delay_max_ms = result->browser_search_pre_submit_delay_max_ms;
+    saved_settings.browser_search_post_results_delay_min_ms = result->browser_search_post_results_delay_min_ms;
+    saved_settings.browser_search_post_results_delay_max_ms = result->browser_search_post_results_delay_max_ms;
+    saved_settings.browser_search_timeout_seconds = result->browser_search_timeout_seconds;
     saved_settings.model_timeout_seconds = result->model_timeout_seconds;
     storage_.SaveProjectSettings(active_project_id_, saved_settings);
     storage_.SaveProjectCompressionSettings(active_project_id_, ProjectCompressionSettings{
@@ -4589,8 +4645,9 @@ void MainWindow::RunSetupSystem() {
         L"- The built-in Agent App Documentation RAG will be imported if absent, without adding project access.\n"
         L"- Any config files inside that package will overwrite the current files.\n\n"
         L"Config files that are not included in .config.zip will be left in place.\n\n"
-        L"Then it will install required system tools (Node.js, uv, Poppler,\n"
-        L"Tesseract, Pandoc, LibreOffice, OpenSSL, Ollama) in a terminal window.\n\n"
+        L"Then it will install required system tools (Node.js, uv, Python,\n"
+        L"Playwright/Chromium, Poppler, Tesseract, Pandoc, LibreOffice,\n"
+        L"OpenSSL, Ollama) in a terminal window.\n\n"
         L"Are you sure you want to overwrite everything and proceed?";
 
     if (MessageBoxW(hwnd_, confirm_msg.c_str(), L"Setup System \u2014 Overwrite Warning",
@@ -4649,19 +4706,39 @@ void MainWindow::RunSetupSystem() {
 
     const bool has_gpu = DetectDedicatedGpu();
 
+    std::filesystem::path browser_search_requirements =
+        std::filesystem::current_path() / "scripts" / "built_in_browser_search_requirements.txt";
+    wchar_t module_path[MAX_PATH]{};
+    if (GetModuleFileNameW(nullptr, module_path, static_cast<DWORD>(std::size(module_path)))) {
+        const std::filesystem::path exe_dir = std::filesystem::path(module_path).parent_path();
+        const std::vector<std::filesystem::path> candidates = {
+            std::filesystem::current_path() / "scripts" / "built_in_browser_search_requirements.txt",
+            exe_dir / "scripts" / "built_in_browser_search_requirements.txt",
+            exe_dir.parent_path() / "scripts" / "built_in_browser_search_requirements.txt",
+        };
+        std::error_code ec;
+        for (const auto& candidate : candidates) {
+            if (std::filesystem::exists(candidate, ec)) {
+                browser_search_requirements = candidate;
+                break;
+            }
+        }
+    }
+
     // --- Step 4: Build combined install script ---
     // All winget and ollama commands run sequentially in one terminal window.
     // Each step is prefixed with an echo so the user can track progress.
     std::wostringstream script;
     script << L"@echo off\r\n"
            << L"setlocal EnableExtensions EnableDelayedExpansion\r\n"
+           << L"set \"BROWSER_SEARCH_REQ=" << browser_search_requirements.wstring() << L"\"\r\n"
            << L"echo.\r\n"
            << L"echo ============================================================\r\n"
            << L"echo  Agent System Setup\r\n"
            << L"echo ============================================================\r\n"
            << L"echo.\r\n"
            // Node.js / npm / npx
-           << L"echo [1/9] Checking Node.js, npm, and npx...\r\n"
+           << L"echo [1/10] Checking Node.js, npm, and npx...\r\n"
            << L"set \"NEED_NODE=0\"\r\n"
            << L"where node >nul 2>nul || set \"NEED_NODE=1\"\r\n"
            << L"where npm >nul 2>nul || set \"NEED_NODE=1\"\r\n"
@@ -4675,7 +4752,7 @@ void MainWindow::RunSetupSystem() {
            << L")\r\n"
            << L"echo.\r\n"
            // uv / uvx
-           << L"echo [2/9] Checking uv and uvx...\r\n"
+           << L"echo [2/10] Checking uv and uvx...\r\n"
            << L"set \"NEED_UV=0\"\r\n"
            << L"where uv >nul 2>nul || set \"NEED_UV=1\"\r\n"
            << L"where uvx >nul 2>nul || set \"NEED_UV=1\"\r\n"
@@ -4687,30 +4764,68 @@ void MainWindow::RunSetupSystem() {
            << L"  echo uv and uvx are already available.\r\n"
            << L")\r\n"
            << L"echo.\r\n"
+           // Browser Web Search and WebView2 CDP Python dependencies
+           << L"echo [3/10] Checking Python and installing Browser Web Search / WebView2 CDP dependencies...\r\n"
+           << L"set \"PYTHON_EXE=\"\r\n"
+           << L"for /f \"delims=\" %%P in ('python -c \"import sys; print(sys.executable)\" 2^>nul') do if not defined PYTHON_EXE set \"PYTHON_EXE=%%P\"\r\n"
+           << L"if not defined PYTHON_EXE (\r\n"
+           << L"  echo Installing Python 3.12 because python.exe is missing or not usable...\r\n"
+           << L"  winget install --id Python.Python.3.12 -e "
+              L"--accept-package-agreements --accept-source-agreements\r\n"
+           << L")\r\n"
+           << L"if not defined PYTHON_EXE if exist \"%LocalAppData%\\Programs\\Python\\Python312\\python.exe\" set \"PYTHON_EXE=%LocalAppData%\\Programs\\Python\\Python312\\python.exe\"\r\n"
+           << L"if not defined PYTHON_EXE if exist \"%ProgramFiles%\\Python312\\python.exe\" set \"PYTHON_EXE=%ProgramFiles%\\Python312\\python.exe\"\r\n"
+           << L"if not defined PYTHON_EXE if exist \"%ProgramFiles(x86)%\\Python312\\python.exe\" set \"PYTHON_EXE=%ProgramFiles(x86)%\\Python312\\python.exe\"\r\n"
+           << L"if not defined PYTHON_EXE for /d %%D in (\"%LocalAppData%\\Programs\\Python\\Python3*\") do if exist \"%%~fD\\python.exe\" set \"PYTHON_EXE=%%~fD\\python.exe\"\r\n"
+           << L"if not defined PYTHON_EXE for /d %%D in (\"%ProgramFiles%\\Python3*\") do if exist \"%%~fD\\python.exe\" set \"PYTHON_EXE=%%~fD\\python.exe\"\r\n"
+           << L"if not defined PYTHON_EXE for /f \"delims=\" %%P in ('py -3 -c \"import sys; print(sys.executable)\" 2^>nul') do if not defined PYTHON_EXE set \"PYTHON_EXE=%%P\"\r\n"
+           << L"if not defined PYTHON_EXE (\r\n"
+           << L"  echo WARNING: Python could not be located. Browser Web Search / WebView2 CDP dependencies were not installed.\r\n"
+           << L"  echo Install Python manually, then run: python -m pip install -r \"%BROWSER_SEARCH_REQ%\"\r\n"
+           << L"  echo After that run: python -m playwright install chromium\r\n"
+           << L") else (\r\n"
+           << L"  echo Using Python: \"%PYTHON_EXE%\"\r\n"
+           << L"  \"%PYTHON_EXE%\" -m ensurepip --upgrade\r\n"
+           << L"  if errorlevel 1 echo WARNING: ensurepip failed; continuing with pip if available.\r\n"
+           << L"  \"%PYTHON_EXE%\" -m pip install --upgrade pip\r\n"
+           << L"  if errorlevel 1 echo WARNING: pip upgrade failed; continuing with dependency install.\r\n"
+           << L"  if exist \"%BROWSER_SEARCH_REQ%\" (\r\n"
+           << L"    echo Installing Browser Web Search / WebView2 CDP Python packages from \"%BROWSER_SEARCH_REQ%\"...\r\n"
+           << L"    \"%PYTHON_EXE%\" -m pip install -r \"%BROWSER_SEARCH_REQ%\"\r\n"
+           << L"  ) else (\r\n"
+           << L"    echo Requirements file was not found; installing Browser Web Search / WebView2 CDP packages by name...\r\n"
+           << L"    \"%PYTHON_EXE%\" -m pip install playwright undetected-playwright beautifulsoup4 lxml\r\n"
+           << L"  )\r\n"
+           << L"  if errorlevel 1 echo WARNING: Browser Web Search / WebView2 CDP Python package install failed. You can retry manually later.\r\n"
+           << L"  echo Installing Chromium for Playwright...\r\n"
+           << L"  \"%PYTHON_EXE%\" -m playwright install chromium\r\n"
+           << L"  if errorlevel 1 echo WARNING: Playwright Chromium install failed. You can retry manually later.\r\n"
+           << L")\r\n"
+           << L"echo.\r\n"
            // Poppler
-           << L"echo [3/9] Installing Poppler pdftotext (PDF extraction)...\r\n"
+           << L"echo [4/10] Installing Poppler pdftotext (PDF extraction)...\r\n"
            << L"winget install --id oschwartz10612.Poppler -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
            // Tesseract
-           << L"echo [4/9] Installing Tesseract OCR...\r\n"
+           << L"echo [5/10] Installing Tesseract OCR...\r\n"
            << L"winget install --id tesseract-ocr.tesseract -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
            // Pandoc
-           << L"echo [5/9] Installing Pandoc...\r\n"
+           << L"echo [6/10] Installing Pandoc...\r\n"
            << L"winget install --id JohnMacFarlane.Pandoc -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
            // LibreOffice
-           << L"echo [6/9] Installing LibreOffice...\r\n"
+           << L"echo [7/10] Installing LibreOffice...\r\n"
            << L"winget install --id TheDocumentFoundation.LibreOffice -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
            // OpenSSL runtime used by HTTPS/TLS when the app is built against
            // dynamic OpenSSL import libraries. Install it before Ollama so a
            // post-setup restart can bring HTTPS up cleanly.
-           << L"echo [7/9] Checking OpenSSL runtime...\r\n"
+           << L"echo [8/10] Checking OpenSSL runtime...\r\n"
            << L"set \"NEED_OPENSSL=0\"\r\n"
            << L"set \"OPENSSL_VERSION=\"\r\n"
            << L"set \"OPENSSL_MAJOR=\"\r\n"
@@ -4744,12 +4859,12 @@ void MainWindow::RunSetupSystem() {
            << L")\r\n"
            << L"echo.\r\n"
            // Ollama
-           << L"echo [8/9] Installing Ollama (local AI runtime)...\r\n"
+           << L"echo [9/10] Installing Ollama (local AI runtime)...\r\n"
            << L"winget install --id Ollama.Ollama -e "
               L"--accept-package-agreements --accept-source-agreements\r\n"
            << L"echo.\r\n"
            // Pull local models (Ollama must be running after install)
-           << L"echo [9/9] Pulling required Ollama models...\r\n"
+           << L"echo [10/10] Pulling required Ollama models...\r\n"
            << L"echo (Ollama may need a moment to start after installation.)\r\n"
            << L"timeout /t 8 /nobreak >nul\r\n"
            << L"for %%M in (qwen2.5vl:7b nomic-embed-text moondream:1.8b qwen3-embedding:0.6b qwen3-embedding:latest) do (\r\n"
@@ -4805,8 +4920,13 @@ void MainWindow::RunSetupSystem() {
             L"Please run the following commands manually in a terminal:\n\n"
             L"  winget install --id OpenJS.NodeJS.LTS -e\n"
             L"  winget install --id astral-sh.uv -e\n"
+            L"  winget install --id Python.Python.3.12 -e\n"
+            L"  python -m pip install -r scripts\\built_in_browser_search_requirements.txt\n"
+            L"  python -m playwright install chromium\n"
             L"  winget install --id oschwartz10612.Poppler -e\n"
             L"  winget install --id tesseract-ocr.tesseract -e\n"
+            L"  winget install --id JohnMacFarlane.Pandoc -e\n"
+            L"  winget install --id TheDocumentFoundation.LibreOffice -e\n"
             L"  winget upgrade --id ShiningLight.OpenSSL.Light -e --version 4.0.0\n"
             L"  winget install --id ShiningLight.OpenSSL.Light -e --version 4.0.0\n"
             L"  winget install --id ShiningLight.OpenSSL.Dev -e\n"
@@ -5396,6 +5516,24 @@ void MainWindow::SendCurrentMessage() {
             }
             request.system_prompt += fs_context;
             system_prompt_sections.push_back({"Project Filesystem", fs_context});
+        }
+        if (proj_settings.built_in_browser_search_enabled) {
+            const std::string browser_search_context =
+                built_in_tools::BrowserSearchSystemPrompt(proj_settings);
+            if (!request.system_prompt.empty()) {
+                request.system_prompt += "\n\n";
+            }
+            request.system_prompt += browser_search_context;
+            system_prompt_sections.push_back({"Browser Web Search", browser_search_context});
+        }
+        if (proj_settings.built_in_window_automation_enabled) {
+            const std::string window_context =
+                built_in_tools::WindowAutomationSystemPrompt();
+            if (!request.system_prompt.empty()) {
+                request.system_prompt += "\n\n";
+            }
+            request.system_prompt += window_context;
+            system_prompt_sections.push_back({"Window Automation", window_context});
         }
     }
 

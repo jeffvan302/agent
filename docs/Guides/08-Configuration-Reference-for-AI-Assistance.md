@@ -79,6 +79,7 @@ The following visible project features correspond to fields in `project_settings
 | Questionnaire | `built_in_questionnaire_enabled`, `questionnaire_max_options`, `questionnaire_restrict_by_mode`, `questionnaire_allowed_mode_id` |
 | Project Filesystem | `built_in_filesystem_enabled`, `built_in_filesystem_auto_archive`, `built_in_filesystem_working_directory` |
 | Sleep/Pause | `built_in_sleep_enabled`, `built_in_sleep_max_seconds` |
+| Window Automation | `built_in_window_automation_enabled` |
 | Model timeout | `model_timeout_seconds` |
 
 ## Variables and Resolution
@@ -145,4 +146,3 @@ After making configuration changes, verify in this order:
 5. Confirm `Web Config` shows a running server on the intended address/port/TLS mode.
 6. Confirm user group/project binding and folder permissions in `Admin Config`.
 7. Log in through the website as the intended user, create a chat, verify permitted model/mode/variables, and send a small tool-requiring request.
-

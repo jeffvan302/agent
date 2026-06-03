@@ -51,6 +51,10 @@ The setup terminal installs or checks:
 | --- | --- |
 | Node.js, `npm`, `npx` | JavaScript-based MCP servers |
 | `uv`, `uvx` | Python-packaged MCP servers |
+| Python 3.12 | Python runtime for browser-backed and WebView2 CDP built-in tools |
+| Playwright + Chromium | Browser Web Search automation plus WebView2 CDP attach/DOM inspection support |
+| undetected-playwright | Browser Web Search stealth launch layer to reduce Playwright detection signals |
+| BeautifulSoup + lxml | Browser Web Search page text extraction |
 | Poppler `pdftotext` | PDF text extraction |
 | Tesseract | OCR for image ingestion |
 | Pandoc | Document conversion |

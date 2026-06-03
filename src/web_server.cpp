@@ -4361,6 +4361,18 @@ BuiltWebSystemPrompt BuildWebSystemPrompt(
         AppendPromptSection(built.full_prompt, fs_context);
         built.sections.push_back({"Project Filesystem", fs_context});
     }
+    if (project_settings.built_in_browser_search_enabled) {
+        const std::string browser_search_context =
+            built_in_tools::BrowserSearchSystemPrompt(project_settings);
+        AppendPromptSection(built.full_prompt, browser_search_context);
+        built.sections.push_back({"Browser Web Search", browser_search_context});
+    }
+    if (project_settings.built_in_window_automation_enabled) {
+        const std::string window_context =
+            built_in_tools::WindowAutomationSystemPrompt();
+        AppendPromptSection(built.full_prompt, window_context);
+        built.sections.push_back({"Window Automation", window_context});
+    }
 
     if (mcp_manager) {
         EnsureProjectMcpConnections(
@@ -4527,6 +4539,16 @@ json ProjectSettingsDebugJson(
         {"built_in_filesystem_enabled", settings.built_in_filesystem_enabled},
         {"built_in_sleep_enabled", settings.built_in_sleep_enabled},
         {"built_in_sleep_max_seconds", settings.built_in_sleep_max_seconds},
+        {"built_in_browser_search_enabled", settings.built_in_browser_search_enabled},
+        {"built_in_window_automation_enabled", settings.built_in_window_automation_enabled},
+        {"browser_search_primary", settings.browser_search_primary},
+        {"browser_search_google_enabled", settings.browser_search_google_enabled},
+        {"browser_search_bing_enabled", settings.browser_search_bing_enabled},
+        {"browser_search_engine_order", settings.browser_search_engine_order},
+        {"browser_search_default_engine", settings.browser_search_default_engine},
+        {"browser_search_open_visual_browser", settings.browser_search_open_visual_browser},
+        {"browser_search_default_content_mode", settings.browser_search_default_content_mode},
+        {"browser_search_timeout_seconds", settings.browser_search_timeout_seconds},
         {"model_timeout_seconds", settings.model_timeout_seconds},
     };
 }

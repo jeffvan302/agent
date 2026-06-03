@@ -58,6 +58,8 @@ enum ControlId : int {
     kBuiltInQuestionnaire   = 7194,
     kBuiltInSleep           = 7195,
     kBuiltInFilesystem      = 7196,
+    kBuiltInBrowserSearch   = 7197,
+    kBuiltInWindowAutomation = 7198,
 
     // Right panel – RAG services
     kRagHeader        = 7130,
@@ -144,13 +146,15 @@ struct BuiltInToolInfo {
     const wchar_t* label;
 };
 
-static constexpr std::array<BuiltInToolInfo, 6> kBuiltInToolChoices{{
+static constexpr std::array<BuiltInToolInfo, 8> kBuiltInToolChoices{{
     {built_in_tools::kPowerShellToolName, L"PowerShell"},
     {built_in_tools::kFilesystemToolName, L"Project Filesystem"},
     {built_in_tools::kPlannerToolName, L"Planner"},
     {built_in_tools::kCompletionDriverToolName, L"Completion Driver"},
     {built_in_tools::kQuestionnaireToolName, L"Questionnaire"},
     {built_in_tools::kSleepToolName, L"Sleep"},
+    {built_in_tools::kBrowserSearchToolName, L"Browser Web Search"},
+    {built_in_tools::kWindowAutomationToolName, L"Window Automation"},
 }};
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -851,6 +855,12 @@ private:
         built_in_sleep_check_ = CreateWindowExW(0, L"BUTTON", L"Sleep",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kBuiltInSleep), nullptr, nullptr);
+        built_in_browser_search_check_ = CreateWindowExW(0, L"BUTTON", L"Browser Web Search",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kBuiltInBrowserSearch), nullptr, nullptr);
+        built_in_window_automation_check_ = CreateWindowExW(0, L"BUTTON", L"Window Automation",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kBuiltInWindowAutomation), nullptr, nullptr);
 
         // RAG section
         rag_header_ = CreateWindowExW(0, L"STATIC", L"RAG Library Access:",
@@ -911,7 +921,7 @@ private:
             mcp_header_, mcp_list_, mcp_details_panel_, mcp_enabled_check_, mcp_var_header_,
             built_in_header_, built_in_powershell_check_, built_in_filesystem_check_,
             built_in_planner_check_, built_in_completion_check_, built_in_questionnaire_check_,
-            built_in_sleep_check_,
+            built_in_sleep_check_, built_in_browser_search_check_, built_in_window_automation_check_,
             rag_header_, rag_list_,
             rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_, rag_inject_onstart_,
@@ -1006,6 +1016,9 @@ private:
         MoveWindow(built_in_completion_check_,    right_x,                         ry, built_col_w, built_row_h, TRUE);
         MoveWindow(built_in_questionnaire_check_, right_x + built_col_w + gutter,  ry, built_col_w, built_row_h, TRUE);
         MoveWindow(built_in_sleep_check_,         right_x + (built_col_w + gutter) * 2, ry, built_col_w, built_row_h, TRUE);
+        ry += built_row_h + Scale(hwnd_, 2);
+        MoveWindow(built_in_browser_search_check_, right_x, ry, built_col_w, built_row_h, TRUE);
+        MoveWindow(built_in_window_automation_check_, right_x + built_col_w + gutter, ry, built_col_w, built_row_h, TRUE);
         ry += built_row_h + gutter * 2;
 
         // RAG
@@ -1348,6 +1361,10 @@ private:
             ContainsToolName(names, built_in_tools::kQuestionnaireToolName) ? BST_CHECKED : BST_UNCHECKED);
         Button_SetCheck(built_in_sleep_check_,
             ContainsToolName(names, built_in_tools::kSleepToolName) ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(built_in_browser_search_check_,
+            ContainsToolName(names, built_in_tools::kBrowserSearchToolName) ? BST_CHECKED : BST_UNCHECKED);
+        Button_SetCheck(built_in_window_automation_check_,
+            ContainsToolName(names, built_in_tools::kWindowAutomationToolName) ? BST_CHECKED : BST_UNCHECKED);
     }
 
     std::vector<std::string> CollectBuiltInToolNames() const {
@@ -1364,6 +1381,10 @@ private:
             names.push_back(built_in_tools::kQuestionnaireToolName);
         if (Button_GetCheck(built_in_sleep_check_) == BST_CHECKED)
             names.push_back(built_in_tools::kSleepToolName);
+        if (Button_GetCheck(built_in_browser_search_check_) == BST_CHECKED)
+            names.push_back(built_in_tools::kBrowserSearchToolName);
+        if (Button_GetCheck(built_in_window_automation_check_) == BST_CHECKED)
+            names.push_back(built_in_tools::kWindowAutomationToolName);
         return names;
     }
 
@@ -1718,6 +1739,7 @@ private:
             mcp_list_, mcp_enabled_check_,
             built_in_powershell_check_, built_in_filesystem_check_, built_in_planner_check_,
             built_in_completion_check_, built_in_questionnaire_check_, built_in_sleep_check_,
+            built_in_browser_search_check_, built_in_window_automation_check_,
             rag_list_,
             rag_enabled_check_, rag_read_check_, rag_write_check_, rag_tool_check_,
             rag_delete_check_, rag_export_check_, rag_default_ingest_, rag_inject_onstart_,
@@ -1788,6 +1810,8 @@ private:
     HWND built_in_completion_check_    = nullptr;
     HWND built_in_questionnaire_check_ = nullptr;
     HWND built_in_sleep_check_         = nullptr;
+    HWND built_in_browser_search_check_ = nullptr;
+    HWND built_in_window_automation_check_ = nullptr;
 
     // Controls – RAG
     HWND rag_header_         = nullptr;

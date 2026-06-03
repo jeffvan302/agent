@@ -61,6 +61,27 @@ struct ProjectSettingsOptions {
     std::string built_in_filesystem_working_directory = "$ProjectFolder$";
     bool built_in_sleep_enabled = false;
     int built_in_sleep_max_seconds = 0;              // 0 = unlimited, otherwise max seconds per sleep call
+    bool built_in_browser_search_enabled = false;
+    bool built_in_window_automation_enabled = false;
+    bool browser_search_primary = false;
+    bool browser_search_google_enabled = true;
+    bool browser_search_bing_enabled = true;
+    std::vector<std::string> browser_search_engine_order = {"google", "bing"};
+    std::string browser_search_default_engine = "google";
+    bool browser_search_open_visual_browser = false;
+    std::string browser_search_default_content_mode = "text";
+    std::string browser_search_context_description = kDefaultBrowserSearchDescription;
+    int browser_search_page_load_delay_min_ms = kDefaultBrowserSearchPageLoadDelayMinMs;
+    int browser_search_page_load_delay_max_ms = kDefaultBrowserSearchPageLoadDelayMaxMs;
+    int browser_search_keystroke_delay_min_ms = kDefaultBrowserSearchKeystrokeDelayMinMs;
+    int browser_search_keystroke_delay_max_ms = kDefaultBrowserSearchKeystrokeDelayMaxMs;
+    int browser_search_click_delay_min_ms = kDefaultBrowserSearchClickDelayMinMs;
+    int browser_search_click_delay_max_ms = kDefaultBrowserSearchClickDelayMaxMs;
+    int browser_search_pre_submit_delay_min_ms = kDefaultBrowserSearchPreSubmitDelayMinMs;
+    int browser_search_pre_submit_delay_max_ms = kDefaultBrowserSearchPreSubmitDelayMaxMs;
+    int browser_search_post_results_delay_min_ms = kDefaultBrowserSearchPostResultsDelayMinMs;
+    int browser_search_post_results_delay_max_ms = kDefaultBrowserSearchPostResultsDelayMaxMs;
+    int browser_search_timeout_seconds = kDefaultBrowserSearchTimeoutSeconds;
     int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 
@@ -106,6 +127,27 @@ struct ProjectSettingsResult {
     std::string built_in_filesystem_working_directory = "$ProjectFolder$";
     bool built_in_sleep_enabled = false;
     int built_in_sleep_max_seconds = 0;              // 0 = unlimited, otherwise max seconds per sleep call
+    bool built_in_browser_search_enabled = false;
+    bool built_in_window_automation_enabled = false;
+    bool browser_search_primary = false;
+    bool browser_search_google_enabled = true;
+    bool browser_search_bing_enabled = true;
+    std::vector<std::string> browser_search_engine_order = {"google", "bing"};
+    std::string browser_search_default_engine = "google";
+    bool browser_search_open_visual_browser = false;
+    std::string browser_search_default_content_mode = "text";
+    std::string browser_search_context_description = kDefaultBrowserSearchDescription;
+    int browser_search_page_load_delay_min_ms = kDefaultBrowserSearchPageLoadDelayMinMs;
+    int browser_search_page_load_delay_max_ms = kDefaultBrowserSearchPageLoadDelayMaxMs;
+    int browser_search_keystroke_delay_min_ms = kDefaultBrowserSearchKeystrokeDelayMinMs;
+    int browser_search_keystroke_delay_max_ms = kDefaultBrowserSearchKeystrokeDelayMaxMs;
+    int browser_search_click_delay_min_ms = kDefaultBrowserSearchClickDelayMinMs;
+    int browser_search_click_delay_max_ms = kDefaultBrowserSearchClickDelayMaxMs;
+    int browser_search_pre_submit_delay_min_ms = kDefaultBrowserSearchPreSubmitDelayMinMs;
+    int browser_search_pre_submit_delay_max_ms = kDefaultBrowserSearchPreSubmitDelayMaxMs;
+    int browser_search_post_results_delay_min_ms = kDefaultBrowserSearchPostResultsDelayMinMs;
+    int browser_search_post_results_delay_max_ms = kDefaultBrowserSearchPostResultsDelayMaxMs;
+    int browser_search_timeout_seconds = kDefaultBrowserSearchTimeoutSeconds;
     int model_timeout_seconds = 0;                    // 0 = infinite (default), otherwise max seconds per model request
 };
 

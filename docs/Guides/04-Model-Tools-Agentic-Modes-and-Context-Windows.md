@@ -15,7 +15,7 @@ Click `Model Tools` in the desktop toolbar. Use `+ Add`, select the new tool and
 | `AI Model` | Provider/model used by the sub-agent. |
 | `Agentic Mode` | Optional instruction framework always applied when this model tool runs. |
 | `MCP Server Access` and `Use this MCP server` | External MCP servers accessible to this sub-agent, including any configured variable values. |
-| `Built-in Tool Access` | Check individual built-ins: `PowerShell`, `Project Filesystem`, `Planner`, `Completion Driver`, `Questionnaire`, `Sleep`. |
+| `Built-in Tool Access` | Check individual built-ins: `PowerShell`, `Project Filesystem`, `Planner`, `Completion Driver`, `Questionnaire`, `Sleep`, `Browser Web Search`, `Window Automation`. |
 | `RAG Library Access` | RAG permissions scoped to the sub-agent: enabled/read/write/tool/delete/write-file/default ingest and related retrieval fields. |
 | `Tool Instructions (not exposed to calling model)` | Private instructions supplied to the sub-agent after it is invoked. `Import Markdown` loads this from a file. |
 | `Test` | Shows caller-visible declaration context and the sub-agent prompt/context preview. |
@@ -148,4 +148,3 @@ The project setting `Force compression at input tokens` is independent of the se
 ## Persistence
 
 Global compression configurations are stored in `.config/context_compression_configs.json`. The selected configuration for a project is stored in project settings and compatibility assignment files. Per-chat compressed state and history are stored under `.data/projects/<project_id>/chats/<chat_id>/`.
-

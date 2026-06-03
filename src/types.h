@@ -655,6 +655,19 @@ struct AgenticModeConfig {
 };
 
 inline constexpr int kDefaultCompletionDriverOverloadDelaySeconds = 180;
+inline constexpr const char* kDefaultBrowserSearchDescription =
+    "Built-in browser web search and page retrieval tool. Uses a real Chromium browser through undetected-playwright and Playwright to search Google or Bing, optionally show the browser window, reuse cookies, and retrieve rendered website content as search results, text, raw rendered HTML, or a saved PDF. Use it for current information, research that needs a less-throttled alternative to DuckDuckGo, pages that require JavaScript rendering, and cases where the model should search first and then fetch a selected result before answering.";
+inline constexpr int kDefaultBrowserSearchPageLoadDelayMinMs = 2500;
+inline constexpr int kDefaultBrowserSearchPageLoadDelayMaxMs = 5500;
+inline constexpr int kDefaultBrowserSearchKeystrokeDelayMinMs = 150;
+inline constexpr int kDefaultBrowserSearchKeystrokeDelayMaxMs = 400;
+inline constexpr int kDefaultBrowserSearchClickDelayMinMs = 800;
+inline constexpr int kDefaultBrowserSearchClickDelayMaxMs = 1800;
+inline constexpr int kDefaultBrowserSearchPreSubmitDelayMinMs = 1000;
+inline constexpr int kDefaultBrowserSearchPreSubmitDelayMaxMs = 2500;
+inline constexpr int kDefaultBrowserSearchPostResultsDelayMinMs = 2500;
+inline constexpr int kDefaultBrowserSearchPostResultsDelayMaxMs = 6000;
+inline constexpr int kDefaultBrowserSearchTimeoutSeconds = 180;
 
 struct ProjectSettings {
     std::string project_name;
@@ -698,5 +711,26 @@ struct ProjectSettings {
     std::string built_in_filesystem_working_directory = "$ProjectFolder$";
     bool built_in_sleep_enabled = false;              // Enable sleep_seconds built-in tool for short host-side waits
     int built_in_sleep_max_seconds = 0;               // 0 = unlimited, otherwise max seconds per sleep_seconds call
+    bool built_in_browser_search_enabled = false;     // Enable browser-backed Google/Bing web search and fetch tool
+    bool built_in_window_automation_enabled = false;  // Enable native Windows UI Automation inspection and interaction tool
+    bool browser_search_primary = false;              // Treat this built-in as the primary web search path over DuckDuckGo
+    bool browser_search_google_enabled = true;
+    bool browser_search_bing_enabled = true;
+    std::vector<std::string> browser_search_engine_order = {"google", "bing"};
+    std::string browser_search_default_engine = "google"; // google | bing
+    bool browser_search_open_visual_browser = false;  // false=headless, true=visible browser by default
+    std::string browser_search_default_content_mode = "text"; // text | html | text_html | pdf | all
+    std::string browser_search_context_description = kDefaultBrowserSearchDescription;
+    int browser_search_page_load_delay_min_ms = kDefaultBrowserSearchPageLoadDelayMinMs;
+    int browser_search_page_load_delay_max_ms = kDefaultBrowserSearchPageLoadDelayMaxMs;
+    int browser_search_keystroke_delay_min_ms = kDefaultBrowserSearchKeystrokeDelayMinMs;
+    int browser_search_keystroke_delay_max_ms = kDefaultBrowserSearchKeystrokeDelayMaxMs;
+    int browser_search_click_delay_min_ms = kDefaultBrowserSearchClickDelayMinMs;
+    int browser_search_click_delay_max_ms = kDefaultBrowserSearchClickDelayMaxMs;
+    int browser_search_pre_submit_delay_min_ms = kDefaultBrowserSearchPreSubmitDelayMinMs;
+    int browser_search_pre_submit_delay_max_ms = kDefaultBrowserSearchPreSubmitDelayMaxMs;
+    int browser_search_post_results_delay_min_ms = kDefaultBrowserSearchPostResultsDelayMinMs;
+    int browser_search_post_results_delay_max_ms = kDefaultBrowserSearchPostResultsDelayMaxMs;
+    int browser_search_timeout_seconds = kDefaultBrowserSearchTimeoutSeconds;
     int model_timeout_seconds = 0;                  // 0 = wait forever (default), otherwise max seconds per model request
 };

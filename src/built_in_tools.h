@@ -9,17 +9,23 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 #include <windows.h>
+#include <combaseapi.h>
+#include <UIAutomation.h>
+#include <wrl/client.h>
 
 namespace built_in_tools {
 
@@ -32,11 +38,14 @@ inline constexpr const char* kDefaultPlannerStorageFolder = "$ProjectFolder$\\.a
 inline constexpr const char* kPlannerFileName = "planner.json";
 inline constexpr const char* kFilesystemToolName = "project_filesystem";
 inline constexpr const char* kSleepToolName = "sleep_seconds";
+inline constexpr const char* kBrowserSearchToolName = "browser_web_search";
+inline constexpr const char* kWindowAutomationToolName = "window_automation";
 
 inline bool IsBuiltInToolName(const std::string& name) {
     return name == kPowerShellToolName || name == kQuestionnaireToolName ||
            name == kPlannerToolName || name == kCompletionDriverToolName ||
-           name == kFilesystemToolName || name == kSleepToolName;
+           name == kFilesystemToolName || name == kSleepToolName ||
+           name == kBrowserSearchToolName || name == kWindowAutomationToolName;
 }
 
 inline std::string TraceTitleForBuiltInTool(const std::string& name) {
@@ -46,6 +55,8 @@ inline std::string TraceTitleForBuiltInTool(const std::string& name) {
     if (name == kCompletionDriverToolName) return "Built-in / Completion Driver";
     if (name == kFilesystemToolName) return "Built-in / Project Filesystem";
     if (name == kSleepToolName) return "Built-in / Sleep / Pause";
+    if (name == kBrowserSearchToolName) return "Built-in / Browser Web Search";
+    if (name == kWindowAutomationToolName) return "Built-in / Window Automation";
     return "Built-in / " + name;
 }
 
@@ -150,6 +161,83 @@ inline std::string SleepSystemPrompt(int max_sleep_seconds = 0) {
         text << "- This project has no configured maximum sleep duration. Choose a reasonable duration for the current task.";
     }
     return text.str();
+}
+
+inline std::string BrowserSearchEngineList(const ProjectSettings& settings) {
+    std::vector<std::string> engines;
+    const auto add_engine = [&](const std::string& engine) {
+        if (engine == "google" && !settings.browser_search_google_enabled) return;
+        if (engine == "bing" && !settings.browser_search_bing_enabled) return;
+        if (std::find(engines.begin(), engines.end(), engine) == engines.end()) {
+            engines.push_back(engine);
+        }
+    };
+    for (const auto& engine : settings.browser_search_engine_order) {
+        add_engine(LowerAsciiCopy(engine));
+    }
+    add_engine("google");
+    add_engine("bing");
+    if (engines.empty()) engines.push_back("google");
+
+    std::ostringstream text;
+    for (size_t i = 0; i < engines.size(); ++i) {
+        if (i > 0) text << ", ";
+        text << engines[i];
+    }
+    return text.str();
+}
+
+inline std::string BrowserSearchSystemPrompt(const ProjectSettings& settings) {
+    std::ostringstream text;
+    const std::string description = Trim(settings.browser_search_context_description).empty()
+        ? std::string(kDefaultBrowserSearchDescription)
+        : Trim(settings.browser_search_context_description);
+    text
+        << "Browser Web Search Instructions:\n"
+        << "- " << description << "\n"
+        << "- Tool name: " << kBrowserSearchToolName << ". Actions: search, fetch, search_and_fetch.\n"
+        << "- Available engines in configured priority order: " << BrowserSearchEngineList(settings) << ". "
+        << "Default engine: " << (Trim(settings.browser_search_default_engine).empty()
+            ? std::string("google")
+            : LowerAsciiCopy(settings.browser_search_default_engine)) << ".\n"
+        << "- Use search for broad discovery. Use fetch when the user supplied a URL or when a search result must be read before answering. Use search_and_fetch when you already know you need the content from the best matching search result.\n"
+        << "- Tool call JSON examples:\n"
+        << "  - Search only: {\"action\":\"search\",\"query\":\"topic or question\",\"engine\":\"default\",\"result_count\":8}\n"
+        << "  - Search and read one result: {\"action\":\"search_and_fetch\",\"query\":\"topic or question\",\"fetch_result_index\":1,\"content_type\":\"text\"}\n"
+        << "  - Fetch a known URL: {\"action\":\"fetch\",\"url\":\"https://example.com/page\",\"content_type\":\"text\"}\n"
+        << "- Valid content_type values are text, html, text_html, pdf, and all. Use engine google or bing only when a specific engine is needed; otherwise use default so the configured priority is honored.\n"
+        << "- The tool can return search results, rendered page text, rendered HTML, or a saved PDF path. Request text for ordinary research, HTML when exact page markup matters, and PDF when the user needs a durable browser-rendered copy.\n"
+        << "- The browser is " << (settings.browser_search_open_visual_browser ? "visible by default" : "headless by default")
+        << "; override open_visual_browser only when visual inspection, login, cookie consent, or troubleshooting requires it.\n";
+    if (settings.browser_search_primary) {
+        text << "- This project marks browser_web_search as the primary web search tool. Prefer it for broad search and research loops. Use DuckDuckGo/web MCP as a fallback, comparison source, or when it has a stronger fetch/download tool for a known URL.\n";
+    } else {
+        text << "- DuckDuckGo/web MCP and browser_web_search may both be available. Choose browser_web_search for slower human-paced Google/Bing browser searches, JavaScript-rendered content, visible-browser troubleshooting, and PDF capture. Choose DuckDuckGo when it is sufficient and faster for simple retrieval.\n";
+    }
+    text << "- Include source URLs in answers that rely on web research. Do not guess current or documentation-backed details when this tool can verify them.";
+    return text.str();
+}
+
+inline std::string WindowAutomationSystemPrompt() {
+    return (
+        "Window Automation Instructions:\n"
+        "- The window_automation tool uses native Windows UI Automation (UIA3 COM) and Win32 window APIs to inspect and interact with visible desktop applications.\n"
+        "- Use list_windows first when you do not know the target title or handle. Use activate_window to bring a matching window forward. Use inspect_window to read its UI tree before clicking or typing.\n"
+        "- WebView2 panes often expose only the host pane through UIA. For Microsoft.UI.Xaml.Controls.WebView2 or other Chromium WebView2 content, use the webview2_* actions, which attach through Chrome DevTools Protocol. The target app must have WebView2 remote debugging enabled before its WebView2 control is created, usually by launching it with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222.\n"
+        "- Tool call JSON examples:\n"
+        "  - {\"action\":\"list_windows\",\"title_contains\":\"notepad\"}\n"
+        "  - {\"action\":\"activate_window\",\"title_contains\":\"Settings\"}\n"
+        "  - {\"action\":\"inspect_window\",\"title_contains\":\"Calculator\",\"max_depth\":5,\"max_elements\":200}\n"
+        "  - {\"action\":\"click\",\"title_contains\":\"Calculator\",\"name\":\"Seven\",\"control_type\":\"Button\"}\n"
+        "  - {\"action\":\"set_text\",\"title_contains\":\"Login\",\"automation_id\":\"usernameInput\",\"value\":\"user@example.com\"}\n"
+        "  - {\"action\":\"webview2_list_targets\",\"debug_port\":9222}\n"
+        "  - {\"action\":\"webview2_inspect\",\"debug_port\":9222,\"target_index\":0,\"max_elements\":200}\n"
+        "  - {\"action\":\"webview2_click\",\"debug_port\":9222,\"selector\":\"button[data-testid='save']\"}\n"
+        "  - {\"action\":\"webview2_set_text\",\"debug_port\":9222,\"label\":\"Email\",\"value\":\"user@example.com\"}\n"
+        "- Prefer stable selectors in this order: hwnd, automation_id, exact name plus control_type, then element_index from a recent inspect_window result. Element indexes can change when the UI changes.\n"
+        "- For WebView2 content, prefer CSS selector, label, placeholder, or exact DOM accessible name before using element_index from a recent webview2_inspect result.\n"
+        "- For click, the tool tries UIA Invoke/Selection/Toggle patterns first, then a mouse click at the clickable point or element center. For set_text, it tries ValuePattern first, then focuses the element and types with keyboard input.\n"
+        "- This tool manipulates the real desktop. Inspect before acting, avoid destructive clicks unless the user requested them, and report what window/element was targeted.");
 }
 
 inline std::string PlannerSystemPrompt() {
@@ -452,6 +540,102 @@ inline std::vector<ChatToolDefinition> BuildDefinitions(
 })";
         definitions.push_back(std::move(fs));
     }
+    if (settings.built_in_browser_search_enabled) {
+        ChatToolDefinition web;
+        web.name = kBrowserSearchToolName;
+        std::ostringstream desc;
+        desc
+            << "Built-in browser web search and retrieval tool using a real Chromium browser via Playwright. "
+            << "Actions: search returns Google/Bing result titles, URLs, display URLs, snippets, and engines tried; "
+            << "fetch reads a known URL; search_and_fetch searches and then fetches a selected result in one call. "
+            << "Available engines in project priority order: " << BrowserSearchEngineList(settings) << ". "
+            << "Use this for current information, research loops, JavaScript-rendered pages, visible-browser troubleshooting, "
+            << "and saving a rendered website as PDF. "
+            << (settings.browser_search_primary
+                ? "This project marks browser_web_search as the primary web search path; prefer it over DuckDuckGo for broad search unless DuckDuckGo is specifically better for a known URL. "
+                : "Use alongside DuckDuckGo; choose this when Google/Bing browser search, rendered content, or PDF output is useful. ")
+            << "For content_type use text for readable extraction, html for raw rendered HTML, text_html for both, pdf for a saved PDF, or all for text, HTML, and PDF.";
+        web.description = desc.str();
+        web.parameters_json = R"({
+  "type": "object",
+  "properties": {
+    "action": {"type": "string", "enum": ["search", "fetch", "search_and_fetch"], "description": "search returns result metadata only; fetch retrieves a known URL; search_and_fetch searches and fetches one result in the same browser-backed call."},
+    "query": {"type": "string", "description": "Search query for search or search_and_fetch. Use normal search syntax such as site:example.com when appropriate."},
+    "url": {"type": "string", "description": "URL to retrieve for fetch action."},
+    "engine": {"type": "string", "enum": ["default", "auto", "google", "bing"], "description": "Optional search engine. default uses the configured default engine first; auto uses the configured priority order; google/bing request a specific engine if enabled."},
+    "result_count": {"type": "integer", "description": "Number of search results to return, 1-20. Default 8.", "minimum": 1, "maximum": 20},
+    "fetch_result_index": {"type": "integer", "description": "For search_and_fetch, 1-based result index to fetch. Default 1.", "minimum": 1},
+    "content_type": {"type": "string", "enum": ["text", "html", "text_html", "pdf", "all"], "description": "For fetch/search_and_fetch. text returns extracted readable text; html returns rendered HTML; text_html returns both; pdf saves a rendered PDF and returns the path; all returns text, HTML, and a PDF path."},
+    "open_visual_browser": {"type": "boolean", "description": "Override the project default and show or hide the browser window for this call."},
+    "wait_until": {"type": "string", "enum": ["load", "domcontentloaded", "networkidle"], "description": "Browser load event to wait for. networkidle is thorough; domcontentloaded is faster for heavy pages."},
+    "timeout_seconds": {"type": "integer", "description": "Optional per-call timeout from 1 to 600 seconds. Defaults to the project setting.", "minimum": 1, "maximum": 600},
+    "output_path": {"type": "string", "description": "Optional path/template for saved PDF output. If omitted, PDF files are saved under $ProjectFolder$/.agent/browser_search."},
+    "page_format": {"type": "string", "description": "PDF paper format such as A4, Letter, Legal, or A3. Default A4."},
+    "print_background": {"type": "boolean", "description": "For PDF output, include background colors and images. Default true."},
+    "max_content_chars": {"type": "integer", "description": "Maximum text or HTML characters returned for fetched content. Default 60000.", "minimum": 1000, "maximum": 200000}
+  },
+  "required": ["action"]
+})";
+        definitions.push_back(std::move(web));
+    }
+    if (settings.built_in_window_automation_enabled) {
+        ChatToolDefinition win;
+        win.name = kWindowAutomationToolName;
+        win.description =
+            "Native Windows UI Automation tool for desktop app testing and interaction. "
+            "List open top-level windows, bring a target window to the foreground, inspect the UIA element tree, click/invoke controls, set text in editable controls, or type text into a focused element. "
+            "For WebView2 panes, attach to a remote debugging port and inspect/click/fill Chromium DOM content through the webview2_* actions. "
+            "Use inspect_window or webview2_inspect before manipulating unfamiliar windows. Prefer hwnd, automation_id, CSS selector, label, or exact name when available; element_index is also supported.";
+        win.parameters_json = R"({
+  "type": "object",
+  "properties": {
+    "action": {"type": "string", "enum": ["list_windows", "activate_window", "inspect_window", "click", "set_text", "type_text", "webview2_list_targets", "webview2_inspect", "webview2_click", "webview2_set_text", "webview2_type_text"], "description": "Window automation operation. list_windows discovers native windows; activate_window brings one forward; inspect_window reads UIA elements; click/set_text/type_text interact through UIA/Win32. webview2_* actions attach to a WebView2/Chromium remote debugging endpoint to inspect DOM text/elements and click/fill inside WebView2 content."},
+    "hwnd": {"description": "Target top-level window handle as a hex string such as 0x00123456 or decimal string/integer. Prefer this after list_windows."},
+    "window_index": {"type": "integer", "description": "0-based index from list_windows to target when hwnd is not supplied."},
+    "title": {"type": "string", "description": "Exact top-level window title to target."},
+    "title_contains": {"type": "string", "description": "Case-insensitive substring of the top-level window title."},
+    "process_id": {"type": "integer", "description": "Target process id for the top-level window."},
+    "process_name": {"type": "string", "description": "Case-insensitive process executable name or substring, such as notepad.exe or notepad."},
+    "include_minimized": {"type": "boolean", "description": "For list_windows, include minimized windows. Default true."},
+    "max_windows": {"type": "integer", "description": "For list_windows, maximum windows to return. Default 100.", "minimum": 1, "maximum": 500},
+    "max_depth": {"type": "integer", "description": "For inspect_window and element targeting, max UIA tree depth below the root. Default 6.", "minimum": 0, "maximum": 20},
+    "max_elements": {"type": "integer", "description": "For inspect_window and element targeting, max UIA elements to scan. Default 300.", "minimum": 1, "maximum": 2000},
+    "include_offscreen": {"type": "boolean", "description": "Include offscreen UIA elements during inspection/targeting. Default false."},
+    "element_index": {"type": "integer", "description": "0-based element index from inspect_window or webview2_inspect. Useful but less stable than automation_id/CSS selector."},
+    "automation_id": {"type": "string", "description": "AutomationId of the target UIA element."},
+    "name": {"type": "string", "description": "Exact accessible name of the target UIA element or WebView2 DOM element."},
+    "name_contains": {"type": "string", "description": "Case-insensitive substring of the target UIA or WebView2 DOM element name."},
+    "control_type": {"type": "string", "description": "Target UIA control type, e.g. Button, Edit, Text, Hyperlink, CheckBox, ComboBox, ListItem, MenuItem, TabItem."},
+    "class_name": {"type": "string", "description": "Optional UIA class name filter for target element."},
+    "debug_port": {"type": "integer", "description": "WebView2 remote debugging port, e.g. 9222. The target app must be launched with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=PORT before WebView2 starts."},
+    "debug_ports": {"type": "array", "items": {"type": "integer"}, "description": "Optional list of WebView2 remote debugging ports to probe."},
+    "debug_url": {"type": "string", "description": "Optional full WebView2/Chromium CDP endpoint URL such as http://127.0.0.1:9222."},
+    "debug_host": {"type": "string", "description": "Host for debug_port/debug_ports. Default 127.0.0.1."},
+    "scan_ports": {"type": "boolean", "description": "For webview2_list_targets, scan a small port range when no explicit debug_port/debug_ports is supplied. Default false; otherwise common ports are probed."},
+    "port_range_start": {"type": "integer", "description": "Start port for scan_ports. Default 9222."},
+    "port_range_end": {"type": "integer", "description": "End port for scan_ports, capped to 50 ports after the start."},
+    "target_index": {"type": "integer", "description": "0-based WebView2/Chromium target index from webview2_list_targets."},
+    "target_id": {"type": "string", "description": "Specific WebView2/Chromium target id from webview2_list_targets."},
+    "target_url_contains": {"type": "string", "description": "Case-insensitive substring filter for the WebView2 target URL."},
+    "target_title_contains": {"type": "string", "description": "Case-insensitive substring filter for the WebView2 target title."},
+    "selector": {"type": "string", "description": "CSS selector for a WebView2 DOM element to click/fill."},
+    "label": {"type": "string", "description": "Associated label text for a WebView2 input/control."},
+    "placeholder": {"type": "string", "description": "Placeholder text for a WebView2 input/control."},
+    "text": {"type": "string", "description": "Exact visible text for a WebView2 DOM element."},
+    "text_contains": {"type": "string", "description": "Case-insensitive visible text substring for a WebView2 DOM element."},
+    "max_text_chars": {"type": "integer", "description": "For webview2_inspect, maximum page text characters to return. Default 60000.", "minimum": 1000, "maximum": 200000},
+    "value": {"type": "string", "description": "Text to set or type for set_text/type_text."},
+    "clear_existing": {"type": "boolean", "description": "For set_text/type_text keyboard fallback, select existing text first. Default true for set_text, false for type_text."},
+    "press_enter": {"type": "boolean", "description": "After set_text/type_text, press Enter. Default false."},
+    "prefer_mouse": {"type": "boolean", "description": "For click, skip UIA Invoke/Selection/Toggle and click with mouse coordinates. Default false."},
+    "prefer_js_click": {"type": "boolean", "description": "For webview2_click, use DOM element.click() instead of a mouse click. Default false."},
+    "activate_first": {"type": "boolean", "description": "Bring the target window to foreground before native click/set_text/type_text. Default true."},
+    "timeout_seconds": {"type": "integer", "description": "Optional timeout for WebView2 CDP actions. Default 10 seconds.", "minimum": 1, "maximum": 120}
+  },
+  "required": ["action"]
+})";
+        definitions.push_back(std::move(win));
+    }
     return definitions;
 }
 
@@ -628,6 +812,1320 @@ inline McpToolCallResult CallPowerShell(
     } catch (...) {
         return ErrorResult("PowerShell tool crashed with an unknown error.");
     }
+}
+
+struct ProcessRunResult {
+    bool started = false;
+    bool timed_out = false;
+    bool truncated = false;
+    DWORD exit_code = 1;
+    std::string output;
+    std::string error;
+};
+
+inline std::wstring QuoteCommandArgument(const std::wstring& value) {
+    std::wstring out = L"\"";
+    for (wchar_t ch : value) {
+        if (ch == L'\"') out += L'\\';
+        out += ch;
+    }
+    out += L"\"";
+    return out;
+}
+
+inline ProcessRunResult RunProcessCaptureOutput(
+    const std::wstring& command_line,
+    const std::filesystem::path& working_directory,
+    int timeout_seconds,
+    size_t max_output_bytes) {
+    ProcessRunResult result;
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE read_pipe = nullptr;
+    HANDLE write_pipe = nullptr;
+    if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
+        result.error = "Failed to create process output pipe.";
+        return result;
+    }
+    SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = nullptr;
+    startup.hStdOutput = write_pipe;
+    startup.hStdError = write_pipe;
+
+    PROCESS_INFORMATION process{};
+    std::vector<wchar_t> cmd_buffer(command_line.begin(), command_line.end());
+    cmd_buffer.push_back(L'\0');
+    std::wstring cwd_w = working_directory.empty() ? std::wstring() : working_directory.wstring();
+    const wchar_t* cwd = cwd_w.empty() ? nullptr : cwd_w.c_str();
+
+    const BOOL created = CreateProcessW(
+        nullptr,
+        cmd_buffer.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        cwd,
+        &startup,
+        &process);
+    CloseHandle(write_pipe);
+    if (!created) {
+        const DWORD err = GetLastError();
+        CloseHandle(read_pipe);
+        result.error = "CreateProcess error: " + std::to_string(err);
+        return result;
+    }
+
+    result.started = true;
+    const DWORD timeout_ms = static_cast<DWORD>(std::max(1, timeout_seconds)) * 1000;
+    const DWORD start = GetTickCount();
+    for (;;) {
+        result.output += ReadAvailablePipe(
+            read_pipe,
+            max_output_bytes - std::min(result.output.size(), max_output_bytes),
+            &result.truncated);
+        const DWORD wait = WaitForSingleObject(process.hProcess, 50);
+        if (wait == WAIT_OBJECT_0) break;
+        if (GetTickCount() - start >= timeout_ms) {
+            result.timed_out = true;
+            TerminateProcess(process.hProcess, 1);
+            WaitForSingleObject(process.hProcess, 2000);
+            break;
+        }
+    }
+    result.output += ReadAvailablePipe(
+        read_pipe,
+        max_output_bytes - std::min(result.output.size(), max_output_bytes),
+        &result.truncated);
+
+    GetExitCodeProcess(process.hProcess, &result.exit_code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    CloseHandle(read_pipe);
+    if (result.truncated) {
+        result.output += "\n[output truncated]";
+    }
+    return result;
+}
+
+inline std::filesystem::path FindBrowserSearchRunnerScript() {
+    std::vector<std::filesystem::path> candidates;
+    std::error_code ec;
+    candidates.push_back(std::filesystem::current_path(ec) / "scripts" / "built_in_browser_search_tool.py");
+
+    wchar_t exe_path[MAX_PATH] = {};
+    const DWORD len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        const std::filesystem::path exe_dir = std::filesystem::path(exe_path).parent_path();
+        candidates.push_back(exe_dir / "scripts" / "built_in_browser_search_tool.py");
+        candidates.push_back(exe_dir.parent_path() / "scripts" / "built_in_browser_search_tool.py");
+    }
+
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::exists(candidate, ec)) {
+            return candidate;
+        }
+    }
+    return candidates.empty()
+        ? std::filesystem::path("scripts") / "built_in_browser_search_tool.py"
+        : candidates.front();
+}
+
+inline std::filesystem::path FindWebView2CdpRunnerScript() {
+    std::vector<std::filesystem::path> candidates;
+    std::error_code ec;
+    candidates.push_back(std::filesystem::current_path(ec) / "scripts" / "built_in_webview2_cdp_tool.py");
+
+    wchar_t exe_path[MAX_PATH] = {};
+    const DWORD len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        const std::filesystem::path exe_dir = std::filesystem::path(exe_path).parent_path();
+        candidates.push_back(exe_dir / "scripts" / "built_in_webview2_cdp_tool.py");
+        candidates.push_back(exe_dir.parent_path() / "scripts" / "built_in_webview2_cdp_tool.py");
+    }
+
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::exists(candidate, ec)) {
+            return candidate;
+        }
+    }
+    return candidates.empty()
+        ? std::filesystem::path("scripts") / "built_in_webview2_cdp_tool.py"
+        : candidates.front();
+}
+
+inline std::filesystem::path BrowserSearchProjectFolder(
+    const std::vector<ProjectMcpVariableValue>& variables) {
+    std::string project_folder = Trim(
+        variable_resolver::ExpandTemplate("$ProjectFolder$", variables));
+    if (project_folder.empty() || project_folder.find("$ProjectFolder$") != std::string::npos) {
+        std::error_code ec;
+        return std::filesystem::current_path(ec);
+    }
+    return std::filesystem::path(Utf8ToWide(project_folder));
+}
+
+inline std::string BrowserSearchNormalizeEngine(std::string engine) {
+    engine = LowerAsciiCopy(Trim(engine));
+    if (engine != "google" && engine != "bing" && engine != "auto" && engine != "default") {
+        return "default";
+    }
+    return engine;
+}
+
+inline std::string BrowserSearchNormalizeContentMode(std::string mode) {
+    mode = LowerAsciiCopy(Trim(mode));
+    if (mode != "text" && mode != "html" && mode != "text_html" &&
+        mode != "pdf" && mode != "all") {
+        return "text";
+    }
+    return mode;
+}
+
+inline nlohmann::json ParseBrowserSearchJsonOutput(const std::string& output) {
+    try {
+        return nlohmann::json::parse(output);
+    } catch (...) {
+        const size_t first = output.find('{');
+        const size_t last = output.rfind('}');
+        if (first != std::string::npos && last != std::string::npos && last > first) {
+            return nlohmann::json::parse(output.substr(first, last - first + 1));
+        }
+        throw;
+    }
+}
+
+inline McpToolCallResult CallBrowserSearch(
+    const std::string& arguments_json,
+    const ProjectSettings& settings,
+    const std::vector<ProjectMcpVariableValue>& variables) {
+    nlohmann::json args;
+    try {
+        args = nlohmann::json::parse(arguments_json.empty() ? "{}" : arguments_json);
+    } catch (const std::exception& ex) {
+        return ErrorResult(std::string("Invalid browser web search arguments: ") + ex.what());
+    }
+    if (!args.is_object()) {
+        return ErrorResult("Browser web search arguments must be a JSON object.");
+    }
+
+    const std::string action = LowerAsciiCopy(Trim(args.value("action", "search")));
+    if (action != "search" && action != "fetch" && action != "search_and_fetch") {
+        return ErrorResult("browser_web_search action must be search, fetch, or search_and_fetch.");
+    }
+
+    std::vector<std::string> allowed_engines;
+    if (settings.browser_search_google_enabled) allowed_engines.push_back("google");
+    if (settings.browser_search_bing_enabled) allowed_engines.push_back("bing");
+    if (allowed_engines.empty()) allowed_engines.push_back("google");
+
+    std::vector<std::string> engine_order;
+    for (const auto& engine : settings.browser_search_engine_order) {
+        const std::string normalized = LowerAsciiCopy(Trim(engine));
+        if ((normalized == "google" || normalized == "bing") &&
+            std::find(allowed_engines.begin(), allowed_engines.end(), normalized) != allowed_engines.end() &&
+            std::find(engine_order.begin(), engine_order.end(), normalized) == engine_order.end()) {
+            engine_order.push_back(normalized);
+        }
+    }
+    for (const auto& engine : allowed_engines) {
+        if (std::find(engine_order.begin(), engine_order.end(), engine) == engine_order.end()) {
+            engine_order.push_back(engine);
+        }
+    }
+
+    const std::filesystem::path project_folder = BrowserSearchProjectFolder(variables);
+    const std::filesystem::path output_dir = project_folder / ".agent" / "browser_search";
+    std::error_code ec;
+    std::filesystem::create_directories(output_dir, ec);
+
+    std::string output_path = Trim(args.value("output_path", ""));
+    if (!output_path.empty()) {
+        output_path = variable_resolver::ExpandTemplate(output_path, variables);
+        std::filesystem::path out_path(Utf8ToWide(output_path));
+        if (out_path.is_relative()) {
+            out_path = output_dir / out_path;
+        }
+        output_path = WideToUtf8(out_path.wstring());
+    }
+
+    const int timeout_seconds = std::clamp(
+        args.value("timeout_seconds", settings.browser_search_timeout_seconds),
+        1,
+        600);
+
+    nlohmann::json payload = {
+        {"action", action},
+        {"engine", BrowserSearchNormalizeEngine(args.value("engine", "default"))},
+        {"default_engine", BrowserSearchNormalizeEngine(settings.browser_search_default_engine)},
+        {"allowed_engines", allowed_engines},
+        {"engine_order", engine_order},
+        {"result_count", std::clamp(args.value("result_count", 8), 1, 20)},
+        {"fetch_result_index", std::max(1, args.value("fetch_result_index", 1))},
+        {"content_type", BrowserSearchNormalizeContentMode(
+            args.value("content_type", settings.browser_search_default_content_mode))},
+        {"open_visual_browser", args.contains("open_visual_browser") && args["open_visual_browser"].is_boolean()
+            ? args["open_visual_browser"].get<bool>()
+            : settings.browser_search_open_visual_browser},
+        {"wait_until", args.value("wait_until", "networkidle")},
+        {"timeout_seconds", timeout_seconds},
+        {"output_dir", WideToUtf8(output_dir.wstring())},
+        {"cookie_file", WideToUtf8((output_dir / "cookies.json").wstring())},
+        {"page_format", args.value("page_format", "A4")},
+        {"print_background", args.value("print_background", true)},
+        {"max_content_chars", std::clamp(args.value("max_content_chars", 60000), 1000, 200000)},
+        {"delays", {
+            {"page_load", {settings.browser_search_page_load_delay_min_ms, settings.browser_search_page_load_delay_max_ms}},
+            {"keystroke", {settings.browser_search_keystroke_delay_min_ms, settings.browser_search_keystroke_delay_max_ms}},
+            {"click", {settings.browser_search_click_delay_min_ms, settings.browser_search_click_delay_max_ms}},
+            {"pre_submit", {settings.browser_search_pre_submit_delay_min_ms, settings.browser_search_pre_submit_delay_max_ms}},
+            {"post_results", {settings.browser_search_post_results_delay_min_ms, settings.browser_search_post_results_delay_max_ms}},
+        }},
+    };
+    if (args.contains("query") && args["query"].is_string()) {
+        payload["query"] = args["query"].get<std::string>();
+    }
+    if (args.contains("url") && args["url"].is_string()) {
+        payload["url"] = args["url"].get<std::string>();
+    }
+    if (!output_path.empty()) {
+        payload["output_path"] = output_path;
+    }
+
+    const std::filesystem::path script = FindBrowserSearchRunnerScript();
+    if (!std::filesystem::exists(script, ec)) {
+        return ErrorResult("Browser web search runner script was not found: " + WideToUtf8(script.wstring()));
+    }
+
+    const std::string payload_text = payload.dump();
+    const std::string encoded = Base64Encode(
+        reinterpret_cast<const unsigned char*>(payload_text.data()),
+        payload_text.size());
+
+    const std::wstring quoted_script = QuoteCommandArgument(script.wstring());
+    const std::wstring quoted_payload = QuoteCommandArgument(Utf8ToWide(encoded));
+    const std::vector<std::wstring> commands = {
+        L"python.exe -u " + quoted_script + L" --payload-base64 " + quoted_payload,
+        L"py.exe -3 -u " + quoted_script + L" --payload-base64 " + quoted_payload,
+    };
+
+    ProcessRunResult run;
+    for (size_t i = 0; i < commands.size(); ++i) {
+        run = RunProcessCaptureOutput(
+            commands[i],
+            script.parent_path(),
+            timeout_seconds + 15,
+            768 * 1024);
+        if (run.started || i + 1 == commands.size()) break;
+    }
+
+    if (!run.started) {
+        return ErrorResult(
+            "Failed to start the browser web search runner. Install Python, Playwright, undetected-playwright, and BeautifulSoup. Last error: " +
+            run.error);
+    }
+
+    nlohmann::json parsed;
+    bool parsed_json = false;
+    try {
+        parsed = ParseBrowserSearchJsonOutput(run.output);
+        parsed_json = parsed.is_object();
+    } catch (const std::exception& ex) {
+        return ErrorResult(
+            std::string("Browser web search runner did not return valid JSON: ") + ex.what() +
+            "\nOutput:\n" + run.output);
+    }
+
+    if (parsed_json) {
+        parsed["tool"] = kBrowserSearchToolName;
+        parsed["exit_code"] = static_cast<int>(run.exit_code);
+        parsed["timed_out"] = run.timed_out;
+        parsed["output_truncated"] = run.truncated;
+    }
+
+    McpToolCallResult result;
+    result.success = !run.timed_out && parsed.value("success", false);
+    result.is_tool_error = !result.success;
+    result.raw_result_json = parsed.dump(2);
+    std::ostringstream content;
+    content << "Browser web search " << (result.success ? "completed" : "failed")
+            << " (exit code " << run.exit_code;
+    if (run.timed_out) content << ", timed out";
+    content << ").\n";
+    if (parsed.contains("error") && parsed["error"].is_string()) {
+        content << "Error: " << parsed["error"].get<std::string>() << "\n";
+    }
+    content << parsed.dump(2);
+    result.content_text = content.str();
+    return result;
+}
+
+inline bool WindowAutomationIsWebView2Action(const std::string& action) {
+    return action == "webview2listtargets" ||
+           action == "webview2inspect" ||
+           action == "webview2click" ||
+           action == "webview2settext" ||
+           action == "webview2typetext";
+}
+
+inline std::string WindowAutomationCanonicalWebView2Action(const std::string& action) {
+    if (action == "webview2listtargets") return "webview2_list_targets";
+    if (action == "webview2inspect") return "webview2_inspect";
+    if (action == "webview2click") return "webview2_click";
+    if (action == "webview2settext") return "webview2_set_text";
+    if (action == "webview2typetext") return "webview2_type_text";
+    return action;
+}
+
+inline McpToolCallResult CallWindowAutomationWebView2(
+    const std::string& normalized_action,
+    const nlohmann::json& args) {
+    nlohmann::json payload = args;
+    payload["action"] = WindowAutomationCanonicalWebView2Action(normalized_action);
+
+    const int timeout_seconds = std::clamp(
+        payload.value("timeout_seconds", 10),
+        1,
+        120);
+    payload["timeout_seconds"] = timeout_seconds;
+
+    const std::filesystem::path script = FindWebView2CdpRunnerScript();
+    std::error_code ec;
+    if (!std::filesystem::exists(script, ec)) {
+        return ErrorResult("WebView2 CDP runner script was not found: " + WideToUtf8(script.wstring()));
+    }
+
+    const std::string payload_text = payload.dump();
+    const std::string encoded = Base64Encode(
+        reinterpret_cast<const unsigned char*>(payload_text.data()),
+        payload_text.size());
+
+    const std::wstring quoted_script = QuoteCommandArgument(script.wstring());
+    const std::wstring quoted_payload = QuoteCommandArgument(Utf8ToWide(encoded));
+    const std::vector<std::wstring> commands = {
+        L"python.exe -u " + quoted_script + L" --payload-base64 " + quoted_payload,
+        L"py.exe -3 -u " + quoted_script + L" --payload-base64 " + quoted_payload,
+    };
+
+    ProcessRunResult run;
+    for (size_t i = 0; i < commands.size(); ++i) {
+        run = RunProcessCaptureOutput(
+            commands[i],
+            script.parent_path(),
+            timeout_seconds + 10,
+            1024 * 1024);
+        if (run.started || i + 1 == commands.size()) break;
+    }
+
+    if (!run.started) {
+        return ErrorResult(
+            "Failed to start the WebView2 CDP runner. Install Python and Playwright via Setup System. Last error: " +
+            run.error);
+    }
+
+    nlohmann::json parsed;
+    try {
+        parsed = ParseBrowserSearchJsonOutput(run.output);
+    } catch (const std::exception& ex) {
+        return ErrorResult(
+            std::string("WebView2 CDP runner did not return valid JSON: ") + ex.what() +
+            "\nOutput:\n" + run.output);
+    }
+
+    parsed["tool"] = kWindowAutomationToolName;
+    parsed["cdp_mode"] = "webview2";
+    parsed["exit_code"] = static_cast<int>(run.exit_code);
+    parsed["timed_out"] = run.timed_out;
+    parsed["output_truncated"] = run.truncated;
+
+    McpToolCallResult result;
+    result.success = !run.timed_out && parsed.value("success", false);
+    result.is_tool_error = !result.success;
+    result.raw_result_json = parsed.dump(2);
+
+    std::ostringstream content;
+    content << "Window Automation WebView2 CDP action "
+            << payload.value("action", std::string("webview2"))
+            << (result.success ? " completed" : " failed")
+            << " (exit code " << run.exit_code;
+    if (run.timed_out) content << ", timed out";
+    content << ").\n";
+    if (parsed.contains("error") && parsed["error"].is_string()) {
+        content << "Error: " << parsed["error"].get<std::string>() << "\n";
+    }
+    if (parsed.contains("hint") && parsed["hint"].is_string() &&
+        !parsed["hint"].get<std::string>().empty()) {
+        content << "Hint: " << parsed["hint"].get<std::string>() << "\n";
+    }
+    content << parsed.dump(2);
+    result.content_text = content.str();
+    return result;
+}
+
+struct WindowAutomationComApartment {
+    HRESULT hr = E_FAIL;
+    bool initialized = false;
+
+    WindowAutomationComApartment() {
+        hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        initialized = SUCCEEDED(hr);
+        if (hr == RPC_E_CHANGED_MODE) {
+            initialized = false;
+            hr = S_OK;
+        }
+    }
+
+    ~WindowAutomationComApartment() {
+        if (initialized) {
+            CoUninitialize();
+        }
+    }
+};
+
+struct WindowAutomationWindowInfo {
+    HWND hwnd = nullptr;
+    std::wstring title;
+    std::wstring class_name;
+    DWORD process_id = 0;
+    std::wstring process_path;
+    bool visible = false;
+    bool minimized = false;
+    bool foreground = false;
+};
+
+inline std::string WindowAutomationHresult(HRESULT hr) {
+    std::ostringstream out;
+    out << "0x" << std::uppercase << std::hex << static_cast<unsigned long>(hr);
+    return out.str();
+}
+
+inline std::string WindowAutomationHwndString(HWND hwnd) {
+    std::ostringstream out;
+    out << "0x" << std::uppercase << std::hex << reinterpret_cast<std::uintptr_t>(hwnd);
+    return out.str();
+}
+
+inline std::string WindowAutomationNormalize(std::string value) {
+    value = LowerAsciiCopy(Trim(value));
+    value.erase(std::remove_if(value.begin(), value.end(),
+        [](unsigned char ch) { return ch == ' ' || ch == '_' || ch == '-'; }), value.end());
+    return value;
+}
+
+inline std::optional<HWND> WindowAutomationParseHwnd(const nlohmann::json& value) {
+    try {
+        if (value.is_number_unsigned()) {
+            return reinterpret_cast<HWND>(static_cast<std::uintptr_t>(value.get<std::uint64_t>()));
+        }
+        if (value.is_number_integer()) {
+            const auto parsed = value.get<std::int64_t>();
+            if (parsed > 0) {
+                return reinterpret_cast<HWND>(static_cast<std::uintptr_t>(parsed));
+            }
+        }
+        if (value.is_string()) {
+            std::string text = Trim(value.get<std::string>());
+            if (text.empty()) return std::nullopt;
+            int base = 10;
+            if (text.rfind("0x", 0) == 0 || text.rfind("0X", 0) == 0) {
+                base = 16;
+                text = text.substr(2);
+            }
+            const auto parsed = std::stoull(text, nullptr, base);
+            if (parsed > 0) {
+                return reinterpret_cast<HWND>(static_cast<std::uintptr_t>(parsed));
+            }
+        }
+    } catch (...) {
+    }
+    return std::nullopt;
+}
+
+inline std::wstring WindowAutomationWindowText(HWND hwnd) {
+    const int len = GetWindowTextLengthW(hwnd);
+    if (len <= 0) return {};
+    std::wstring text(static_cast<size_t>(len) + 1, L'\0');
+    const int copied = GetWindowTextW(hwnd, text.data(), static_cast<int>(text.size()));
+    text.resize(std::max(0, copied));
+    return text;
+}
+
+inline std::wstring WindowAutomationClassName(HWND hwnd) {
+    wchar_t buffer[256] = {};
+    const int len = GetClassNameW(hwnd, buffer, static_cast<int>(std::size(buffer)));
+    return len > 0 ? std::wstring(buffer, static_cast<size_t>(len)) : std::wstring();
+}
+
+inline std::wstring WindowAutomationProcessPath(DWORD process_id) {
+    std::wstring result;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+    if (!process) return result;
+    wchar_t buffer[32768] = {};
+    DWORD size = static_cast<DWORD>(std::size(buffer));
+    if (QueryFullProcessImageNameW(process, 0, buffer, &size) && size > 0) {
+        result.assign(buffer, buffer + size);
+    }
+    CloseHandle(process);
+    return result;
+}
+
+inline std::string WindowAutomationProcessName(const std::wstring& path) {
+    if (path.empty()) return {};
+    return WideToUtf8(std::filesystem::path(path).filename().wstring());
+}
+
+inline nlohmann::json WindowAutomationWindowJson(const WindowAutomationWindowInfo& info, int index) {
+    RECT rect{};
+    GetWindowRect(info.hwnd, &rect);
+    return {
+        {"index", index},
+        {"hwnd", WindowAutomationHwndString(info.hwnd)},
+        {"title", WideToUtf8(info.title)},
+        {"class_name", WideToUtf8(info.class_name)},
+        {"process_id", static_cast<int>(info.process_id)},
+        {"process_name", WindowAutomationProcessName(info.process_path)},
+        {"process_path", WideToUtf8(info.process_path)},
+        {"visible", info.visible},
+        {"minimized", info.minimized},
+        {"foreground", info.foreground},
+        {"bounds", {
+            {"left", rect.left},
+            {"top", rect.top},
+            {"right", rect.right},
+            {"bottom", rect.bottom},
+            {"width", rect.right - rect.left},
+            {"height", rect.bottom - rect.top}
+        }}
+    };
+}
+
+inline std::vector<WindowAutomationWindowInfo> WindowAutomationListWindows(const nlohmann::json& args) {
+    struct EnumState {
+        std::vector<WindowAutomationWindowInfo> windows;
+    } state;
+
+    EnumWindows([](HWND hwnd, LPARAM lparam) -> BOOL {
+        auto* state = reinterpret_cast<EnumState*>(lparam);
+        if (!IsWindow(hwnd) || !IsWindowVisible(hwnd)) {
+            return TRUE;
+        }
+        WindowAutomationWindowInfo info;
+        info.hwnd = hwnd;
+        info.title = WindowAutomationWindowText(hwnd);
+        info.class_name = WindowAutomationClassName(hwnd);
+        info.visible = IsWindowVisible(hwnd) != FALSE;
+        info.minimized = IsIconic(hwnd) != FALSE;
+        info.foreground = GetForegroundWindow() == hwnd;
+        GetWindowThreadProcessId(hwnd, &info.process_id);
+        info.process_path = WindowAutomationProcessPath(info.process_id);
+        if (!info.title.empty() || !info.class_name.empty()) {
+            state->windows.push_back(std::move(info));
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&state));
+
+    const std::string title = LowerAsciiCopy(Trim(args.value("title", "")));
+    const std::string title_contains = LowerAsciiCopy(Trim(args.value("title_contains", "")));
+    const std::string process_name = LowerAsciiCopy(Trim(args.value("process_name", "")));
+    const int process_id = args.value("process_id", 0);
+    const bool include_minimized = args.value("include_minimized", true);
+
+    std::vector<WindowAutomationWindowInfo> filtered;
+    for (auto& info : state.windows) {
+        if (!include_minimized && info.minimized) continue;
+        const std::string win_title = LowerAsciiCopy(WideToUtf8(info.title));
+        if (!title.empty() && win_title != title) continue;
+        if (!title_contains.empty() && win_title.find(title_contains) == std::string::npos) continue;
+        if (process_id > 0 && static_cast<int>(info.process_id) != process_id) continue;
+        if (!process_name.empty()) {
+            const std::string name = LowerAsciiCopy(WindowAutomationProcessName(info.process_path));
+            const std::string path = LowerAsciiCopy(WideToUtf8(info.process_path));
+            if (name.find(process_name) == std::string::npos &&
+                path.find(process_name) == std::string::npos) {
+                continue;
+            }
+        }
+        filtered.push_back(std::move(info));
+    }
+    return filtered;
+}
+
+inline std::optional<WindowAutomationWindowInfo> WindowAutomationResolveWindow(
+    const nlohmann::json& args,
+    std::string* error) {
+    if (args.contains("hwnd")) {
+        const auto parsed = WindowAutomationParseHwnd(args["hwnd"]);
+        if (!parsed || !IsWindow(*parsed)) {
+            if (error) *error = "The supplied hwnd is not a valid window handle.";
+            return std::nullopt;
+        }
+        WindowAutomationWindowInfo info;
+        info.hwnd = *parsed;
+        info.title = WindowAutomationWindowText(*parsed);
+        info.class_name = WindowAutomationClassName(*parsed);
+        info.visible = IsWindowVisible(*parsed) != FALSE;
+        info.minimized = IsIconic(*parsed) != FALSE;
+        info.foreground = GetForegroundWindow() == *parsed;
+        GetWindowThreadProcessId(*parsed, &info.process_id);
+        info.process_path = WindowAutomationProcessPath(info.process_id);
+        return info;
+    }
+
+    auto windows = WindowAutomationListWindows(args);
+    if (windows.empty()) {
+        if (error) *error = "No matching top-level window was found. Call list_windows first or provide hwnd/title/title_contains/process_id.";
+        return std::nullopt;
+    }
+    int index = args.value("window_index", 0);
+    if (index < 0 || index >= static_cast<int>(windows.size())) {
+        if (error) {
+            *error = "window_index is out of range for the filtered window list.";
+        }
+        return std::nullopt;
+    }
+    return windows[static_cast<size_t>(index)];
+}
+
+inline bool WindowAutomationActivateWindow(HWND hwnd) {
+    if (!IsWindow(hwnd)) return false;
+    const DWORD current_thread_id = GetCurrentThreadId();
+    const DWORD target_thread_id = GetWindowThreadProcessId(hwnd, nullptr);
+    DWORD foreground_thread_id = 0;
+    if (HWND foreground = GetForegroundWindow()) {
+        foreground_thread_id = GetWindowThreadProcessId(foreground, nullptr);
+    }
+    const bool attached_target =
+        target_thread_id != 0 && target_thread_id != current_thread_id &&
+        AttachThreadInput(current_thread_id, target_thread_id, TRUE) != FALSE;
+    const bool attached_foreground =
+        foreground_thread_id != 0 && foreground_thread_id != current_thread_id &&
+        foreground_thread_id != target_thread_id &&
+        AttachThreadInput(current_thread_id, foreground_thread_id, TRUE) != FALSE;
+
+    if (IsIconic(hwnd)) {
+        ShowWindow(hwnd, SW_RESTORE);
+    } else {
+        ShowWindow(hwnd, SW_SHOW);
+    }
+    BringWindowToTop(hwnd);
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    const bool foreground_set = SetForegroundWindow(hwnd) != FALSE;
+    SetFocus(hwnd);
+
+    if (attached_foreground) AttachThreadInput(current_thread_id, foreground_thread_id, FALSE);
+    if (attached_target) AttachThreadInput(current_thread_id, target_thread_id, FALSE);
+    return foreground_set || GetForegroundWindow() == hwnd;
+}
+
+inline std::string WindowAutomationControlTypeName(CONTROLTYPEID id) {
+    switch (id) {
+    case UIA_ButtonControlTypeId: return "Button";
+    case UIA_CalendarControlTypeId: return "Calendar";
+    case UIA_CheckBoxControlTypeId: return "CheckBox";
+    case UIA_ComboBoxControlTypeId: return "ComboBox";
+    case UIA_CustomControlTypeId: return "Custom";
+    case UIA_DataGridControlTypeId: return "DataGrid";
+    case UIA_DataItemControlTypeId: return "DataItem";
+    case UIA_DocumentControlTypeId: return "Document";
+    case UIA_EditControlTypeId: return "Edit";
+    case UIA_GroupControlTypeId: return "Group";
+    case UIA_HeaderControlTypeId: return "Header";
+    case UIA_HeaderItemControlTypeId: return "HeaderItem";
+    case UIA_HyperlinkControlTypeId: return "Hyperlink";
+    case UIA_ImageControlTypeId: return "Image";
+    case UIA_ListControlTypeId: return "List";
+    case UIA_ListItemControlTypeId: return "ListItem";
+    case UIA_MenuControlTypeId: return "Menu";
+    case UIA_MenuBarControlTypeId: return "MenuBar";
+    case UIA_MenuItemControlTypeId: return "MenuItem";
+    case UIA_PaneControlTypeId: return "Pane";
+    case UIA_ProgressBarControlTypeId: return "ProgressBar";
+    case UIA_RadioButtonControlTypeId: return "RadioButton";
+    case UIA_ScrollBarControlTypeId: return "ScrollBar";
+    case UIA_SemanticZoomControlTypeId: return "SemanticZoom";
+    case UIA_SeparatorControlTypeId: return "Separator";
+    case UIA_SliderControlTypeId: return "Slider";
+    case UIA_SpinnerControlTypeId: return "Spinner";
+    case UIA_SplitButtonControlTypeId: return "SplitButton";
+    case UIA_StatusBarControlTypeId: return "StatusBar";
+    case UIA_TabControlTypeId: return "Tab";
+    case UIA_TabItemControlTypeId: return "TabItem";
+    case UIA_TableControlTypeId: return "Table";
+    case UIA_TextControlTypeId: return "Text";
+    case UIA_ThumbControlTypeId: return "Thumb";
+    case UIA_TitleBarControlTypeId: return "TitleBar";
+    case UIA_ToolBarControlTypeId: return "ToolBar";
+    case UIA_ToolTipControlTypeId: return "ToolTip";
+    case UIA_TreeControlTypeId: return "Tree";
+    case UIA_TreeItemControlTypeId: return "TreeItem";
+    case UIA_WindowControlTypeId: return "Window";
+    default: return std::to_string(id);
+    }
+}
+
+inline std::optional<CONTROLTYPEID> WindowAutomationControlTypeId(std::string value) {
+    value = WindowAutomationNormalize(value);
+    if (value == "button") return UIA_ButtonControlTypeId;
+    if (value == "calendar") return UIA_CalendarControlTypeId;
+    if (value == "checkbox" || value == "check") return UIA_CheckBoxControlTypeId;
+    if (value == "combobox" || value == "combo") return UIA_ComboBoxControlTypeId;
+    if (value == "custom") return UIA_CustomControlTypeId;
+    if (value == "datagrid") return UIA_DataGridControlTypeId;
+    if (value == "dataitem") return UIA_DataItemControlTypeId;
+    if (value == "document") return UIA_DocumentControlTypeId;
+    if (value == "edit" || value == "textbox" || value == "textinput") return UIA_EditControlTypeId;
+    if (value == "group") return UIA_GroupControlTypeId;
+    if (value == "hyperlink" || value == "link") return UIA_HyperlinkControlTypeId;
+    if (value == "image") return UIA_ImageControlTypeId;
+    if (value == "list") return UIA_ListControlTypeId;
+    if (value == "listitem") return UIA_ListItemControlTypeId;
+    if (value == "menu") return UIA_MenuControlTypeId;
+    if (value == "menubar") return UIA_MenuBarControlTypeId;
+    if (value == "menuitem") return UIA_MenuItemControlTypeId;
+    if (value == "pane") return UIA_PaneControlTypeId;
+    if (value == "radiobutton" || value == "radio") return UIA_RadioButtonControlTypeId;
+    if (value == "tab") return UIA_TabControlTypeId;
+    if (value == "tabitem") return UIA_TabItemControlTypeId;
+    if (value == "table") return UIA_TableControlTypeId;
+    if (value == "text" || value == "label") return UIA_TextControlTypeId;
+    if (value == "tree") return UIA_TreeControlTypeId;
+    if (value == "treeitem") return UIA_TreeItemControlTypeId;
+    if (value == "window") return UIA_WindowControlTypeId;
+    return std::nullopt;
+}
+
+inline std::string WindowAutomationTakeBstr(BSTR value) {
+    if (!value) return {};
+    std::wstring wide(value, SysStringLen(value));
+    SysFreeString(value);
+    return WideToUtf8(wide);
+}
+
+inline std::string WindowAutomationElementName(IUIAutomationElement* element) {
+    BSTR value = nullptr;
+    return SUCCEEDED(element->get_CurrentName(&value)) ? WindowAutomationTakeBstr(value) : std::string();
+}
+
+inline std::string WindowAutomationElementAutomationId(IUIAutomationElement* element) {
+    BSTR value = nullptr;
+    return SUCCEEDED(element->get_CurrentAutomationId(&value)) ? WindowAutomationTakeBstr(value) : std::string();
+}
+
+inline std::string WindowAutomationElementClassName(IUIAutomationElement* element) {
+    BSTR value = nullptr;
+    return SUCCEEDED(element->get_CurrentClassName(&value)) ? WindowAutomationTakeBstr(value) : std::string();
+}
+
+inline std::string WindowAutomationElementLocalizedType(IUIAutomationElement* element) {
+    BSTR value = nullptr;
+    return SUCCEEDED(element->get_CurrentLocalizedControlType(&value)) ? WindowAutomationTakeBstr(value) : std::string();
+}
+
+inline std::string WindowAutomationElementFrameworkId(IUIAutomationElement* element) {
+    BSTR value = nullptr;
+    return SUCCEEDED(element->get_CurrentFrameworkId(&value)) ? WindowAutomationTakeBstr(value) : std::string();
+}
+
+inline bool WindowAutomationBoolProperty(IUIAutomationElement* element, PROPERTYID id) {
+    VARIANT value;
+    VariantInit(&value);
+    bool result = false;
+    if (SUCCEEDED(element->GetCurrentPropertyValue(id, &value)) && value.vt == VT_BOOL) {
+        result = value.boolVal == VARIANT_TRUE;
+    }
+    VariantClear(&value);
+    return result;
+}
+
+inline bool WindowAutomationPatternAvailable(IUIAutomationElement* element, PROPERTYID id) {
+    return WindowAutomationBoolProperty(element, id);
+}
+
+inline std::string WindowAutomationValue(IUIAutomationElement* element) {
+    Microsoft::WRL::ComPtr<IUIAutomationValuePattern> value_pattern;
+    if (SUCCEEDED(element->GetCurrentPatternAs(UIA_ValuePatternId, IID_PPV_ARGS(&value_pattern))) && value_pattern) {
+        BSTR value = nullptr;
+        if (SUCCEEDED(value_pattern->get_CurrentValue(&value))) {
+            return WindowAutomationTakeBstr(value);
+        }
+    }
+    return {};
+}
+
+inline void WindowAutomationCollectElementsRecursive(
+    IUIAutomationTreeWalker* walker,
+    IUIAutomationElement* element,
+    int depth,
+    int max_depth,
+    int max_elements,
+    bool include_offscreen,
+    std::vector<Microsoft::WRL::ComPtr<IUIAutomationElement>>& elements) {
+    if (!element || static_cast<int>(elements.size()) >= max_elements) return;
+
+    BOOL offscreen = FALSE;
+    element->get_CurrentIsOffscreen(&offscreen);
+    if (include_offscreen || !offscreen || depth == 0) {
+        Microsoft::WRL::ComPtr<IUIAutomationElement> retained;
+        element->AddRef();
+        retained.Attach(element);
+        elements.push_back(retained);
+    }
+
+    if (depth >= max_depth || static_cast<int>(elements.size()) >= max_elements) return;
+    Microsoft::WRL::ComPtr<IUIAutomationElement> child;
+    if (FAILED(walker->GetFirstChildElement(element, &child)) || !child) return;
+    while (child && static_cast<int>(elements.size()) < max_elements) {
+        WindowAutomationCollectElementsRecursive(
+            walker, child.Get(), depth + 1, max_depth, max_elements, include_offscreen, elements);
+        Microsoft::WRL::ComPtr<IUIAutomationElement> next;
+        if (FAILED(walker->GetNextSiblingElement(child.Get(), &next))) break;
+        child = next;
+    }
+}
+
+inline std::vector<Microsoft::WRL::ComPtr<IUIAutomationElement>> WindowAutomationCollectElements(
+    IUIAutomation* automation,
+    IUIAutomationElement* root,
+    int max_depth,
+    int max_elements,
+    bool include_offscreen) {
+    std::vector<Microsoft::WRL::ComPtr<IUIAutomationElement>> elements;
+    Microsoft::WRL::ComPtr<IUIAutomationTreeWalker> walker;
+    if (FAILED(automation->get_ControlViewWalker(&walker)) || !walker) {
+        return elements;
+    }
+    WindowAutomationCollectElementsRecursive(
+        walker.Get(), root, 0, max_depth, max_elements, include_offscreen, elements);
+    return elements;
+}
+
+inline nlohmann::json WindowAutomationElementJson(IUIAutomationElement* element, int index) {
+    CONTROLTYPEID control_type = 0;
+    element->get_CurrentControlType(&control_type);
+    BOOL enabled = FALSE;
+    BOOL offscreen = FALSE;
+    element->get_CurrentIsEnabled(&enabled);
+    element->get_CurrentIsOffscreen(&offscreen);
+    int process_id = 0;
+    element->get_CurrentProcessId(&process_id);
+    RECT rect{};
+    element->get_CurrentBoundingRectangle(&rect);
+    POINT point{};
+    BOOL has_clickable_point = FALSE;
+    element->GetClickablePoint(&point, &has_clickable_point);
+
+    std::vector<std::string> patterns;
+    const auto add_pattern = [&](PROPERTYID id, const char* name) {
+        if (WindowAutomationPatternAvailable(element, id)) patterns.push_back(name);
+    };
+    add_pattern(UIA_IsInvokePatternAvailablePropertyId, "Invoke");
+    add_pattern(UIA_IsValuePatternAvailablePropertyId, "Value");
+    add_pattern(UIA_IsTextPatternAvailablePropertyId, "Text");
+    add_pattern(UIA_IsSelectionItemPatternAvailablePropertyId, "SelectionItem");
+    add_pattern(UIA_IsTogglePatternAvailablePropertyId, "Toggle");
+    add_pattern(UIA_IsScrollItemPatternAvailablePropertyId, "ScrollItem");
+
+    nlohmann::json item = {
+        {"index", index},
+        {"name", WindowAutomationElementName(element)},
+        {"automation_id", WindowAutomationElementAutomationId(element)},
+        {"control_type", WindowAutomationControlTypeName(control_type)},
+        {"control_type_id", control_type},
+        {"localized_control_type", WindowAutomationElementLocalizedType(element)},
+        {"class_name", WindowAutomationElementClassName(element)},
+        {"framework_id", WindowAutomationElementFrameworkId(element)},
+        {"process_id", process_id},
+        {"enabled", enabled == TRUE},
+        {"offscreen", offscreen == TRUE},
+        {"patterns", patterns},
+        {"bounds", {
+            {"left", rect.left},
+            {"top", rect.top},
+            {"right", rect.right},
+            {"bottom", rect.bottom},
+            {"width", rect.right - rect.left},
+            {"height", rect.bottom - rect.top}
+        }}
+    };
+    const std::string value = WindowAutomationValue(element);
+    if (!value.empty()) item["value"] = value;
+    if (has_clickable_point) {
+        item["clickable_point"] = {{"x", point.x}, {"y", point.y}};
+    }
+    return item;
+}
+
+inline bool WindowAutomationHasElementSelector(const nlohmann::json& args) {
+    return args.contains("element_index") || args.contains("automation_id") ||
+        args.contains("name") || args.contains("name_contains") ||
+        args.contains("control_type") || args.contains("class_name");
+}
+
+inline bool WindowAutomationElementMatches(IUIAutomationElement* element, const nlohmann::json& args) {
+    if (!WindowAutomationHasElementSelector(args)) return false;
+    if (args.contains("automation_id") && args["automation_id"].is_string()) {
+        if (LowerAsciiCopy(WindowAutomationElementAutomationId(element)) !=
+            LowerAsciiCopy(Trim(args["automation_id"].get<std::string>()))) {
+            return false;
+        }
+    }
+    if (args.contains("name") && args["name"].is_string()) {
+        if (LowerAsciiCopy(WindowAutomationElementName(element)) !=
+            LowerAsciiCopy(Trim(args["name"].get<std::string>()))) {
+            return false;
+        }
+    }
+    if (args.contains("name_contains") && args["name_contains"].is_string()) {
+        const std::string needle = LowerAsciiCopy(Trim(args["name_contains"].get<std::string>()));
+        if (LowerAsciiCopy(WindowAutomationElementName(element)).find(needle) == std::string::npos) {
+            return false;
+        }
+    }
+    if (args.contains("class_name") && args["class_name"].is_string()) {
+        if (LowerAsciiCopy(WindowAutomationElementClassName(element)) !=
+            LowerAsciiCopy(Trim(args["class_name"].get<std::string>()))) {
+            return false;
+        }
+    }
+    if (args.contains("control_type") && args["control_type"].is_string()) {
+        const auto wanted = WindowAutomationControlTypeId(args["control_type"].get<std::string>());
+        if (!wanted) return false;
+        CONTROLTYPEID actual = 0;
+        element->get_CurrentControlType(&actual);
+        if (actual != *wanted) return false;
+    }
+    return true;
+}
+
+inline Microsoft::WRL::ComPtr<IUIAutomationElement> WindowAutomationFindElement(
+    const std::vector<Microsoft::WRL::ComPtr<IUIAutomationElement>>& elements,
+    const nlohmann::json& args,
+    std::string* error) {
+    if (args.contains("element_index")) {
+        const int index = args.value("element_index", -1);
+        if (index >= 0 && index < static_cast<int>(elements.size())) {
+            return elements[static_cast<size_t>(index)];
+        }
+        if (error) *error = "element_index is out of range for the inspected UIA tree.";
+        return {};
+    }
+    if (!WindowAutomationHasElementSelector(args)) {
+        if (error) *error = "No element selector was supplied. Use element_index, automation_id, name/name_contains, or control_type.";
+        return {};
+    }
+    for (const auto& element : elements) {
+        if (WindowAutomationElementMatches(element.Get(), args)) {
+            return element;
+        }
+    }
+    if (error) *error = "No matching UIA element was found in the target window.";
+    return {};
+}
+
+inline void WindowAutomationSendKey(WORD vk, bool key_down) {
+    INPUT input{};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = vk;
+    if (!key_down) input.ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(1, &input, sizeof(INPUT));
+}
+
+inline void WindowAutomationSendCtrlA() {
+    WindowAutomationSendKey(VK_CONTROL, true);
+    WindowAutomationSendKey('A', true);
+    WindowAutomationSendKey('A', false);
+    WindowAutomationSendKey(VK_CONTROL, false);
+}
+
+inline void WindowAutomationSendEnter() {
+    WindowAutomationSendKey(VK_RETURN, true);
+    WindowAutomationSendKey(VK_RETURN, false);
+}
+
+inline void WindowAutomationSendUnicodeText(const std::string& value) {
+    const std::wstring text = Utf8ToWide(value);
+    for (wchar_t ch : text) {
+        INPUT inputs[2]{};
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].ki.wScan = ch;
+        inputs[0].ki.dwFlags = KEYEVENTF_UNICODE;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].ki.wScan = ch;
+        inputs[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        SendInput(2, inputs, sizeof(INPUT));
+    }
+}
+
+inline bool WindowAutomationMouseClickPoint(POINT point) {
+    if (!SetCursorPos(point.x, point.y)) return false;
+    INPUT inputs[2]{};
+    inputs[0].type = INPUT_MOUSE;
+    inputs[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+    inputs[1].type = INPUT_MOUSE;
+    inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    return SendInput(2, inputs, sizeof(INPUT)) == 2;
+}
+
+inline std::optional<POINT> WindowAutomationElementClickPoint(IUIAutomationElement* element) {
+    POINT point{};
+    BOOL has_clickable_point = FALSE;
+    if (SUCCEEDED(element->GetClickablePoint(&point, &has_clickable_point)) && has_clickable_point) {
+        return point;
+    }
+    RECT rect{};
+    if (SUCCEEDED(element->get_CurrentBoundingRectangle(&rect)) &&
+        rect.right > rect.left && rect.bottom > rect.top) {
+        return POINT{rect.left + (rect.right - rect.left) / 2,
+                     rect.top + (rect.bottom - rect.top) / 2};
+    }
+    return std::nullopt;
+}
+
+inline void WindowAutomationScrollIntoView(IUIAutomationElement* element) {
+    Microsoft::WRL::ComPtr<IUIAutomationScrollItemPattern> scroll_item;
+    if (SUCCEEDED(element->GetCurrentPatternAs(UIA_ScrollItemPatternId, IID_PPV_ARGS(&scroll_item))) && scroll_item) {
+        scroll_item->ScrollIntoView();
+    }
+}
+
+inline McpToolCallResult WindowAutomationJsonResult(const nlohmann::json& payload, bool success = true) {
+    McpToolCallResult result;
+    result.success = success;
+    result.is_tool_error = !success;
+    result.raw_result_json = payload.dump(2);
+    result.content_text = payload.dump(2);
+    return result;
+}
+
+inline McpToolCallResult CallWindowAutomation(const std::string& arguments_json) {
+    nlohmann::json args;
+    try {
+        args = nlohmann::json::parse(arguments_json.empty() ? "{}" : arguments_json);
+    } catch (const std::exception& ex) {
+        return ErrorResult(std::string("Invalid window_automation arguments: ") + ex.what());
+    }
+    if (!args.is_object()) {
+        return ErrorResult("window_automation arguments must be a JSON object.");
+    }
+
+    const std::string action = WindowAutomationNormalize(args.value("action", "list_windows"));
+    if (WindowAutomationIsWebView2Action(action)) {
+        return CallWindowAutomationWebView2(action, args);
+    }
+
+    if (action == "listwindows") {
+        const auto windows = WindowAutomationListWindows(args);
+        const int max_windows = std::clamp(args.value("max_windows", 100), 1, 500);
+        nlohmann::json arr = nlohmann::json::array();
+        for (int i = 0; i < static_cast<int>(windows.size()) && i < max_windows; ++i) {
+            arr.push_back(WindowAutomationWindowJson(windows[static_cast<size_t>(i)], i));
+        }
+        return WindowAutomationJsonResult({
+            {"success", true},
+            {"action", "list_windows"},
+            {"count", arr.size()},
+            {"windows", arr}
+        });
+    }
+
+    std::string window_error;
+    const auto window = WindowAutomationResolveWindow(args, &window_error);
+    if (!window) {
+        return ErrorResult(window_error);
+    }
+
+    if (action == "activatewindow") {
+        const bool activated = WindowAutomationActivateWindow(window->hwnd);
+        return WindowAutomationJsonResult({
+            {"success", activated},
+            {"action", "activate_window"},
+            {"activated", activated},
+            {"window", WindowAutomationWindowJson(*window, 0)}
+        }, activated);
+    }
+
+    WindowAutomationComApartment apartment;
+    if (FAILED(apartment.hr)) {
+        return ErrorResult("Could not initialize COM for Windows UI Automation: " + WindowAutomationHresult(apartment.hr));
+    }
+    Microsoft::WRL::ComPtr<IUIAutomation> automation;
+    HRESULT hr = CoCreateInstance(
+        CLSID_CUIAutomation,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&automation));
+    if (FAILED(hr) || !automation) {
+        return ErrorResult("Could not create the Windows UI Automation object: " + WindowAutomationHresult(hr));
+    }
+
+    Microsoft::WRL::ComPtr<IUIAutomationElement> root;
+    hr = automation->ElementFromHandle(window->hwnd, &root);
+    if (FAILED(hr) || !root) {
+        return ErrorResult("Could not get a UI Automation element for the target window: " + WindowAutomationHresult(hr));
+    }
+
+    const int max_depth = std::clamp(args.value("max_depth", 6), 0, 20);
+    const int max_elements = std::clamp(args.value("max_elements", 300), 1, 2000);
+    const bool include_offscreen = args.value("include_offscreen", false);
+    auto elements = WindowAutomationCollectElements(
+        automation.Get(), root.Get(), max_depth, max_elements, include_offscreen);
+
+    if (action == "inspectwindow") {
+        nlohmann::json arr = nlohmann::json::array();
+        for (int i = 0; i < static_cast<int>(elements.size()); ++i) {
+            arr.push_back(WindowAutomationElementJson(elements[static_cast<size_t>(i)].Get(), i));
+        }
+        return WindowAutomationJsonResult({
+            {"success", true},
+            {"action", "inspect_window"},
+            {"window", WindowAutomationWindowJson(*window, 0)},
+            {"max_depth", max_depth},
+            {"max_elements", max_elements},
+            {"include_offscreen", include_offscreen},
+            {"element_count", arr.size()},
+            {"elements", arr}
+        });
+    }
+
+    if (action != "click" && action != "settext" && action != "typetext") {
+        return ErrorResult("window_automation action must be list_windows, activate_window, inspect_window, click, set_text, type_text, webview2_list_targets, webview2_inspect, webview2_click, webview2_set_text, or webview2_type_text.");
+    }
+
+    const bool activate_first = args.value("activate_first", true);
+    if (activate_first) {
+        WindowAutomationActivateWindow(window->hwnd);
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    }
+
+    Microsoft::WRL::ComPtr<IUIAutomationElement> target;
+    if (action == "typetext" && !WindowAutomationHasElementSelector(args)) {
+        target = root;
+    } else {
+        std::string element_error;
+        target = WindowAutomationFindElement(elements, args, &element_error);
+        if (!target) {
+            return ErrorResult(element_error);
+        }
+    }
+
+    WindowAutomationScrollIntoView(target.Get());
+    if (action == "click") {
+        const bool prefer_mouse = args.value("prefer_mouse", false);
+        if (!prefer_mouse) {
+            Microsoft::WRL::ComPtr<IUIAutomationInvokePattern> invoke;
+            if (SUCCEEDED(target->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&invoke))) && invoke) {
+                hr = invoke->Invoke();
+                if (SUCCEEDED(hr)) {
+                    return WindowAutomationJsonResult({
+                        {"success", true},
+                        {"action", "click"},
+                        {"method", "invoke_pattern"},
+                        {"window", WindowAutomationWindowJson(*window, 0)},
+                        {"element", WindowAutomationElementJson(target.Get(), -1)}
+                    });
+                }
+            }
+            Microsoft::WRL::ComPtr<IUIAutomationSelectionItemPattern> selection;
+            if (SUCCEEDED(target->GetCurrentPatternAs(UIA_SelectionItemPatternId, IID_PPV_ARGS(&selection))) && selection) {
+                hr = selection->Select();
+                if (SUCCEEDED(hr)) {
+                    return WindowAutomationJsonResult({
+                        {"success", true},
+                        {"action", "click"},
+                        {"method", "selection_item_pattern"},
+                        {"window", WindowAutomationWindowJson(*window, 0)},
+                        {"element", WindowAutomationElementJson(target.Get(), -1)}
+                    });
+                }
+            }
+            Microsoft::WRL::ComPtr<IUIAutomationTogglePattern> toggle;
+            if (SUCCEEDED(target->GetCurrentPatternAs(UIA_TogglePatternId, IID_PPV_ARGS(&toggle))) && toggle) {
+                hr = toggle->Toggle();
+                if (SUCCEEDED(hr)) {
+                    return WindowAutomationJsonResult({
+                        {"success", true},
+                        {"action", "click"},
+                        {"method", "toggle_pattern"},
+                        {"window", WindowAutomationWindowJson(*window, 0)},
+                        {"element", WindowAutomationElementJson(target.Get(), -1)}
+                    });
+                }
+            }
+        }
+        const auto point = WindowAutomationElementClickPoint(target.Get());
+        if (!point) {
+            return ErrorResult("The target UIA element does not expose a clickable point or usable bounding rectangle.");
+        }
+        const bool clicked = WindowAutomationMouseClickPoint(*point);
+        return WindowAutomationJsonResult({
+            {"success", clicked},
+            {"action", "click"},
+            {"method", "mouse"},
+            {"point", {{"x", point->x}, {"y", point->y}}},
+            {"window", WindowAutomationWindowJson(*window, 0)},
+            {"element", WindowAutomationElementJson(target.Get(), -1)}
+        }, clicked);
+    }
+
+    const std::string value = args.value("value", "");
+    if (action == "settext") {
+        target->SetFocus();
+        Microsoft::WRL::ComPtr<IUIAutomationValuePattern> value_pattern;
+        if (SUCCEEDED(target->GetCurrentPatternAs(UIA_ValuePatternId, IID_PPV_ARGS(&value_pattern))) && value_pattern) {
+            BOOL read_only = FALSE;
+            value_pattern->get_CurrentIsReadOnly(&read_only);
+            if (!read_only) {
+                const std::wstring wide = Utf8ToWide(value);
+                BSTR bstr_value = SysAllocStringLen(wide.data(), static_cast<UINT>(wide.size()));
+                hr = value_pattern->SetValue(bstr_value);
+                SysFreeString(bstr_value);
+                if (SUCCEEDED(hr)) {
+                    if (args.value("press_enter", false)) WindowAutomationSendEnter();
+                    return WindowAutomationJsonResult({
+                        {"success", true},
+                        {"action", "set_text"},
+                        {"method", "value_pattern"},
+                        {"window", WindowAutomationWindowJson(*window, 0)},
+                        {"element", WindowAutomationElementJson(target.Get(), -1)}
+                    });
+                }
+            }
+        }
+    }
+
+    if (const auto point = WindowAutomationElementClickPoint(target.Get())) {
+        WindowAutomationMouseClickPoint(*point);
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    } else {
+        target->SetFocus();
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    }
+    const bool clear_existing = action == "settext"
+        ? args.value("clear_existing", true)
+        : args.value("clear_existing", false);
+    if (clear_existing) {
+        WindowAutomationSendCtrlA();
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+    WindowAutomationSendUnicodeText(value);
+    if (args.value("press_enter", false)) {
+        WindowAutomationSendEnter();
+    }
+    return WindowAutomationJsonResult({
+        {"success", true},
+        {"action", action == "settext" ? "set_text" : "type_text"},
+        {"method", "keyboard"},
+        {"window", WindowAutomationWindowJson(*window, 0)},
+        {"element", WindowAutomationElementJson(target.Get(), -1)}
+    });
 }
 
 inline McpToolCallResult CallQuestionnaire(
@@ -1852,6 +3350,12 @@ inline McpToolCallResult CallTool(
     }
     if (name == kFilesystemToolName && settings.built_in_filesystem_enabled) {
         return CallFilesystem(arguments_json, settings, variables);
+    }
+    if (name == kBrowserSearchToolName && settings.built_in_browser_search_enabled) {
+        return CallBrowserSearch(arguments_json, settings, variables);
+    }
+    if (name == kWindowAutomationToolName && settings.built_in_window_automation_enabled) {
+        return CallWindowAutomation(arguments_json);
     }
     return ErrorResult("Built-in tool is not enabled for this project: " + name);
 }

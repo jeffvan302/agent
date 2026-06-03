@@ -2549,6 +2549,31 @@ json ProjectSettingsToJson(const ProjectSettings& settings) {
     j["built_in_filesystem_working_directory"] = settings.built_in_filesystem_working_directory;
     j["built_in_sleep_enabled"] = settings.built_in_sleep_enabled;
     j["built_in_sleep_max_seconds"] = settings.built_in_sleep_max_seconds;
+    j["built_in_browser_search_enabled"] = settings.built_in_browser_search_enabled;
+    j["built_in_window_automation_enabled"] = settings.built_in_window_automation_enabled;
+    j["browser_search_primary"] = settings.browser_search_primary;
+    j["browser_search_google_enabled"] = settings.browser_search_google_enabled;
+    j["browser_search_bing_enabled"] = settings.browser_search_bing_enabled;
+    json browser_engine_order = json::array();
+    for (const auto& engine : settings.browser_search_engine_order) {
+        browser_engine_order.push_back(engine);
+    }
+    j["browser_search_engine_order"] = std::move(browser_engine_order);
+    j["browser_search_default_engine"] = settings.browser_search_default_engine;
+    j["browser_search_open_visual_browser"] = settings.browser_search_open_visual_browser;
+    j["browser_search_default_content_mode"] = settings.browser_search_default_content_mode;
+    j["browser_search_context_description"] = settings.browser_search_context_description;
+    j["browser_search_page_load_delay_min_ms"] = settings.browser_search_page_load_delay_min_ms;
+    j["browser_search_page_load_delay_max_ms"] = settings.browser_search_page_load_delay_max_ms;
+    j["browser_search_keystroke_delay_min_ms"] = settings.browser_search_keystroke_delay_min_ms;
+    j["browser_search_keystroke_delay_max_ms"] = settings.browser_search_keystroke_delay_max_ms;
+    j["browser_search_click_delay_min_ms"] = settings.browser_search_click_delay_min_ms;
+    j["browser_search_click_delay_max_ms"] = settings.browser_search_click_delay_max_ms;
+    j["browser_search_pre_submit_delay_min_ms"] = settings.browser_search_pre_submit_delay_min_ms;
+    j["browser_search_pre_submit_delay_max_ms"] = settings.browser_search_pre_submit_delay_max_ms;
+    j["browser_search_post_results_delay_min_ms"] = settings.browser_search_post_results_delay_min_ms;
+    j["browser_search_post_results_delay_max_ms"] = settings.browser_search_post_results_delay_max_ms;
+    j["browser_search_timeout_seconds"] = settings.browser_search_timeout_seconds;
     j["model_timeout_seconds"] = settings.model_timeout_seconds;
 
     return j;
@@ -2684,6 +2709,100 @@ ProjectSettings ProjectSettingsFromJson(const json& j) {
     if (settings.built_in_sleep_max_seconds < 0) {
         settings.built_in_sleep_max_seconds = 0;
     }
+    settings.built_in_browser_search_enabled = j.value("built_in_browser_search_enabled", false);
+    settings.built_in_window_automation_enabled = j.value("built_in_window_automation_enabled", false);
+    settings.browser_search_primary = j.value("browser_search_primary", false);
+    settings.browser_search_google_enabled = j.value("browser_search_google_enabled", true);
+    settings.browser_search_bing_enabled = j.value("browser_search_bing_enabled", true);
+    if (!settings.browser_search_google_enabled && !settings.browser_search_bing_enabled) {
+        settings.browser_search_google_enabled = true;
+    }
+    settings.browser_search_engine_order.clear();
+    if (j.contains("browser_search_engine_order") && j["browser_search_engine_order"].is_array()) {
+        for (const auto& item : j["browser_search_engine_order"]) {
+            if (!item.is_string()) continue;
+            std::string engine = Trim(item.get<std::string>());
+            std::transform(engine.begin(), engine.end(), engine.begin(),
+                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if ((engine == "google" || engine == "bing") &&
+                std::find(settings.browser_search_engine_order.begin(),
+                          settings.browser_search_engine_order.end(),
+                          engine) == settings.browser_search_engine_order.end()) {
+                settings.browser_search_engine_order.push_back(engine);
+            }
+        }
+    }
+    auto ensure_browser_engine = [&](const std::string& engine) {
+        if (std::find(settings.browser_search_engine_order.begin(),
+                      settings.browser_search_engine_order.end(),
+                      engine) == settings.browser_search_engine_order.end()) {
+            settings.browser_search_engine_order.push_back(engine);
+        }
+    };
+    ensure_browser_engine("google");
+    ensure_browser_engine("bing");
+    settings.browser_search_default_engine = Trim(j.value("browser_search_default_engine", "google"));
+    std::transform(settings.browser_search_default_engine.begin(), settings.browser_search_default_engine.end(),
+                   settings.browser_search_default_engine.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (settings.browser_search_default_engine != "google" &&
+        settings.browser_search_default_engine != "bing") {
+        settings.browser_search_default_engine = settings.browser_search_engine_order.empty()
+            ? std::string("google")
+            : settings.browser_search_engine_order.front();
+    }
+    if (settings.browser_search_default_engine == "google" && !settings.browser_search_google_enabled) {
+        settings.browser_search_default_engine = settings.browser_search_bing_enabled ? "bing" : "google";
+    }
+    if (settings.browser_search_default_engine == "bing" && !settings.browser_search_bing_enabled) {
+        settings.browser_search_default_engine = settings.browser_search_google_enabled ? "google" : "bing";
+    }
+    settings.browser_search_open_visual_browser = j.value("browser_search_open_visual_browser", false);
+    settings.browser_search_default_content_mode =
+        Trim(j.value("browser_search_default_content_mode", "text"));
+    std::transform(settings.browser_search_default_content_mode.begin(),
+                   settings.browser_search_default_content_mode.end(),
+                   settings.browser_search_default_content_mode.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (settings.browser_search_default_content_mode != "text" &&
+        settings.browser_search_default_content_mode != "html" &&
+        settings.browser_search_default_content_mode != "text_html" &&
+        settings.browser_search_default_content_mode != "pdf" &&
+        settings.browser_search_default_content_mode != "all") {
+        settings.browser_search_default_content_mode = "text";
+    }
+    settings.browser_search_context_description =
+        j.value("browser_search_context_description", std::string(kDefaultBrowserSearchDescription));
+    if (Trim(settings.browser_search_context_description).empty()) {
+        settings.browser_search_context_description = kDefaultBrowserSearchDescription;
+    }
+    settings.browser_search_page_load_delay_min_ms =
+        std::max(0, j.value("browser_search_page_load_delay_min_ms", kDefaultBrowserSearchPageLoadDelayMinMs));
+    settings.browser_search_page_load_delay_max_ms =
+        std::max(settings.browser_search_page_load_delay_min_ms,
+                 j.value("browser_search_page_load_delay_max_ms", kDefaultBrowserSearchPageLoadDelayMaxMs));
+    settings.browser_search_keystroke_delay_min_ms =
+        std::max(0, j.value("browser_search_keystroke_delay_min_ms", kDefaultBrowserSearchKeystrokeDelayMinMs));
+    settings.browser_search_keystroke_delay_max_ms =
+        std::max(settings.browser_search_keystroke_delay_min_ms,
+                 j.value("browser_search_keystroke_delay_max_ms", kDefaultBrowserSearchKeystrokeDelayMaxMs));
+    settings.browser_search_click_delay_min_ms =
+        std::max(0, j.value("browser_search_click_delay_min_ms", kDefaultBrowserSearchClickDelayMinMs));
+    settings.browser_search_click_delay_max_ms =
+        std::max(settings.browser_search_click_delay_min_ms,
+                 j.value("browser_search_click_delay_max_ms", kDefaultBrowserSearchClickDelayMaxMs));
+    settings.browser_search_pre_submit_delay_min_ms =
+        std::max(0, j.value("browser_search_pre_submit_delay_min_ms", kDefaultBrowserSearchPreSubmitDelayMinMs));
+    settings.browser_search_pre_submit_delay_max_ms =
+        std::max(settings.browser_search_pre_submit_delay_min_ms,
+                 j.value("browser_search_pre_submit_delay_max_ms", kDefaultBrowserSearchPreSubmitDelayMaxMs));
+    settings.browser_search_post_results_delay_min_ms =
+        std::max(0, j.value("browser_search_post_results_delay_min_ms", kDefaultBrowserSearchPostResultsDelayMinMs));
+    settings.browser_search_post_results_delay_max_ms =
+        std::max(settings.browser_search_post_results_delay_min_ms,
+                 j.value("browser_search_post_results_delay_max_ms", kDefaultBrowserSearchPostResultsDelayMaxMs));
+    settings.browser_search_timeout_seconds =
+        std::clamp(j.value("browser_search_timeout_seconds", kDefaultBrowserSearchTimeoutSeconds), 1, 600);
     settings.model_timeout_seconds = j.value("model_timeout_seconds", 0);
     if (settings.model_timeout_seconds < 0) {
         settings.model_timeout_seconds = 0;
