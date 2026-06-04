@@ -4,6 +4,89 @@
 
 ---
 
+## Agent-Friendly PowerShell Install
+
+When a model or automation needs to prepare a Windows machine for MSVC C++ development, run this from an **Administrator PowerShell** window. It installs the C++ Build Tools workload, CMake, Git, VS Code, and a reusable `Set-VsDevEnv` helper for normal PowerShell sessions.
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+
+# 1. Install Visual Studio Build Tools with the C++ workload.
+winget install --id Microsoft.VisualStudio.2022.BuildTools --exact `
+  --override "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" `
+  --accept-source-agreements `
+  --accept-package-agreements
+
+# 2. Install command-line tools and editor.
+winget install --id Kitware.CMake --exact --silent `
+  --accept-source-agreements `
+  --accept-package-agreements
+winget install --id Git.Git --exact --silent `
+  --accept-source-agreements `
+  --accept-package-agreements
+winget install --id Microsoft.VisualStudioCode --exact --silent `
+  --accept-source-agreements `
+  --accept-package-agreements
+
+# 3. Install VS Code extensions.
+code --install-extension ms-vscode.cpptools
+code --install-extension ms-vscode.cmake-tools
+
+# 4. Add a PowerShell helper that loads the MSVC developer environment.
+$profileDir = Split-Path $PROFILE
+if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
+
+$vsEnvFunction = @'
+function Set-VsDevEnv {
+    $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vsWhere)) {
+        $vsWhere = "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe"
+    }
+
+    $vsPath = & $vsWhere -latest -property installationPath 2>$null
+    if (-not $vsPath) {
+        Write-Host "Visual Studio or Build Tools not found." -ForegroundColor Red
+        return
+    }
+
+    $devShell = Join-Path $vsPath "Common7\Tools\Launch-VsDevShell.ps1"
+    if (Test-Path $devShell) {
+        & $devShell -Arch amd64
+        return
+    }
+
+    $devCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
+    if (Test-Path $devCmd) {
+        cmd /s /c "`"$devCmd`" -arch=amd64 && set" | ForEach-Object {
+            if ($_ -match "^([^=]+)=(.*)$") {
+                [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+            }
+        }
+    }
+}
+'@
+
+if (Test-Path $PROFILE) {
+    $profileContent = Get-Content $PROFILE -Raw
+    if ($profileContent -notmatch "function Set-VsDevEnv") {
+        Add-Content -Path $PROFILE -Value "`n$vsEnvFunction"
+    }
+} else {
+    Set-Content -Path $PROFILE -Value $vsEnvFunction
+}
+
+# 5. Load and verify in this session.
+. $PROFILE
+Set-VsDevEnv
+cl
+cmake --version
+git --version
+```
+
+Close and reopen PowerShell after the script finishes, then run `Set-VsDevEnv` before C++ builds that call `cl.exe` directly.
+
+---
+
 ## The Key Insight: You Have Two Free Options
 
 There are **two ways** to get the MSVC compiler without paying for Visual Studio Professional:
@@ -597,4 +680,4 @@ If you're building closed-source/commercial software and don't have a Visual Stu
 
 ---
 
-*Last updated: July 2025*
+*Last updated: June 2026*

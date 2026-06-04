@@ -4,6 +4,87 @@
 
 ---
 
+## Agent-Friendly PowerShell Install
+
+When a model or automation needs to prepare a Windows machine for Python AI/ML work, run this from an **Administrator PowerShell** window. It installs Miniconda silently, creates a Python 3.12 environment, installs editor tooling, and leaves hardware-specific PyTorch installation as an explicit final choice.
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+
+# 1. Install Miniconda silently for the current user.
+$minicondaDir = Join-Path $env:USERPROFILE "miniconda3"
+$installer = Join-Path $env:TEMP "Miniconda3-latest-Windows-x86_64.exe"
+$downloadUrl = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe"
+
+Invoke-WebRequest -Uri $downloadUrl -OutFile $installer
+Start-Process -Wait -FilePath $installer -ArgumentList `
+  "/S", `
+  "/InstallationType=JustMe", `
+  "/RegisterPython=0", `
+  "/AddToPath=0", `
+  "/D=$minicondaDir"
+Remove-Item -LiteralPath $installer -Force
+
+$conda = Join-Path $minicondaDir "Scripts\conda.exe"
+
+# 2. Configure conda.
+& $conda init powershell
+& $conda config --add channels conda-forge
+& $conda config --set channel_priority strict
+& $conda config --set auto_activate_base false
+
+# 3. Create the AI environment.
+& $conda create -n ai python=3.12 -y
+
+# 4. Install Git and VS Code.
+winget install --id Git.Git --exact --silent `
+  --accept-source-agreements `
+  --accept-package-agreements
+winget install --id Microsoft.VisualStudioCode --exact --silent `
+  --accept-source-agreements `
+  --accept-package-agreements
+
+# 5. Install VS Code extensions.
+code --install-extension ms-python.python
+code --install-extension ms-toolsai.jupyter
+code --install-extension ms-python.vscode-pylance
+
+# 6. Install common packages into the environment.
+& $conda run -n ai python -m pip install --upgrade pip
+& $conda run -n ai python -m pip install `
+  numpy pandas matplotlib seaborn scipy scikit-learn `
+  jupyterlab notebook ipykernel `
+  transformers datasets tokenizers accelerate `
+  fastapi uvicorn tqdm rich huggingface_hub
+
+# 7. Register the Jupyter kernel.
+& $conda run -n ai python -m ipykernel install --user --name ai --display-name "Python 3.12 (AI)"
+
+# 8. Verify.
+& $conda run -n ai python --version
+& $conda run -n ai python -m pip --version
+git --version
+```
+
+After that script completes, install exactly one PyTorch build for the target hardware:
+
+```powershell
+conda activate ai
+
+# NVIDIA GPU:
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# Intel GPU/NPU:
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
+
+# CPU only:
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+
+Close and reopen PowerShell after the script finishes so `conda activate ai` works through the initialized profile.
+
+---
+
 ## Why Python 3.12?
 
 Python 3.12 is the sweet spot for AI/ML development right now:
@@ -581,4 +662,4 @@ ROCm on Windows is still in early stages. For full AMD GPU support:
 
 ---
 
-*Last updated: July 2025*
+*Last updated: June 2026*

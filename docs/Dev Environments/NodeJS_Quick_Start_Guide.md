@@ -4,6 +4,60 @@
 
 ---
 
+## Agent-Friendly PowerShell Install
+
+When a model or automation needs to prepare a Windows machine for Node.js development, run this from an **Administrator PowerShell** window. It avoids browser downloads and accepts winget prompts up front.
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+
+# Install command-line dependencies.
+winget install --id Schniz.fnm --exact --silent `
+  --accept-source-agreements `
+  --accept-package-agreements
+winget install --id Git.Git --exact --silent `
+  --accept-source-agreements `
+  --accept-package-agreements
+winget install --id Microsoft.VisualStudioCode --exact --silent `
+  --accept-source-agreements `
+  --accept-package-agreements
+
+# Configure fnm for PowerShell.
+$profileDir = Split-Path $PROFILE
+if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
+$fnmLine = 'fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression'
+if (Test-Path $PROFILE) {
+    $content = Get-Content $PROFILE -Raw
+    if ($content -notmatch 'fnm env') { Add-Content -Path $PROFILE -Value "`n$fnmLine" }
+} else {
+    Set-Content -Path $PROFILE -Value $fnmLine
+}
+
+fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
+fnm install --lts
+fnm use --lts
+fnm default lts-latest
+
+# Install global tools useful to coding agents.
+npm install -g typescript ts-node tsx nodemon npm-check-updates
+
+# Install VS Code extensions.
+code --install-extension dbaeumer.vscode-eslint
+code --install-extension esbenp.prettier-vscode
+code --install-extension rangav.vscode-thunder-client
+
+# Verify.
+node --version
+npm --version
+npx --version
+tsc --version
+git --version
+```
+
+Close and reopen PowerShell after the script finishes so the persisted PATH/profile changes are loaded cleanly.
+
+---
+
 ## What You'll End Up With
 
 | Tool | What It Does | Installed By |
@@ -506,4 +560,4 @@ Bun can run most Node.js projects and is significantly faster at `npm install`. 
 
 ---
 
-*Last updated: July 2025*
+*Last updated: June 2026*
