@@ -11,6 +11,8 @@ Agent Desktop is the local setup and service host for the web-based agent system
 5. Restart the app when prompted.
 6. Open the website.
 
+[![Quick Start Guide](/quick-guide.jpg)](/quick-guide.jpg)
+
 Setup System restores the bundled default configuration, creates `C:\Temp` if needed, installs required system tools including OpenSSL for HTTPS/TLS, pulls local Ollama models, and prepares the default web server configuration.
 
 The setup step checks for OpenSSL 4 on PATH and uses winget to install or upgrade `ShiningLight.OpenSSL.Light` when needed. If the light package cannot be installed, it falls back to `ShiningLight.OpenSSL.Dev`.
