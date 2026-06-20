@@ -189,6 +189,18 @@ std::optional<int> ParseOllamaPositiveInt(std::string value) {
     return *parsed;
 }
 
+bool IsOllamaContextLengthKey(const std::string& key) {
+    return key == "context length" ||
+           key == "context window";
+}
+
+bool IsOllamaMaxOutputTokensKey(const std::string& key) {
+    return key == "max output tokens" ||
+           key == "maximum output tokens" ||
+           key == "output tokens" ||
+           key == "output token limit";
+}
+
 bool JsonCapabilitiesContain(const json& item, const std::vector<std::string>& names) {
     auto matches = [&](std::string value) {
         value = LowerAsciiCopy(Trim(value));
@@ -321,7 +333,8 @@ bool LoadOllamaModelMetadata(const ProviderConfig& provider,
                              const std::string& model_id,
                              ModelConfig* model,
                              std::string* error) {
-    if (NormalizeProviderType(provider.provider_type) != "ollama_local") {
+    const std::string provider_type = NormalizeProviderType(provider.provider_type);
+    if (provider_type != "ollama_local" && provider_type != "ollama_cloud") {
         if (error) {
             *error = "This provider is not an Ollama provider.";
         }
@@ -389,15 +402,19 @@ bool LoadOllamaModelMetadata(const ProviderConfig& provider,
                 continue;
             }
 
-            if (section == "Model") {
+            if (section == "Model" || section == "Metadata") {
                 const auto key_value = ParseAlignedKeyValue(line);
                 if (!key_value) {
                     continue;
                 }
                 const std::string key = LowerAsciiCopy(key_value->first);
-                if (key == "context length") {
+                if (IsOllamaContextLengthKey(key)) {
                     if (const auto parsed = ParseOllamaPositiveInt(key_value->second)) {
                         resolved.context_window = *parsed;
+                    }
+                } else if (IsOllamaMaxOutputTokensKey(key)) {
+                    if (const auto parsed = ParseOllamaPositiveInt(key_value->second)) {
+                        resolved.max_output_tokens = *parsed;
                     }
                 }
                 continue;

@@ -37,8 +37,10 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
+#include <cstring>
 #include <cwchar>
 #include <cwctype>
 #include <exception>
@@ -94,6 +96,7 @@ enum ControlId : int {
     kCloneProject = 3003,
     kRename = 3004,
     kDelete = 3005,
+    kMoveChatFolder = 3006,
     kProviders = 3007,
     kMcpServers = 3008,
     kSetupSystem = 3009,
@@ -232,6 +235,274 @@ void MigrateLegacyWebSettings(const RuntimePaths& runtime_paths) {
     }
 }
 
+std::filesystem::path DesktopCanonicalOrAbsolute(const std::filesystem::path& path) {
+    std::error_code ec;
+    auto resolved = std::filesystem::weakly_canonical(path, ec);
+    if (!ec) {
+        return resolved.lexically_normal();
+    }
+
+    ec.clear();
+    resolved = std::filesystem::absolute(path, ec);
+    if (!ec) {
+        return resolved.lexically_normal();
+    }
+    return path.lexically_normal();
+}
+
+std::wstring NormalizePathTextForCompare(const std::filesystem::path& path) {
+    std::error_code ec;
+    std::filesystem::path normalized = std::filesystem::absolute(path, ec);
+    if (ec) {
+        normalized = path;
+    }
+    std::wstring text = normalized.lexically_normal().wstring();
+    std::replace(text.begin(), text.end(), L'/', L'\\');
+    while (text.size() > 3 && (text.back() == L'\\' || text.back() == L'/')) {
+        text.pop_back();
+    }
+    std::transform(text.begin(), text.end(), text.begin(),
+        [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    return text;
+}
+
+bool PathsEqualForMove(const std::filesystem::path& left,
+                       const std::filesystem::path& right) {
+    std::error_code ec;
+    if (std::filesystem::exists(left, ec) && !ec &&
+        std::filesystem::exists(right, ec) && !ec &&
+        std::filesystem::equivalent(left, right, ec) && !ec) {
+        return true;
+    }
+    return NormalizePathTextForCompare(left) == NormalizePathTextForCompare(right);
+}
+
+bool PathIsInsideForMove(const std::filesystem::path& child,
+                         const std::filesystem::path& parent) {
+    const std::wstring child_text = NormalizePathTextForCompare(child);
+    std::wstring parent_text = NormalizePathTextForCompare(parent);
+    if (child_text == parent_text) {
+        return true;
+    }
+    if (!parent_text.empty() && parent_text.back() != L'\\') {
+        parent_text.push_back(L'\\');
+    }
+    return child_text.rfind(parent_text, 0) == 0;
+}
+
+bool DirectoryIsEmptyForMove(const std::filesystem::path& path,
+                             std::wstring* error) {
+    std::error_code ec;
+    std::filesystem::directory_iterator it(path, ec);
+    if (ec) {
+        if (error) *error = L"Could not inspect destination folder: " + Utf8ToWide(ec.message());
+        return false;
+    }
+    return it == std::filesystem::directory_iterator{};
+}
+
+bool FilesHaveSameContentForMove(const std::filesystem::path& left,
+                                 const std::filesystem::path& right,
+                                 std::wstring* error) {
+    std::ifstream left_stream(left, std::ios::binary);
+    std::ifstream right_stream(right, std::ios::binary);
+    if (!left_stream || !right_stream) {
+        if (error) *error = L"Could not open copied file for verification: " + left.wstring();
+        return false;
+    }
+
+    std::array<char, 64 * 1024> left_buffer{};
+    std::array<char, 64 * 1024> right_buffer{};
+    do {
+        left_stream.read(left_buffer.data(), static_cast<std::streamsize>(left_buffer.size()));
+        right_stream.read(right_buffer.data(), static_cast<std::streamsize>(right_buffer.size()));
+        const std::streamsize left_count = left_stream.gcount();
+        const std::streamsize right_count = right_stream.gcount();
+        if (left_count != right_count ||
+            std::memcmp(left_buffer.data(), right_buffer.data(), static_cast<size_t>(left_count)) != 0) {
+            if (error) *error = L"Copied file content did not match: " + left.wstring();
+            return false;
+        }
+    } while (left_stream || right_stream);
+
+    return true;
+}
+
+struct DirectoryMoveStats {
+    size_t directories = 0;
+    size_t files = 0;
+    std::uintmax_t bytes = 0;
+};
+
+bool VerifyDirectoryTreeForMove(const std::filesystem::path& source,
+                                const std::filesystem::path& destination,
+                                DirectoryMoveStats* stats,
+                                std::wstring* error) {
+    DirectoryMoveStats verified;
+    std::error_code ec;
+    std::filesystem::recursive_directory_iterator it(source, ec);
+    if (ec) {
+        if (error) *error = L"Could not verify source folder: " + Utf8ToWide(ec.message());
+        return false;
+    }
+
+    for (const std::filesystem::recursive_directory_iterator end; it != end;) {
+        const std::filesystem::path source_path = it->path();
+        ec.clear();
+        const auto relative = std::filesystem::relative(source_path, source, ec);
+        if (ec) {
+            if (error) *error = L"Could not calculate relative verification path: " + Utf8ToWide(ec.message());
+            return false;
+        }
+        const auto target_path = destination / relative;
+
+        std::error_code type_ec;
+        if (it->is_directory(type_ec) && !type_ec) {
+            if (!std::filesystem::is_directory(target_path, type_ec) || type_ec) {
+                if (error) *error = L"Copied folder is missing: " + target_path.wstring();
+                return false;
+            }
+            ++verified.directories;
+        } else if (it->is_regular_file(type_ec) && !type_ec) {
+            if (!std::filesystem::is_regular_file(target_path, type_ec) || type_ec) {
+                if (error) *error = L"Copied file is missing: " + target_path.wstring();
+                return false;
+            }
+            const auto source_size = std::filesystem::file_size(source_path, type_ec);
+            if (type_ec) {
+                if (error) *error = L"Could not read source file size: " + Utf8ToWide(type_ec.message());
+                return false;
+            }
+            const auto target_size = std::filesystem::file_size(target_path, type_ec);
+            if (type_ec || source_size != target_size) {
+                if (error) *error = L"Copied file size did not match: " + target_path.wstring();
+                return false;
+            }
+            if (!FilesHaveSameContentForMove(source_path, target_path, error)) {
+                return false;
+            }
+            ++verified.files;
+            verified.bytes += source_size;
+        } else {
+            if (error) *error = L"Unsupported filesystem entry in chat folder: " + source_path.wstring();
+            return false;
+        }
+
+        ec.clear();
+        it.increment(ec);
+        if (ec) {
+            if (error) *error = L"Could not continue verification: " + Utf8ToWide(ec.message());
+            return false;
+        }
+    }
+
+    if (stats) {
+        *stats = verified;
+    }
+    return true;
+}
+
+bool CopyDirectoryTreeVerifiedForMove(const std::filesystem::path& source,
+                                      const std::filesystem::path& destination,
+                                      DirectoryMoveStats* stats,
+                                      std::wstring* error) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(source, ec) || ec) {
+        if (error) *error = L"Current chat folder does not exist or is not a folder: " + source.wstring();
+        return false;
+    }
+    if (PathsEqualForMove(source, destination)) {
+        if (error) *error = L"The destination folder is the same as the current folder.";
+        return false;
+    }
+    if (PathIsInsideForMove(destination, source) || PathIsInsideForMove(source, destination)) {
+        if (error) *error = L"The destination cannot be inside the current folder, or contain it.";
+        return false;
+    }
+
+    if (std::filesystem::exists(destination, ec) && !ec) {
+        if (!std::filesystem::is_directory(destination, ec) || ec) {
+            if (error) *error = L"Destination exists but is not a folder: " + destination.wstring();
+            return false;
+        }
+        if (!DirectoryIsEmptyForMove(destination, error)) {
+            if (error && error->empty()) *error = L"Destination folder must be empty or not exist.";
+            return false;
+        }
+    } else {
+        ec.clear();
+        std::filesystem::create_directories(destination, ec);
+        if (ec) {
+            if (error) *error = L"Could not create destination folder: " + Utf8ToWide(ec.message());
+            return false;
+        }
+    }
+
+    std::filesystem::recursive_directory_iterator it(source, ec);
+    if (ec) {
+        if (error) *error = L"Could not read current chat folder: " + Utf8ToWide(ec.message());
+        return false;
+    }
+
+    for (const std::filesystem::recursive_directory_iterator end; it != end;) {
+        const auto source_path = it->path();
+        ec.clear();
+        const auto relative = std::filesystem::relative(source_path, source, ec);
+        if (ec) {
+            if (error) *error = L"Could not calculate relative copy path: " + Utf8ToWide(ec.message());
+            return false;
+        }
+        const auto target_path = destination / relative;
+
+        std::error_code type_ec;
+        if (it->is_directory(type_ec) && !type_ec) {
+            std::filesystem::create_directories(target_path, ec);
+            if (ec) {
+                if (error) *error = L"Could not create copied folder: " + Utf8ToWide(ec.message());
+                return false;
+            }
+        } else if (it->is_regular_file(type_ec) && !type_ec) {
+            std::filesystem::create_directories(target_path.parent_path(), ec);
+            if (ec) {
+                if (error) *error = L"Could not create destination parent folder: " + Utf8ToWide(ec.message());
+                return false;
+            }
+            ec.clear();
+            std::filesystem::copy_file(
+                source_path,
+                target_path,
+                std::filesystem::copy_options::none,
+                ec);
+            if (ec) {
+                if (error) *error = L"Could not copy file: " + Utf8ToWide(ec.message());
+                return false;
+            }
+        } else {
+            if (error) *error = L"Unsupported filesystem entry in chat folder: " + source_path.wstring();
+            return false;
+        }
+
+        ec.clear();
+        it.increment(ec);
+        if (ec) {
+            if (error) *error = L"Could not continue copying: " + Utf8ToWide(ec.message());
+            return false;
+        }
+    }
+
+    return VerifyDirectoryTreeForMove(source, destination, stats, error);
+}
+
+void UpsertChatProjectFolder(ChatInfo& chat, const std::string& folder) {
+    ProjectMcpVariableValue value;
+    value.name = "ProjectFolder";
+    value.value = folder;
+    value.description = "Selected folder for this chat";
+    value.inject_into_context = true;
+    value.allow_user_definition = false;
+    variable_resolver::UpsertValue(chat.user_variables, value);
+}
+
 size_t EstimateTokenCount(const std::string& text) {
     if (text.empty()) {
         return 0;
@@ -284,6 +555,249 @@ MessageRecord MakeCompressionRecord(
     record.content = payload.dump();
     record.created_at = created_at;
     return record;
+}
+
+size_t EstimateRequestInputTokens(
+    const ChatRequestOptions& request,
+    const std::vector<McpExposedTool>& exposed_tools,
+    const std::vector<ChatToolDefinition>& extra_tools,
+    bool include_tools);
+size_t EstimateRequestInputTokens(
+    const ChatRequestOptions& request,
+    const std::vector<McpExposedTool>& exposed_tools,
+    bool include_tools);
+size_t ResolveCompressionTriggerTokens(
+    const ProjectSettings& project_settings,
+    const std::optional<ContextCompressionConfig>& selected_config,
+    const ChatRequestOptions& request);
+
+constexpr int kMaxDesktopToolLoopCompressionsPerTurn = 8;
+constexpr int kRepeatedToolFailureLimit = 5;
+
+std::string TruncateForToolFailureSignature(std::string value) {
+    constexpr size_t kMaxSignatureText = 1200;
+    if (value.size() > kMaxSignatureText) {
+        value.resize(kMaxSignatureText);
+    }
+    return value;
+}
+
+std::string ToolFailureSignature(
+    const ChatToolCall& tool_call,
+    const McpToolCallResult& tool_result) {
+    if (tool_result.success && !tool_result.is_tool_error) {
+        return {};
+    }
+    const std::string arguments = tool_call.arguments_valid
+        ? tool_call.arguments_json
+        : (tool_call.original_arguments_json.empty()
+            ? tool_call.arguments_json
+            : tool_call.original_arguments_json);
+    return tool_call.name + "\n" +
+        TruncateForToolFailureSignature(arguments) + "\n" +
+        TruncateForToolFailureSignature(tool_result.content_text);
+}
+
+bool RecordRepeatedToolFailure(
+    std::unordered_map<std::string, int>& failure_counts,
+    const ChatToolCall& tool_call,
+    const McpToolCallResult& tool_result,
+    std::string* stop_message) {
+    const std::string signature = ToolFailureSignature(tool_call, tool_result);
+    if (signature.empty()) {
+        return false;
+    }
+    const int count = ++failure_counts[signature];
+    if (count < kRepeatedToolFailureLimit) {
+        return false;
+    }
+
+    std::ostringstream message;
+    message
+        << "Stopped tool loop after " << count
+        << " repeated identical failures from tool '" << tool_call.name
+        << "'. Last error: " << tool_result.content_text
+        << "\n\nThe model must choose a different action instead of retrying the same failing tool call.";
+    if (stop_message) {
+        *stop_message = message.str();
+    }
+    Logger::Warn("ToolLoop", message.str());
+    return true;
+}
+
+void ReplaceCompressedContextInPrompt(
+    std::string& system_prompt,
+    const std::string& previous_context,
+    const std::string& next_context) {
+    if (next_context.empty()) {
+        return;
+    }
+
+    if (!previous_context.empty()) {
+        const size_t pos = system_prompt.find(previous_context);
+        if (pos != std::string::npos) {
+            system_prompt.replace(pos, previous_context.size(), next_context);
+            return;
+        }
+    }
+
+    if (!system_prompt.empty()) {
+        system_prompt = next_context + "\n\n" + system_prompt;
+    } else {
+        system_prompt = next_context;
+    }
+}
+
+std::vector<MessageRecord> BuildRequestTailAfterCompression(
+    const std::vector<MessageRecord>& compression_source,
+    size_t compressed_through,
+    const std::vector<MessageRecord>& current_working_messages) {
+    compressed_through = std::min(compressed_through, compression_source.size());
+    std::vector<MessageRecord> tail;
+    if (compressed_through < compression_source.size()) {
+        tail.assign(
+            compression_source.begin() + static_cast<std::ptrdiff_t>(compressed_through),
+            compression_source.end());
+    }
+    tail = message_sanitizer::SanitizeModelVisibleMessages(tail);
+
+    if (!current_working_messages.empty() &&
+        built_in_tools::IsCompletionDriverContinuationMessage(
+            current_working_messages.back())) {
+        const MessageRecord& continuation = current_working_messages.back();
+        if (tail.empty() ||
+            tail.back().role != continuation.role ||
+            tail.back().content != continuation.content) {
+            tail.push_back(continuation);
+        }
+    }
+    return tail;
+}
+
+bool MaybeCompressDesktopToolLoopContext(
+    ContextCompressionService* compression_service,
+    const ProjectSettings& project_settings,
+    const std::optional<ContextCompressionConfig>& selected_config,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const std::vector<ProjectMcpVariableValue>& resolved_prompt_variables,
+    const std::vector<ChatToolDefinition>& tool_definitions,
+    ChatRequestOptions& request,
+    std::vector<MessageRecord>& transcript_messages,
+    std::vector<MessageRecord>& generated_messages,
+    std::vector<MessageRecord>& working_messages,
+    std::string& active_compressed_context,
+    int& compression_count) {
+    if (!compression_service || !selected_config ||
+        project_settings.selected_compression_config_id.empty()) {
+        return false;
+    }
+
+    ChatRequestOptions check = request;
+    check.messages =
+        message_sanitizer::SanitizeModelVisibleMessages(working_messages);
+    const size_t estimated_tokens = EstimateRequestInputTokens(
+        check,
+        {},
+        tool_definitions,
+        request.model.supports_tools && !tool_definitions.empty());
+    const size_t trigger_tokens =
+        ResolveCompressionTriggerTokens(project_settings, selected_config, check);
+    if (trigger_tokens == 0 || estimated_tokens < trigger_tokens) {
+        return false;
+    }
+
+    if (compression_count >= kMaxDesktopToolLoopCompressionsPerTurn) {
+        compression_service->MarkCompressionScheduled(project_id, chat_id);
+        Logger::Warn("Compression",
+            "desktop tool-loop compression limit reached project=" + project_id +
+            " chat=" + chat_id +
+            " count=" + std::to_string(compression_count) +
+            " estimated_tokens=" + std::to_string(estimated_tokens) +
+            " trigger_tokens=" + std::to_string(trigger_tokens));
+        return false;
+    }
+
+    const std::vector<MessageRecord> compression_source =
+        message_sanitizer::SanitizeModelVisibleMessages(transcript_messages);
+    if (compression_source.empty()) {
+        return false;
+    }
+
+    ++compression_count;
+    auto model_caller =
+        [](const ChatRequestOptions& opts)
+            -> std::optional<ChatCompletionResult> {
+        const auto result = OpenAIClient::CreateSimpleCompletion(opts);
+        return result.success ? std::make_optional(result) : std::nullopt;
+    };
+
+    const std::string previous_context = active_compressed_context.empty()
+        ? compression_service->LoadChatState(project_id, chat_id).current_compressed_context
+        : active_compressed_context;
+    const std::string fresh_context =
+        compression_service->CompressConversation(
+            compression_source,
+            project_id,
+            chat_id,
+            project_settings.selected_compression_config_id,
+            model_caller,
+            false,
+            "tool_loop_threshold",
+            resolved_prompt_variables);
+    if (fresh_context.empty()) {
+        compression_service->MarkCompressionScheduled(project_id, chat_id);
+        Logger::Warn("Compression",
+            "desktop tool-loop compression produced no context project=" + project_id +
+            " chat=" + chat_id +
+            " estimated_tokens=" + std::to_string(estimated_tokens) +
+            " trigger_tokens=" + std::to_string(trigger_tokens));
+        return false;
+    }
+
+    auto compression_state =
+        compression_service->LoadChatState(project_id, chat_id);
+    const size_t compressed_through = std::min(
+        compression_state.last_compression_message_index,
+        compression_source.size());
+    working_messages = BuildRequestTailAfterCompression(
+        compression_source,
+        compressed_through,
+        working_messages);
+    ReplaceCompressedContextInPrompt(
+        request.system_prompt,
+        previous_context,
+        fresh_context);
+    active_compressed_context = fresh_context;
+
+    MessageRecord compression_record = MakeCompressionRecord(
+        compression_source,
+        working_messages,
+        compressed_through,
+        fresh_context,
+        "Tool-loop context compressed.");
+    generated_messages.push_back(compression_record);
+    transcript_messages.push_back(std::move(compression_record));
+
+    if (project_settings.enable_chat_logging) {
+        ChatRequestLogger::Log(project_id, true,
+            ChatRequestLogger::FormatCompressionBlock(
+                "tool_loop_threshold",
+                compression_source.size(),
+                working_messages.size(),
+                compressed_through,
+                fresh_context,
+                selected_config->name));
+    }
+
+    Logger::Info("Compression",
+        "desktop tool-loop compressed project=" + project_id +
+        " chat=" + chat_id +
+        " before_tokens=" + std::to_string(estimated_tokens) +
+        " trigger_tokens=" + std::to_string(trigger_tokens) +
+        " compressed_through=" + std::to_string(compressed_through) +
+        " remaining_messages=" + std::to_string(working_messages.size()));
+    return true;
 }
 
 std::vector<MessageRecord> ModelVisibleMessages(const std::vector<MessageRecord>& messages) {
@@ -3329,6 +3843,8 @@ void ShowContextMessagesWindow(HWND owner, AppStorage* storage, const std::strin
     UpdateWindow(window);
 }
 
+std::wstring FormatDashboardBytes(std::uintmax_t bytes);
+
 class MainWindow {
 public:
     MainWindow();
@@ -3356,6 +3872,7 @@ private:
     void CloneProject();
     void RenameSelection();
     void DeleteSelection();
+    void MoveChatFolder();
     void OpenProviderManager();
     void OpenRagServiceManager();
     void OpenCompressionManager();
@@ -3407,6 +3924,7 @@ private:
     HWND clone_project_button_ = nullptr;
     HWND rename_button_ = nullptr;
     HWND delete_button_ = nullptr;
+    HWND move_chat_folder_button_ = nullptr;
     HWND providers_button_ = nullptr;
     HWND mcp_servers_button_ = nullptr;
     HWND project_mcp_button_ = nullptr;
@@ -3581,6 +4099,7 @@ void MainWindow::OnCreate() {
     clone_project_button_ = CreateWindowExW(0, L"BUTTON", L"Clone Project", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kCloneProject), nullptr, nullptr);
     rename_button_ = CreateWindowExW(0, L"BUTTON", L"Rename", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kRename), nullptr, nullptr);
     delete_button_ = CreateWindowExW(0, L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kDelete), nullptr, nullptr);
+    move_chat_folder_button_ = CreateWindowExW(0, L"BUTTON", L"Move Chat Folder", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kMoveChatFolder), nullptr, nullptr);
 
     tree_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kTree), nullptr, nullptr);
     providers_button_ = CreateWindowExW(0, L"BUTTON", L"Providers", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kProviders), nullptr, nullptr);
@@ -3602,7 +4121,7 @@ void MainWindow::OnCreate() {
     context_messages_button_ = CreateWindowExW(0, L"BUTTON", L"Check Context", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kContextMessages), nullptr, nullptr);
     status_label_ = CreateWindowExW(0, L"STATIC", L"Initializing...", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
 
-    for (HWND control : {new_project_button_, clone_project_button_, rename_button_, delete_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, agentic_modes_button_, web_config_button_, admin_config_button_, remote_ollama_setup_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
+    for (HWND control : {new_project_button_, clone_project_button_, rename_button_, delete_button_, move_chat_folder_button_, tree_, providers_button_, mcp_servers_button_, project_mcp_button_, model_tools_button_, agentic_modes_button_, web_config_button_, admin_config_button_, remote_ollama_setup_button_, rag_service_button_, context_window_button_, setup_system_button_, transcript_, tool_trace_, input_, send_button_, compress_button_, context_messages_button_, status_label_}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
 
@@ -3755,9 +4274,10 @@ void MainWindow::LayoutControls(int width, int height) {
     MoveWindow(clone_project_button_, margin + left_button_width + gutter, margin, left_button_width, button_height, TRUE);
     MoveWindow(rename_button_, margin, margin + button_height + gutter, left_button_width, button_height, TRUE);
     MoveWindow(delete_button_, margin + left_button_width + gutter, margin + button_height + gutter, left_button_width, button_height, TRUE);
+    MoveWindow(move_chat_folder_button_, margin, margin + (button_height + gutter) * 2, left_width, button_height, TRUE);
     const int rag_button_y = height - margin - button_height;
     const int remote_button_y = rag_button_y - button_height - gutter;
-    const int tree_top = margin + (button_height + gutter) * 2;
+    const int tree_top = margin + (button_height + gutter) * 3;
     MoveWindow(tree_, margin, tree_top, left_width, std::max(Scale(hwnd_, 80), remote_button_y - gutter - tree_top), TRUE);
     const int half_width = (left_width - gutter) / 2;
     MoveWindow(remote_ollama_setup_button_, margin, remote_button_y, left_width, button_height, TRUE);
@@ -3813,6 +4333,9 @@ void MainWindow::OnCommand(int control_id, int notification_code) {
         break;
     case kDelete:
         DeleteSelection();
+        break;
+    case kMoveChatFolder:
+        MoveChatFolder();
         break;
     case kProviders:
         OpenProviderManager();
@@ -4088,6 +4611,144 @@ void MainWindow::DeleteSelection() {
             return;
         }
         ReloadProjects(data->project_id, "");
+    }
+}
+
+void MainWindow::MoveChatFolder() {
+    if (active_project_id_.empty() || active_chat_id_.empty()) {
+        MessageBoxW(hwnd_, L"Select a chat first.", L"No Chat Selected", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (IsChatInFlight(active_chat_id_)) {
+        MessageBoxW(hwnd_, L"Wait for the current chat request to finish before moving its folder.", L"Chat Busy", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    ChatInfo* chat = FindChat(active_project_id_, active_chat_id_);
+    if (!chat) {
+        MessageBoxW(hwnd_, L"The selected chat could not be found.", L"Chat Not Found", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    const auto project_settings = storage_.LoadProjectSettings(active_project_id_);
+    const auto resolved_variables = BuildResolvedVariablesForChat(active_project_id_, active_chat_id_, project_settings);
+    const auto current_project_folder =
+        variable_resolver::FindValue(resolved_variables, "ProjectFolder");
+    if (!current_project_folder || Trim(*current_project_folder).empty()) {
+        MessageBoxW(hwnd_, L"No ProjectFolder is configured for this chat.", L"No Chat Folder", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    std::filesystem::path source_path(Utf8ToWide(Trim(*current_project_folder)));
+    if (!source_path.is_absolute()) {
+        MessageBoxW(hwnd_, L"The current ProjectFolder is not an absolute path, so it cannot be moved safely.", L"Invalid Chat Folder", MB_OK | MB_ICONERROR);
+        return;
+    }
+    source_path = DesktopCanonicalOrAbsolute(source_path);
+    const auto stored_source_folder = variable_resolver::FindValue(chat->user_variables, "ProjectFolder");
+    const bool source_is_explicit_chat_folder =
+        stored_source_folder && !Trim(*stored_source_folder).empty();
+    std::vector<std::wstring> shared_explicit_chat_names;
+    if (const ProjectRecord* project = FindProject(active_project_id_)) {
+        for (const auto& other_chat : project->chats) {
+            if (other_chat.id == active_chat_id_) continue;
+            const auto other_folder = variable_resolver::FindValue(other_chat.user_variables, "ProjectFolder");
+            if (!other_folder || Trim(*other_folder).empty()) continue;
+            std::filesystem::path other_path(Utf8ToWide(Trim(*other_folder)));
+            if (!other_path.is_absolute()) continue;
+            other_path = DesktopCanonicalOrAbsolute(other_path);
+            if (PathsEqualForMove(other_path, source_path)) {
+                shared_explicit_chat_names.push_back(Utf8ToWide(other_chat.name));
+            }
+        }
+    }
+    const bool keep_old_folder =
+        !source_is_explicit_chat_folder || !shared_explicit_chat_names.empty();
+
+    const auto destination_text = ShowPromptDialog(
+        hwnd_,
+        PromptOptions{
+            L"Move Chat Folder",
+            L"New absolute folder path",
+            source_path.wstring()});
+    if (!destination_text || TrimWide(*destination_text).empty()) {
+        return;
+    }
+
+    std::filesystem::path destination_path(TrimWide(*destination_text));
+    if (!destination_path.is_absolute()) {
+        MessageBoxW(hwnd_, L"Enter an absolute destination folder path.", L"Invalid Destination", MB_OK | MB_ICONERROR);
+        return;
+    }
+    destination_path = DesktopCanonicalOrAbsolute(destination_path);
+
+    const std::wstring confirm =
+        L"Move this chat's ProjectFolder?\r\n\r\nFrom:\r\n" + source_path.wstring() +
+        L"\r\n\r\nTo:\r\n" + destination_path.wstring() +
+        (keep_old_folder
+            ? L"\r\n\r\nThe app will copy the folder, verify the copied files, and update chat.json. The old folder will be kept because the current folder is not safely unique to this chat."
+            : L"\r\n\r\nThe app will copy the folder, verify the copied files, update chat.json, then remove the old folder.");
+    if (MessageBoxW(hwnd_, confirm.c_str(), L"Confirm Move Chat Folder", MB_YESNO | MB_ICONWARNING) != IDYES) {
+        return;
+    }
+
+    UpdateStatus(L"Moving chat folder...");
+    SetCursor(LoadCursorW(nullptr, IDC_WAIT));
+
+    try {
+        DirectoryMoveStats stats;
+        std::wstring move_error;
+        if (!CopyDirectoryTreeVerifiedForMove(source_path, destination_path, &stats, &move_error)) {
+            SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+            MessageBoxW(
+                hwnd_,
+                move_error.empty() ? L"Could not move the chat folder." : move_error.c_str(),
+                L"Move Failed",
+                MB_OK | MB_ICONERROR);
+            UpdateStatus(L"Chat folder move failed; the original folder was not removed.");
+            return;
+        }
+
+        ChatInfo updated_chat = *chat;
+        UpsertChatProjectFolder(updated_chat, WideToUtf8(destination_path.wstring()));
+        storage_.SaveChat(active_project_id_, updated_chat);
+
+        std::error_code remove_ec;
+        if (!keep_old_folder) {
+            std::filesystem::remove_all(source_path, remove_ec);
+        }
+
+        ReloadProjects(active_project_id_, active_chat_id_);
+        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+
+        std::wstring status =
+            L"Moved chat folder to " + destination_path.wstring() +
+            L" (" + std::to_wstring(stats.files) + L" files, " +
+            FormatDashboardBytes(stats.bytes) + L").";
+        if (keep_old_folder) {
+            status += L" Old folder was kept because it may be shared.";
+            MessageBoxW(
+                hwnd_,
+                status.c_str(),
+                L"Move Completed",
+                MB_OK | MB_ICONINFORMATION);
+        } else if (remove_ec) {
+            status += L" Old folder could not be removed: " + Utf8ToWide(remove_ec.message());
+            MessageBoxW(
+                hwnd_,
+                status.c_str(),
+                L"Move Completed With Warning",
+                MB_OK | MB_ICONWARNING);
+        }
+        UpdateStatus(status);
+    } catch (const std::exception& ex) {
+        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+        MessageBoxW(
+            hwnd_,
+            Utf8ToWide(std::string("Could not move the chat folder: ") + ex.what()).c_str(),
+            L"Move Failed",
+            MB_OK | MB_ICONERROR);
+        UpdateStatus(L"Chat folder move failed; the original folder was not removed.");
     }
 }
 
@@ -5895,8 +6556,6 @@ void MainWindow::SendCurrentMessage() {
     RenderTranscript();
     UpdateStatus(L"Sending request...");
 
-    const size_t existing_count = request.messages.size();
-
     if (!include_tools) {
         std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, send_proj_settings]() {
             try {
@@ -6006,7 +6665,7 @@ void MainWindow::SendCurrentMessage() {
         return;
     }
 
-    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, existing_count, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, proj_settings, project_variables, runtime_variables, agentic_modes, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_, selected_compression_config, compression_service = &compression_service_]() {
+    std::thread([hwnd = hwnd_, request, project_id, chat_id, log_header, logging, full_messages, compressed_context, exposed_tools, rag_exposed_tools, rag_tool_definitions, rag_tool_routes, artifact_tool_definitions, artifact_runtime = artifact_tool_set.runtime, model_tool_definitions, model_tools, built_in_tool_definitions, project_settings_for_tools, proj_settings, project_variables, runtime_variables, agentic_modes, mcp_manager = &mcp_manager_, rag_service = &rag_service_, providers = providers_, selected_compression_config, compression_service = &compression_service_]() mutable {
         try {
         auto working_set_additions = std::make_shared<std::vector<RagWorkingSetEntry>>();
 
@@ -6032,10 +6691,15 @@ void MainWindow::SendCurrentMessage() {
         tool_definitions.insert(tool_definitions.end(), built_in_tool_definitions.begin(), built_in_tool_definitions.end());
 
         std::vector<MessageRecord> working_messages = request.messages;
-        // Baseline snapshot before tool calls bloat context. Guard only triggers
-        // if the *pre-loop* assembled request is already close to threshold,
-        // not on natural in-loop assistant/tool-result growth.
-        const std::vector<MessageRecord> pre_tool_loop_messages = working_messages;
+        std::vector<MessageRecord> transcript_messages = full_messages;
+        std::vector<MessageRecord> generated_messages;
+        std::string active_compressed_context = compressed_context;
+        int tool_loop_compression_count = 0;
+        auto append_transcript_message = [&](MessageRecord message) {
+            working_messages.push_back(message);
+            generated_messages.push_back(message);
+            transcript_messages.push_back(std::move(message));
+        };
         std::string error;
         const bool completion_driver_enabled = built_in_tools::IsCompletionDriverEnabled(
             project_settings_for_tools, proj_settings.selected_agentic_mode_id);
@@ -6048,22 +6712,23 @@ void MainWindow::SendCurrentMessage() {
         int completion_driver_continuations = 0;
         bool completion_driver_done = !completion_driver_enabled;
         bool success = false;
+        std::unordered_map<std::string, int> repeated_tool_failures;
 
         for (int round = 0; ; ++round) {
-            // Tool-loop emergency: if pre-tool-loop request already exceeds threshold,
-            // schedule compression for the *next* turn (preserves current tool chain).
-            if (selected_compression_config) {
-                ChatRequestOptions check;
-                check.system_prompt = request.system_prompt;
-                check.model = request.model;
-                check.messages = ModelVisibleMessages(pre_tool_loop_messages);
-                const size_t est_tool = EstimateRequestInputTokens(check, {}, false);
-                const size_t trigger_tool = ResolveCompressionTriggerTokens(
-                    project_settings_for_tools, selected_compression_config, check);
-                if (trigger_tool > 0 && est_tool >= trigger_tool) {
-                    compression_service->MarkCompressionScheduled(project_id, chat_id);
-                }
-            }
+            MaybeCompressDesktopToolLoopContext(
+                compression_service,
+                project_settings_for_tools,
+                selected_compression_config,
+                project_id,
+                chat_id,
+                project_variables,
+                tool_definitions,
+                request,
+                transcript_messages,
+                generated_messages,
+                working_messages,
+                active_compressed_context,
+                tool_loop_compression_count);
             ChatRequestOptions loop_request = request;
             loop_request.messages = ModelVisibleMessages(working_messages);
 
@@ -6137,7 +6802,7 @@ void MainWindow::SendCurrentMessage() {
                     }
                     assistant_message.tool_calls_json = tool_calls_json.dump();
                 }
-                working_messages.push_back(std::move(assistant_message));
+                append_transcript_message(std::move(assistant_message));
 
                 // Separate model tool calls from regular tool calls so we can
                 // run model-tool sub-agents in parallel while regular tools run serially.
@@ -6294,6 +6959,8 @@ void MainWindow::SendCurrentMessage() {
                     }
                 }
 
+                bool stop_due_to_repeated_tool_failure = false;
+                std::string repeated_tool_failure_error;
                 // Post trace and build working_messages tool results
                 for (const auto& p : pending) {
                     auto* trace_payload = new ToolTracePayload;
@@ -6323,8 +6990,22 @@ void MainWindow::SendCurrentMessage() {
                     tool_message.name = p.tool_call.name;
                     tool_message.tool_call_id = p.tool_call.id;
                     tool_message.content = p.result.content_text;
+                    if (!stop_due_to_repeated_tool_failure &&
+                        RecordRepeatedToolFailure(
+                            repeated_tool_failures,
+                            p.tool_call,
+                            p.result,
+                            &repeated_tool_failure_error)) {
+                        stop_due_to_repeated_tool_failure = true;
+                        tool_message.content +=
+                            "\n\n[Host stopped the tool loop because this exact tool failure repeated too many times.]";
+                    }
                     tool_message.created_at = CurrentTimestampUtc();
-                    working_messages.push_back(std::move(tool_message));
+                    append_transcript_message(std::move(tool_message));
+                }
+                if (stop_due_to_repeated_tool_failure) {
+                    error = repeated_tool_failure_error;
+                    break;
                 }
                 continue;
             }
@@ -6334,7 +7015,7 @@ void MainWindow::SendCurrentMessage() {
                 assistant_message.role = "assistant";
                 assistant_message.content = completion.assistant_text;
                 assistant_message.created_at = CurrentTimestampUtc();
-                working_messages.push_back(std::move(assistant_message));
+                append_transcript_message(std::move(assistant_message));
             }
             if (completion_driver_enabled && !completion_driver_done) {
                 if (completion_driver_max_continuations > 0 &&
@@ -6420,7 +7101,7 @@ void MainWindow::SendCurrentMessage() {
                 assistant_message.role = "assistant";
                 assistant_message.content = final_result.full_text;
                 assistant_message.created_at = CurrentTimestampUtc();
-                working_messages.push_back(std::move(assistant_message));
+                append_transcript_message(std::move(assistant_message));
                 success = true;
             } else {
                 error = final_result.error.empty()
@@ -6444,11 +7125,11 @@ void MainWindow::SendCurrentMessage() {
         final_payload->project_id = project_id;
         final_payload->chat_id = chat_id;
         final_payload->error = error;
-        for (size_t i = existing_count; i < working_messages.size(); ++i) {
-            if (built_in_tools::IsCompletionDriverContinuationMessage(working_messages[i])) {
+        for (const auto& message : generated_messages) {
+            if (built_in_tools::IsCompletionDriverContinuationMessage(message)) {
                 continue;
             }
-            final_payload->appended_messages.push_back(working_messages[i]);
+            final_payload->appended_messages.push_back(message);
         }
         final_payload->rag_working_set_additions = std::move(*working_set_additions);
         PostMessageW(hwnd, kChatFinishedMessage, 0, reinterpret_cast<LPARAM>(final_payload));
@@ -6836,6 +7517,7 @@ std::vector<ProjectMcpVariableValue> MainWindow::BuildRuntimeVariablesForChat(
     const std::string& chat_id) const {
     std::string project_name;
     std::string chat_name;
+    const ChatInfo* selected_chat = nullptr;
 
     for (const auto& project : projects_) {
         if (project.info.id != project_id) continue;
@@ -6843,6 +7525,7 @@ std::vector<ProjectMcpVariableValue> MainWindow::BuildRuntimeVariablesForChat(
         for (const auto& chat : project.chats) {
             if (chat.id == chat_id) {
                 chat_name = chat.name;
+                selected_chat = &chat;
                 break;
             }
         }
@@ -6858,6 +7541,11 @@ std::vector<ProjectMcpVariableValue> MainWindow::BuildRuntimeVariablesForChat(
     variable_resolver::UpsertValue(values, "USER", "");
     variable_resolver::UpsertValue(values, "USEREMAIL", "");
     variable_resolver::UpsertValue(values, "UserName", "");
+    if (selected_chat) {
+        for (const auto& variable : selected_chat->user_variables) {
+            variable_resolver::UpsertValue(values, variable);
+        }
+    }
     return values;
 }
 
@@ -6875,7 +7563,7 @@ std::vector<ProjectMcpVariableValue> MainWindow::BuildResolvedVariablesForChat(
         variable_resolver::UpsertValue(resolved, variable);
     }
     for (const auto& variable : BuildRuntimeVariablesForChat(project_id, chat_id)) {
-        variable_resolver::UpsertValue(resolved, variable.name, variable.value);
+        variable_resolver::UpsertValue(resolved, variable);
     }
 
     resolved = variable_resolver::ResolveValues(resolved);
@@ -6919,6 +7607,47 @@ std::string DashboardPreview(std::string value, size_t max_chars = 220) {
 
 std::wstring DashboardPath(const std::filesystem::path& path) {
     return path.empty() ? L"(none)" : path.wstring();
+}
+
+void AppendDashboardDirectoryListing(std::wostringstream& out,
+                                     const std::filesystem::path& directory,
+                                     const std::wstring& missing_text) {
+    std::error_code ec;
+    if (directory.empty() || !std::filesystem::is_directory(directory, ec) || ec) {
+        out << L"- " << missing_text << L"\r\n";
+        return;
+    }
+
+    std::vector<std::filesystem::directory_entry> entries;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
+        if (!ec) entries.push_back(entry);
+    }
+    if (ec) {
+        out << L"- Could not list directory: " << Utf8ToWide(ec.message()) << L"\r\n";
+        return;
+    }
+
+    std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+        return left.path().filename().wstring() < right.path().filename().wstring();
+    });
+    if (entries.empty()) {
+        out << L"- (empty)\r\n";
+        return;
+    }
+
+    size_t shown = 0;
+    for (const auto& entry : entries) {
+        if (shown++ >= 80) {
+            out << L"- ... " << (entries.size() - shown + 1) << L" more\r\n";
+            break;
+        }
+        std::error_code item_ec;
+        const bool is_dir = entry.is_directory(item_ec);
+        const auto size = is_dir ? 0 : entry.file_size(item_ec);
+        out << L"- " << entry.path().filename().wstring()
+            << (is_dir ? L" [dir]" : L" [" + FormatDashboardBytes(item_ec ? 0 : size) + L"]")
+            << L"\r\n";
+    }
 }
 
 std::wstring MainWindow::BuildChatDiagnosticsText() const {
@@ -7004,49 +7733,46 @@ std::wstring MainWindow::BuildChatDiagnosticsText() const {
     const auto chat_dir = storage_.data_root() / "projects" /
         active_project_id_ / "chats" / active_chat_id_;
     out << L"Chat Files\r\n";
-    out << L"- Chat directory: " << DashboardPath(chat_dir) << L"\r\n";
+    out << L"- Internal chat metadata directory: " << DashboardPath(chat_dir) << L"\r\n";
+    out << L"- Internal chat metadata file: " << DashboardPath(chat_dir / "chat.json") << L"\r\n";
     out << L"- Project chat log: " << DashboardPath(storage_.data_root() / (active_project_id_ + ".chatlog")) << L"\r\n";
     const auto project_settings = storage_.LoadProjectSettings(active_project_id_);
     const auto resolved_variables = BuildResolvedVariablesForChat(active_project_id_, active_chat_id_, project_settings);
-    for (const auto& variable : resolved_variables) {
-        const std::string key = variable_resolver::ToLookupKey(variable.name);
-        if (key == "projectfolder") {
-            out << L"- Resolved ProjectFolder: " << Utf8ToWide(variable.value) << L"\r\n";
-            break;
-        }
-    }
+    const auto stored_project_folder = chat
+        ? variable_resolver::FindValue(chat->user_variables, "ProjectFolder")
+        : std::optional<std::string>{};
+    const auto effective_project_folder =
+        variable_resolver::FindValue(resolved_variables, "ProjectFolder");
+    out << L"- Stored ProjectFolder (chat.json): "
+        << (stored_project_folder && !Trim(*stored_project_folder).empty()
+            ? Utf8ToWide(*stored_project_folder)
+            : L"(none; using resolved project/default variables)")
+        << L"\r\n";
+    out << L"- Effective ProjectFolder: "
+        << (effective_project_folder && !Trim(*effective_project_folder).empty()
+            ? Utf8ToWide(*effective_project_folder)
+            : L"(none)")
+        << L"\r\n";
+    out << L"- ProjectFolder source: "
+        << (stored_project_folder && !Trim(*stored_project_folder).empty()
+            ? L"chat.json user_variables override"
+            : L"project settings / MCP variables")
+        << L"\r\n";
     out << L"\r\n";
-    out << L"Files in chat directory\r\n";
+
+    out << L"Files in internal chat metadata directory\r\n";
+    AppendDashboardDirectoryListing(out, chat_dir, L"(chat metadata directory does not exist yet)");
+    out << L"\r\n";
+
+    out << L"Files in effective ProjectFolder\r\n";
+    const std::filesystem::path effective_project_folder_path =
+        (effective_project_folder && !Trim(*effective_project_folder).empty())
+            ? std::filesystem::path(Utf8ToWide(*effective_project_folder))
+            : std::filesystem::path{};
+    AppendDashboardDirectoryListing(out, effective_project_folder_path, L"(effective ProjectFolder does not exist or is not configured)");
+    out << L"\r\n";
+
     std::error_code ec;
-    if (!std::filesystem::is_directory(chat_dir, ec) || ec) {
-        out << L"- (chat directory does not exist yet)\r\n";
-    } else {
-        std::vector<std::filesystem::directory_entry> entries;
-        for (const auto& entry : std::filesystem::directory_iterator(chat_dir, ec)) {
-            if (!ec) entries.push_back(entry);
-        }
-        std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
-            return left.path().filename().wstring() < right.path().filename().wstring();
-        });
-        if (entries.empty()) {
-            out << L"- (empty)\r\n";
-        } else {
-            size_t shown = 0;
-            for (const auto& entry : entries) {
-                if (shown++ >= 80) {
-                    out << L"- ... " << (entries.size() - shown + 1) << L" more\r\n";
-                    break;
-                }
-                std::error_code item_ec;
-                const bool is_dir = entry.is_directory(item_ec);
-                const auto size = is_dir ? 0 : entry.file_size(item_ec);
-                out << L"- " << entry.path().filename().wstring()
-                    << (is_dir ? L" [dir]" : L" [" + FormatDashboardBytes(item_ec ? 0 : size) + L"]")
-                    << L"\r\n";
-            }
-        }
-    }
-    out << L"\r\n";
 
     if (active_messages_skipped_for_size_) {
         out << L"Messages\r\n";
@@ -7354,10 +8080,12 @@ int MainWindow::CountChatsInFlight() const {
 void MainWindow::RefreshInputState() {
     // Called after switching active chat so controls reflect the new chat's status.
     const bool busy = IsChatInFlight(active_chat_id_);
+    const bool has_active_chat = !active_project_id_.empty() && !active_chat_id_.empty();
     const bool large_preview = active_messages_skipped_for_size_;
     EnableWindow(send_button_, !busy && !large_preview);
     EnableWindow(input_, !busy && !large_preview);
     EnableWindow(compress_button_, !busy && !large_preview);
+    EnableWindow(move_chat_folder_button_, has_active_chat && !busy);
     EnableWindow(setup_system_button_, TRUE);  // Always enabled; does not require an active chat.
     // Tree, navigation, and manager buttons are NEVER locked by per-chat state.
 }

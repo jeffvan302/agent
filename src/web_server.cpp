@@ -4607,6 +4607,289 @@ bool MaybeScheduleCompression(
     return false;
 }
 
+constexpr int kMaxToolLoopCompressionsPerTurn = 8;
+constexpr int kRepeatedToolFailureLimit = 5;
+
+std::string TruncateForToolFailureSignature(std::string value) {
+    constexpr size_t kMaxSignatureText = 1200;
+    if (value.size() > kMaxSignatureText) {
+        value.resize(kMaxSignatureText);
+    }
+    return value;
+}
+
+std::string ToolFailureSignature(
+    const ChatToolCall& tool_call,
+    const McpToolCallResult& tool_result) {
+    if (tool_result.success && !tool_result.is_tool_error) {
+        return {};
+    }
+    const std::string arguments = tool_call.arguments_valid
+        ? tool_call.arguments_json
+        : (tool_call.original_arguments_json.empty()
+            ? tool_call.arguments_json
+            : tool_call.original_arguments_json);
+    return tool_call.name + "\n" +
+        TruncateForToolFailureSignature(arguments) + "\n" +
+        TruncateForToolFailureSignature(tool_result.content_text);
+}
+
+bool RecordRepeatedToolFailure(
+    std::unordered_map<std::string, int>& failure_counts,
+    const ChatToolCall& tool_call,
+    const McpToolCallResult& tool_result,
+    std::string* stop_message) {
+    const std::string signature = ToolFailureSignature(tool_call, tool_result);
+    if (signature.empty()) {
+        return false;
+    }
+    const int count = ++failure_counts[signature];
+    if (count < kRepeatedToolFailureLimit) {
+        return false;
+    }
+
+    std::ostringstream message;
+    message
+        << "Stopped tool loop after " << count
+        << " repeated identical failures from tool '" << tool_call.name
+        << "'. Last error: " << tool_result.content_text
+        << "\n\nThe model must choose a different action instead of retrying the same failing tool call.";
+    if (stop_message) {
+        *stop_message = message.str();
+    }
+    Logger::Warn("ToolLoop", message.str());
+    return true;
+}
+
+MessageRecord MakeWebCompressionRecord(
+    const std::vector<MessageRecord>& before_messages,
+    const std::vector<MessageRecord>& after_messages,
+    size_t compressed_through,
+    const std::string& compressed_context,
+    const std::string& message) {
+    const std::string created_at = NowIso();
+    json payload = {
+        {"status", "done"},
+        {"message", message},
+        {"created_at", created_at},
+        {"before_messages", before_messages.size()},
+        {"after_messages", after_messages.size()},
+        {"compressed_through", compressed_through},
+        {"before_tokens", EstimateMessagesTokens(before_messages)},
+        {"after_tokens", EstimateMessagesTokens(after_messages) +
+            EstimateTokenCount(compressed_context)},
+        {"compressed_context_tokens", EstimateTokenCount(compressed_context)},
+    };
+
+    MessageRecord record;
+    record.role = "compression";
+    record.content = DumpJsonForWeb(payload, "tool-loop compression chat record");
+    record.created_at = created_at;
+    return record;
+}
+
+void ReplaceCompressedContextInPrompt(
+    std::string& system_prompt,
+    const std::string& previous_context,
+    const std::string& next_context) {
+    if (next_context.empty()) {
+        return;
+    }
+
+    if (!previous_context.empty()) {
+        const size_t pos = system_prompt.find(previous_context);
+        if (pos != std::string::npos) {
+            system_prompt.replace(pos, previous_context.size(), next_context);
+            return;
+        }
+    }
+
+    if (!system_prompt.empty()) {
+        system_prompt = next_context + "\n\n" + system_prompt;
+    } else {
+        system_prompt = next_context;
+    }
+}
+
+std::vector<MessageRecord> BuildRequestTailAfterCompression(
+    const std::vector<MessageRecord>& compression_source,
+    size_t compressed_through,
+    const std::vector<MessageRecord>& current_working_messages) {
+    compressed_through = std::min(compressed_through, compression_source.size());
+    std::vector<MessageRecord> tail;
+    if (compressed_through < compression_source.size()) {
+        tail.assign(
+            compression_source.begin() + static_cast<std::ptrdiff_t>(compressed_through),
+            compression_source.end());
+    }
+    tail = message_sanitizer::SanitizeModelVisibleMessages(tail);
+
+    if (!current_working_messages.empty() &&
+        built_in_tools::IsCompletionDriverContinuationMessage(
+            current_working_messages.back())) {
+        const MessageRecord& continuation = current_working_messages.back();
+        if (tail.empty() ||
+            tail.back().role != continuation.role ||
+            tail.back().content != continuation.content) {
+            tail.push_back(continuation);
+        }
+    }
+    return tail;
+}
+
+bool MaybeCompressToolLoopContext(
+    AppStorage* storage,
+    ContextCompressionService* compression_service,
+    const ProjectSettings& project_settings,
+    const std::optional<ContextCompressionConfig>& selected_config,
+    const std::string& project_id,
+    const std::string& chat_id,
+    const std::vector<ProjectMcpVariableValue>& resolved_prompt_variables,
+    const std::vector<ChatToolDefinition>& tool_definitions,
+    ChatRequestOptions& request,
+    std::vector<MessageRecord>& transcript_messages,
+    std::vector<MessageRecord>& working_messages,
+    std::string& active_compressed_context,
+    int& compression_count,
+    const std::function<void(const std::string&, const std::string&)>& on_status = {}) {
+    if (!storage || !compression_service || !selected_config ||
+        project_settings.selected_compression_config_id.empty()) {
+        return false;
+    }
+
+    ChatRequestOptions check = request;
+    check.messages = ModelVisibleMessages(working_messages);
+    const size_t estimated_tokens =
+        EstimateRequestInputTokens(
+            check,
+            {},
+            tool_definitions,
+            request.model.supports_tools && !tool_definitions.empty());
+    const size_t trigger_tokens =
+        ResolveCompressionTriggerTokens(project_settings, selected_config, check);
+    if (trigger_tokens == 0 || estimated_tokens < trigger_tokens) {
+        return false;
+    }
+
+    if (compression_count >= kMaxToolLoopCompressionsPerTurn) {
+        compression_service->MarkCompressionScheduled(project_id, chat_id);
+        Logger::Warn("Compression",
+            "tool-loop compression limit reached project=" + project_id +
+            " chat=" + chat_id +
+            " count=" + std::to_string(compression_count) +
+            " estimated_tokens=" + std::to_string(estimated_tokens) +
+            " trigger_tokens=" + std::to_string(trigger_tokens));
+        return false;
+    }
+
+    const std::vector<MessageRecord> compression_source =
+        ModelVisibleMessages(transcript_messages);
+    if (compression_source.empty()) {
+        return false;
+    }
+
+    ++compression_count;
+    if (on_status) {
+        on_status("tool_loop_compression_start",
+            "Compressing tool context before continuing...");
+    }
+
+    auto model_caller =
+        [](const ChatRequestOptions& opts)
+            -> std::optional<ChatCompletionResult> {
+        const auto result = OpenAIClient::CreateSimpleCompletion(opts);
+        return result.success ? std::make_optional(result) : std::nullopt;
+    };
+
+    const std::string previous_context = active_compressed_context.empty()
+        ? compression_service->LoadChatState(project_id, chat_id).current_compressed_context
+        : active_compressed_context;
+    const std::string fresh_context =
+        compression_service->CompressConversation(
+            compression_source,
+            project_id,
+            chat_id,
+            project_settings.selected_compression_config_id,
+            model_caller,
+            false,
+            "tool_loop_threshold",
+            resolved_prompt_variables);
+
+    if (fresh_context.empty()) {
+        compression_service->MarkCompressionScheduled(project_id, chat_id);
+        if (on_status) {
+            on_status("tool_loop_compression_skipped",
+                "Tool context compression checked.");
+        }
+        Logger::Warn("Compression",
+            "tool-loop compression produced no context project=" + project_id +
+            " chat=" + chat_id +
+            " estimated_tokens=" + std::to_string(estimated_tokens) +
+            " trigger_tokens=" + std::to_string(trigger_tokens));
+        return false;
+    }
+
+    auto compression_state =
+        compression_service->LoadChatState(project_id, chat_id);
+    const size_t compressed_through = std::min(
+        compression_state.last_compression_message_index,
+        compression_source.size());
+    working_messages = BuildRequestTailAfterCompression(
+        compression_source,
+        compressed_through,
+        working_messages);
+    ReplaceCompressedContextInPrompt(
+        request.system_prompt,
+        previous_context,
+        fresh_context);
+    active_compressed_context = fresh_context;
+
+    const MessageRecord compression_record = MakeWebCompressionRecord(
+        compression_source,
+        working_messages,
+        compressed_through,
+        fresh_context,
+        "Tool-loop context compressed.");
+
+    storage->SaveMessages(project_id, chat_id, transcript_messages);
+    if (storage->RolloverMessagesAfterCompression(
+            project_id,
+            chat_id,
+            compressed_through,
+            compression_record)) {
+        ResetCompressionIndexesAfterMessageRollover(
+            compression_service, project_id, chat_id);
+        transcript_messages = storage->LoadMessages(project_id, chat_id);
+    } else {
+        transcript_messages.push_back(compression_record);
+        storage->SaveMessages(project_id, chat_id, transcript_messages);
+    }
+
+    if (project_settings.enable_chat_logging) {
+        ChatRequestLogger::Log(project_id, true,
+            ChatRequestLogger::FormatCompressionBlock(
+                "tool_loop_threshold",
+                compression_source.size(),
+                working_messages.size(),
+                compressed_through,
+                fresh_context,
+                selected_config->name));
+    }
+
+    Logger::Info("Compression",
+        "tool-loop compressed project=" + project_id +
+        " chat=" + chat_id +
+        " before_tokens=" + std::to_string(estimated_tokens) +
+        " trigger_tokens=" + std::to_string(trigger_tokens) +
+        " compressed_through=" + std::to_string(compressed_through) +
+        " remaining_messages=" + std::to_string(working_messages.size()));
+    if (on_status) {
+        on_status("tool_loop_compression_done",
+            "Tool context compressed; continuing...");
+    }
+    return true;
+}
+
 WebServer::ModelCallResult
 WebServer::CallModel(const std::string& project_id,
                      const std::string& chat_id,
@@ -4813,24 +5096,27 @@ WebServer::CallModel(const std::string& project_id,
         // fresh continuation budget.
         int completion_driver_continuations = 0;
         std::vector<MessageRecord> working_messages = opts.messages;
+        std::string active_compressed_context = prepared_history.compressed_context;
+        int tool_loop_compression_count = 0;
+        std::unordered_map<std::string, int> repeated_tool_failures;
         bool completion_driver_done = !completion_driver_enabled;
         bool success = false;
 
         for (int round = 0; ; ++round) {
-            // Tool-loop emergency: if pre-tool-loop request already exceeds threshold,
-            // schedule compression for the *next* turn (preserves current tool chain).
-            if (prepared_history.selected_config) {
-                ChatRequestOptions check;
-                check.system_prompt = opts.system_prompt;
-                check.model = opts.model;
-                check.messages = ModelVisibleMessages(working_messages);
-                const size_t est_tool = EstimateRequestInputTokens(check, {}, {}, false);
-                const size_t trigger_tool = ResolveCompressionTriggerTokens(
-                    proj_settings, prepared_history.selected_config, check);
-                if (trigger_tool > 0 && est_tool >= trigger_tool) {
-                    compression_service_.MarkCompressionScheduled(project_id, chat_id);
-                }
-            }
+            MaybeCompressToolLoopContext(
+                storage_,
+                &compression_service_,
+                proj_settings,
+                prepared_history.selected_config,
+                project_id,
+                chat_id,
+                resolved_prompt_variables,
+                tool_definitions,
+                opts,
+                messages,
+                working_messages,
+                active_compressed_context,
+                tool_loop_compression_count);
             ChatRequestOptions loop_opts = opts;
             loop_opts.messages = ModelVisibleMessages(working_messages);
 
@@ -4919,8 +5205,32 @@ WebServer::CallModel(const std::string& project_id,
                     } else {
                         tool_result = ToolUnavailableResult(tool_call);
                     }
+                    std::string repeated_failure_error;
+                    const bool repeated_failure_stop = RecordRepeatedToolFailure(
+                        repeated_tool_failures,
+                        tool_call,
+                        tool_result,
+                        &repeated_failure_error);
+                    if (repeated_failure_stop) {
+                        tool_result.content_text +=
+                            "\n\n[Host stopped the tool loop because this exact tool failure repeated too many times.]";
+                        tool_result.raw_result_json = DumpJsonForWeb(json{
+                            {"error", tool_result.content_text},
+                            {"host_stopped_repeated_tool_failure", true},
+                        }, "repeated tool failure result", 2);
+                    }
                     AppendToolResultMessage(messages, tool_call, tool_result);
                     AppendToolResultMessage(working_messages, tool_call, tool_result);
+                    if (repeated_failure_stop) {
+                        result.error = repeated_failure_error;
+                        if (logging) {
+                            ChatRequestLogger::Log(project_id, logging,
+                                log_block + ChatRequestLogger::FormatErrorResponse(result.error));
+                        }
+                        storage_->SaveMessages(project_id, chat_id, messages);
+                        NotifyContentChanged();
+                        return result;
+                    }
                 }
                 continue;
             }
@@ -5552,25 +5862,29 @@ std::string WebServer::StreamModel(const std::string& project_id,
         // fresh continuation budget.
         int completion_driver_continuations = 0;
         std::vector<MessageRecord> working_messages = opts.messages;
+        int tool_loop_compression_count = 0;
+        std::unordered_map<std::string, int> repeated_tool_failures;
         bool completion_driver_done = !completion_driver_enabled;
         std::string accumulated;
         bool aborted = false;
         bool success = false;
 
         for (int round = 0; ; ++round) {
-            // Tool-loop emergency: if threshold exceeded mid-loop, schedule for next turn
-            if (prepared_history.selected_config) {
-                ChatRequestOptions check;
-                check.system_prompt = opts.system_prompt;
-                check.model = opts.model;
-                check.messages = ModelVisibleMessages(working_messages);
-                const size_t est_tool = EstimateRequestInputTokens(check, {}, {}, false);
-                const size_t trigger_tool = ResolveCompressionTriggerTokens(
-                    proj_settings, prepared_history.selected_config, check);
-                if (trigger_tool > 0 && est_tool >= trigger_tool) {
-                    compression_service_.MarkCompressionScheduled(project_id, chat_id);
-                }
-            }
+            MaybeCompressToolLoopContext(
+                storage_,
+                &compression_service_,
+                proj_settings,
+                prepared_history.selected_config,
+                project_id,
+                chat_id,
+                resolved_prompt_variables,
+                tool_definitions,
+                opts,
+                messages,
+                working_messages,
+                active_compressed_context,
+                tool_loop_compression_count,
+                on_activity_status);
             ChatRequestOptions loop_opts = opts;
             loop_opts.messages = ModelVisibleMessages(working_messages);
 
@@ -5841,6 +6155,20 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     } else {
                         tool_result = ToolUnavailableResult(tool_call);
                     }
+                    std::string repeated_failure_error;
+                    const bool repeated_failure_stop = RecordRepeatedToolFailure(
+                        repeated_tool_failures,
+                        tool_call,
+                        tool_result,
+                        &repeated_failure_error);
+                    if (repeated_failure_stop) {
+                        tool_result.content_text +=
+                            "\n\n[Host stopped the tool loop because this exact tool failure repeated too many times.]";
+                        tool_result.raw_result_json = DumpJsonForWeb(json{
+                            {"error", tool_result.content_text},
+                            {"host_stopped_repeated_tool_failure", true},
+                        }, "repeated tool failure result", 2);
+                    }
                     if (on_tool_status) {
                         const std::string diagnostic_result =
                             !tool_result.raw_result_json.empty()
@@ -5855,6 +6183,16 @@ std::string WebServer::StreamModel(const std::string& project_id,
                     }
                     AppendToolResultMessage(messages, tool_call, tool_result);
                     AppendToolResultMessage(working_messages, tool_call, tool_result);
+                    if (repeated_failure_stop) {
+                        if (logging) {
+                            ChatRequestLogger::Log(project_id, logging,
+                                log_header + ChatRequestLogger::FormatErrorResponse(repeated_failure_error));
+                        }
+                        storage_->SaveMessages(project_id, chat_id, messages);
+                        NotifyContentChanged();
+                        persist_visible_error(repeated_failure_error);
+                        return repeated_failure_error;
+                    }
                 }
                 if (aborted) {
                     storage_->SaveMessages(project_id, chat_id, messages);

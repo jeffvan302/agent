@@ -2607,6 +2607,7 @@ function setSelectedChatTitle(projectId, chatName) {
 
 const PLANNER_SECTIONS = [
   { key: 'goals', label: 'Goals' },
+  { key: 'phases', label: 'Phases' },
   { key: 'features', label: 'Features' },
   { key: 'steps', label: 'Steps' },
   { key: 'blockers', label: 'Blockers' },
@@ -2616,6 +2617,7 @@ const PLANNER_SECTIONS = [
 const PLANNER_CHILD_SECTIONS = [
   { key: 'subgoals', label: 'Subgoals' },
   { key: 'goals', label: 'Goals' },
+  { key: 'phases', label: 'Phases' },
   { key: 'features', label: 'Features' },
   { key: 'steps', label: 'Steps' },
   { key: 'blockers', label: 'Blockers' },

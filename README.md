@@ -1,5 +1,12 @@
 # Agent Desktop
 
+This application is a proof of concept of how large language models can be integrated into most systems.  Using Ollama, we can try different models that are available to us.  Some are really efficient at coding using very few resources to do so.   Others ideal for certain gatekeeping tasks.
+
+This is an executable that has a web server built into it. With this app, you can install all the required features by clicking the Setup System button. This app contains all of the wrapper tools that you might need, such as MCP servers, RAG databases and even other built in tools.
+***Caution should be taken when running this application, since the default settings will allow the large language models will have access to your files.***
+With this, you can configure certain examples, use certain models, and test them for what you might want to use in real implementations. 
+You can check whether they do follow the rules like you want them to. Or are they going to give some sort of apple pie recipe to a user if they can be fooled to do so? 
+On the other hand, you can go all extreme and set up a model to code actual applications for you, all automated with some question-asking capabilities in between. 
 Agent Desktop is the local setup and service host for the web-based agent system. Most day-to-day work happens in the website after the app has been configured and started.
 
 ## Quick Start
@@ -54,6 +61,19 @@ To change it:
 3. Scroll to **Project variables**.
 4. Change the project folder value.
 5. Save the settings.
+
+## Try Coding:
+
+After setting up everything with the system setup, you can go to the website, click on Create Applications, and create a new chat for your application. 
+At the bottom, make sure your mode is Planner with tools. And ask the following: 
+``` I'd like to develop an application, maybe in Node.js. That can monitor the CPU and memory usage and display that on a website. ```
+
+Answer any prompts that are asked of you. And when you're happy with the planning that it's done so far, you can switch the mode to Task Execution And tell it to execute.
+If you want to do any additional refinement to the project, switch the mode to Refinement. And at this point, you can ask it to do a step-by-step refinement of items. Or add specific tasks that you want the system to complete. 
+
+## Gate Keeping
+
+Next, we can try some gatekeeping examples. Click on the gatekeeping example and click on need chat. Create the chat. And then at the bottom, you've got different modes. There's a grumpy old man as well as a deflective comedian.  At the bottom, you can also select the different model types. And see if you can break the model by asking it different questions.  Inside the actual application in the GUI, there is an Agentic Modes button.  There you can examine under which rules the grumpy old man or the deflective comedian operate. 
 
 ## Built-in Variables
 

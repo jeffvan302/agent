@@ -21,6 +21,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 #include <windows.h>
 #include <combaseapi.h>
@@ -100,7 +101,8 @@ inline std::string FilesystemSystemPrompt() {
         "- Use the project_filesystem tool for all file read, write, directory listing, and edit operations.\n"
         "- Always specify paths relative to the configured working directory (default $ProjectFolder$). Templates like $ProjectFolder$ are expanded automatically.\n"
         "- Actions: read, write, edit, list_directory, create_directory.\n"
-        "- read: Returns file content. Optionally pass start_line / end_line (1-based, inclusive) or start_offset / length (bytes).\n"
+        "- read: Returns UTF-8 text file content. Optionally pass start_line / end_line (1-based, inclusive) or start_offset / length (bytes).\n"
+        "- Do not read binary files such as .jar, .zip, .png, .jpg, .ico, .exe, .dll, .pdf, or generated build artifacts as text. Use list_directory to identify them; binary/non-UTF-8 files return a clear tool error instead of content.\n"
         "- write: Overwrites a file. Pass create_backup=true to snapshot the existing file into .agent/backups/<timestamp>/<path> before overwriting.\n"
         "- edit: Applies JSON diff edits. Each edit object uses either:\n"
         "  1) old_lines + new_lines — match-and-replace by contiguous lines; each array entry may be one line or a multiline block, or\n"
@@ -249,19 +251,23 @@ inline std::string PlannerSystemPrompt() {
         "- get: Load the current plan. Do this at the start of a complex task to check existing state.\n"
         "- create/replace: Write a complete new plan. Use when establishing a new project or resetting the plan.\n"
         "- update: Merge top-level fields into the existing plan. Use for bulk updates (e.g., change the main goal).\n"
-        "- clear: Delete all items from a section (goals/features/steps/blockers/notes/tool_hints) or the entire plan if section=all.\n"
+        "- clear: Delete all items from a section (goals/features/steps/blockers/notes/tool_hints/phases) or the entire plan if section=all.\n"
         "- add_item: Append an item to a section. Optionally nest under a parent item via parent_id.\n"
         "- update_item: Modify fields of an existing item by id (e.g., mark status=completed).\n"
         "- remove_item: Delete an item by id from a section (or section=all to search all sections).\n"
-        "Sections: goals, features, steps, blockers, notes, tool_hints.\n"
+        "Sections: goals, features, steps, blockers, notes, tool_hints, phases.\n"
+        "- The project_planner file is the source of truth for task progress. Do not create a separate progress/plan document instead of using this tool unless the user explicitly asks for that deliverable.\n"
         "Status values for items: pending (not started), in_progress (active), completed (done), blocked (waiting), cancelled (abandoned).\n"
         "- When adding items, an id is auto-generated if omitted.\n"
+        "- Full-plan create/update also normalizes missing ids. Phase steps get stable ids like p3s6 (phase 3, step 6).\n"
         "- child_section defaults to 'subgoals' for goals, otherwise the requested section.\n"
         "- To edit an existing item, always use update_item with the existing id.\n"
+        "- If update_item or remove_item reports that an item was not found, do not retry the same id. Call get, inspect the returned ids, then update an existing id, add a missing item, or update the full plan.\n"
         "- The only way to get strikethrough in the UI is status=completed.\n"
         "Examples:\n"
         "  Load plan: {\"action\":\"get\"}\n"
         "  Create full plan: {\"action\":\"create\",\"plan\":{\"goal\":\"Build app\",\"goals\":[{\"id\":\"g1\",\"title\":\"Setup\",\"status\":\"pending\"}]}}\n"
+        "  Create a phase plan: {\"action\":\"create\",\"plan\":{\"goal\":\"Build app\",\"phases\":[{\"id\":\"p1\",\"title\":\"Phase 1\",\"status\":\"pending\",\"steps\":[{\"id\":\"p1s1\",\"task\":\"Setup\",\"status\":\"pending\"}]}]}}\n"
         "  Add a step: {\"action\":\"add_item\",\"section\":\"steps\",\"item\":{\"task\":\"Install deps\",\"status\":\"pending\"}}\n"
         "  Add nested subgoal: {\"action\":\"add_item\",\"section\":\"goals\",\"parent_id\":\"g1\",\"item\":{\"title\":\"Subtask\",\"status\":\"pending\"}}\n"
         "  Mark completed: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"completed\"}}\n"
@@ -382,7 +388,9 @@ inline std::vector<ChatToolDefinition> BuildDefinitions(
             "- add_item — Add a new item to a section. Can be nested under a parent item.\n"
             "- update_item — Modify fields of an existing item by id (e.g. change status to completed).\n"
             "- remove_item — Delete an item by id.\n\n"
-            "Sections: goals, features, steps, blockers, notes, tool_hints\n"
+            "Sections: goals, features, steps, blockers, notes, tool_hints, phases\n"
+            "The project_planner file is the source of truth for task progress. Do not create a separate progress/plan document "
+            "instead of using this tool unless the user explicitly asks for that deliverable.\n"
             "Status values (for item.status):\n"
             "- pending — Not started (unchecked in UI)\n"
             "- in_progress — Currently active (blue badge)\n"
@@ -392,26 +400,29 @@ inline std::vector<ChatToolDefinition> BuildDefinitions(
             "Examples:\n"
             "1) Load plan: {\"action\":\"get\"}\n"
             "2) Create/replace full plan: {\"action\":\"create\",\"plan\":{\"goal\":\"Build app\",\"goals\":[{\"id\":\"g1\",\"title\":\"Setup\",\"status\":\"pending\"}]}}\n"
-            "3) Add a top-level step: {\"action\":\"add_item\",\"section\":\"steps\",\"item\":{\"task\":\"Install deps\",\"status\":\"pending\"}}\n"
-            "4) Add a nested subgoal under parent g1: {\"action\":\"add_item\",\"section\":\"goals\",\"parent_id\":\"g1\",\"item\":{\"title\":\"Subtask\",\"status\":\"pending\"}}\n"
-            "5) Check off / mark completed: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"completed\"}}\n"
-            "6) Mark in progress: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"in_progress\"}}\n"
-            "7) Cancel / abandon: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"cancelled\"}}\n"
-            "8) Remove an item: {\"action\":\"remove_item\",\"section\":\"all\",\"id\":\"s1\"}\n\n"
+            "3) Create/replace a phase plan: {\"action\":\"create\",\"plan\":{\"goal\":\"Build app\",\"phases\":[{\"id\":\"p1\",\"title\":\"Phase 1\",\"status\":\"pending\",\"steps\":[{\"id\":\"p1s1\",\"task\":\"Setup\",\"status\":\"pending\"}]}]}}\n"
+            "4) Add a top-level step: {\"action\":\"add_item\",\"section\":\"steps\",\"item\":{\"task\":\"Install deps\",\"status\":\"pending\"}}\n"
+            "5) Add a nested subgoal under parent g1: {\"action\":\"add_item\",\"section\":\"goals\",\"parent_id\":\"g1\",\"item\":{\"title\":\"Subtask\",\"status\":\"pending\"}}\n"
+            "6) Check off / mark completed: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"completed\"}}\n"
+            "7) Mark in progress: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"in_progress\"}}\n"
+            "8) Cancel / abandon: {\"action\":\"update_item\",\"section\":\"all\",\"id\":\"s1\",\"item\":{\"status\":\"cancelled\"}}\n"
+            "9) Remove an item: {\"action\":\"remove_item\",\"section\":\"all\",\"id\":\"s1\"}\n\n"
             "Notes:\n"
             "- When adding items, an id is auto-generated if omitted.\n"
+            "- Full-plan create/update also normalizes missing ids. Phase steps get stable ids like p3s6 (phase 3, step 6).\n"
             "- child_section defaults to 'subgoals' for goals, otherwise the requested section.\n"
             "- To edit an existing item, always use update_item with the existing id.\n"
+            "- If update_item or remove_item reports that an item was not found, do not retry the same id. Call get, inspect the returned ids, then update an existing id, add a missing item, or update the full plan.\n"
             "- The only way to get strikethrough in the UI is status=completed.\n"
             "- 'create' is an alias for 'replace' and is the preferred action when establishing a new plan.";
         planner.parameters_json = R"({
   "type": "object",
   "properties": {
     "action": {"type": "string", "enum": ["get", "create", "replace", "update", "clear", "add_item", "update_item", "remove_item"], "description": "Planner operation to perform. Use 'get' to read, 'create' or 'replace' to write a full plan, 'update' to merge fields, 'add_item' to append, 'update_item' to edit by id, 'remove_item' to delete by id, 'clear' to empty a section or all."},
-    "section": {"type": "string", "enum": ["goals", "features", "steps", "blockers", "notes", "tool_hints", "all"], "description": "Plan section for item operations or section clears."},
+    "section": {"type": "string", "enum": ["goals", "features", "steps", "blockers", "notes", "tool_hints", "phases", "all"], "description": "Plan section for item operations or section clears."},
     "id": {"description": "Item id for update_item or remove_item. String or number."},
     "parent_id": {"description": "Optional parent item id for add_item. Use this to add nested subgoals or nested steps."},
-    "parent_section": {"type": "string", "enum": ["goals", "features", "steps", "blockers", "notes", "all"], "description": "Optional section to search for parent_id. Defaults to all searchable sections."},
+    "parent_section": {"type": "string", "enum": ["goals", "features", "steps", "blockers", "notes", "phases", "all"], "description": "Optional section to search for parent_id. Defaults to all searchable sections."},
     "child_section": {"type": "string", "enum": ["subgoals", "goals", "steps", "features", "blockers", "notes", "tool_hints"], "description": "Nested array on the parent for add_item. Defaults to subgoals when adding goals, otherwise the requested section."},
     "item": {"type": "object", "description": "Item to add or fields to merge into an existing item. Goals may include subgoals/goals and steps arrays. Steps may include nested steps. Steps should include task, status, tool_hint, and done_when when applicable."},
     "plan": {"type": "object", "description": "Complete replacement plan for create/replace, or top-level fields/sections to merge for update."}
@@ -497,11 +508,12 @@ inline std::vector<ChatToolDefinition> BuildDefinitions(
             "Project Filesystem tool. Read, write, edit, list, and create files/directories under the configured working directory. "
             "All paths are relative to the working directory (default $ProjectFolder$) and templates are auto-expanded.\n\n"
             "Actions:\n"
-            "- read — Return the full content of a file, or a portion if start_line/end_line or start_offset/length are provided.\n"
+            "- read - Return UTF-8 text file content, or a portion if start_line/end_line or start_offset/length are provided. Binary/non-UTF-8 files return a clear error instead of raw content.\n"
             "- write — Overwrite a file with new content. Set create_backup=true to snapshot the original into .agent/backups/<timestamp>.\n"
             "- edit — Apply diff edits using old_lines/new_lines replacements. Each entry may be a single line or multiline block; embedded newlines are normalized before matching.\n"
             "- list_directory — Return files and subdirectories for the given path.\n"
             "- create_directory — Create a new directory (including intermediate parents).\n\n"
+            "Do not read .jar, .zip, image, executable, PDF, or generated build artifacts as text; list them or inspect source/config files instead.\n\n"
             "Edit matching tries exact lines first, then safe whitespace-tolerant matching. Python/YAML/Makefile-style files only allow indentation-preserving tolerance.\n\n"
             "Errors are explicit: file_not_found, permission_denied, invalid_path, or backup_failed. Do not retry blindly.";
         fs.parameters_json = R"({
@@ -2347,7 +2359,8 @@ inline nlohmann::json EmptyPlannerDocument() {
 
 inline bool IsPlannerSection(const std::string& section) {
     return section == "goals" || section == "features" || section == "steps" ||
-           section == "blockers" || section == "notes" || section == "tool_hints";
+           section == "blockers" || section == "notes" || section == "tool_hints" ||
+           section == "phases";
 }
 
 inline bool IsPlannerChildSection(const std::string& section) {
@@ -2422,6 +2435,205 @@ inline bool PlannerIdEquals(const nlohmann::json& lhs, const nlohmann::json& rhs
     return false;
 }
 
+inline std::string PlannerIdAsString(const nlohmann::json& id) {
+    if (id.is_string()) return id.get<std::string>();
+    if (id.is_number_integer()) return std::to_string(id.get<long long>());
+    if (id.is_number_unsigned()) return std::to_string(id.get<unsigned long long>());
+    return id.dump();
+}
+
+inline void CollectPlannerIdsRecursive(
+    const nlohmann::json& value,
+    std::unordered_set<std::string>* ids) {
+    if (!ids) return;
+    if (value.is_object()) {
+        if (value.contains("id")) {
+            ids->insert(PlannerIdAsString(value["id"]));
+        }
+        for (const auto& item : value.items()) {
+            CollectPlannerIdsRecursive(item.value(), ids);
+        }
+    } else if (value.is_array()) {
+        for (const auto& item : value) {
+            CollectPlannerIdsRecursive(item, ids);
+        }
+    }
+}
+
+inline std::string UniquePlannerId(
+    const std::string& preferred,
+    std::unordered_set<std::string>* ids) {
+    if (!ids) return preferred;
+    std::string candidate = preferred.empty() ? "item" : preferred;
+    if (ids->insert(candidate).second) {
+        return candidate;
+    }
+    for (int suffix = 2; ; ++suffix) {
+        const std::string next = candidate + "_" + std::to_string(suffix);
+        if (ids->insert(next).second) {
+            return next;
+        }
+    }
+}
+
+inline int ExtractPlannerPhaseNumber(const nlohmann::json& phase, size_t fallback_index) {
+    std::string text;
+    if (phase.is_object()) {
+        if (phase.contains("name") && phase["name"].is_string()) {
+            text = phase["name"].get<std::string>();
+        } else if (phase.contains("title") && phase["title"].is_string()) {
+            text = phase["title"].get<std::string>();
+        }
+    }
+    const std::string lowered = LowerAsciiCopy(text);
+    size_t pos = lowered.find("phase");
+    if (pos != std::string::npos) {
+        pos += 5;
+        while (pos < lowered.size() &&
+               !std::isdigit(static_cast<unsigned char>(lowered[pos]))) {
+            ++pos;
+        }
+        int value = 0;
+        while (pos < lowered.size() &&
+               std::isdigit(static_cast<unsigned char>(lowered[pos]))) {
+            value = value * 10 + (lowered[pos] - '0');
+            ++pos;
+        }
+        if (value > 0) {
+            return value;
+        }
+    }
+    return static_cast<int>(fallback_index + 1);
+}
+
+inline bool PlannerSectionShouldHaveStatus(const std::string& section) {
+    return section == "goals" || section == "subgoals" ||
+           section == "features" || section == "steps" ||
+           section == "blockers";
+}
+
+inline std::string PlannerChildIdPrefix(
+    const std::string& parent_id,
+    const std::string& section,
+    size_t index) {
+    const size_t ordinal = index + 1;
+    if (section == "steps") return parent_id + "s" + std::to_string(ordinal);
+    if (section == "goals" || section == "subgoals") return parent_id + "g" + std::to_string(ordinal);
+    if (section == "features") return parent_id + "f" + std::to_string(ordinal);
+    if (section == "blockers") return parent_id + "b" + std::to_string(ordinal);
+    if (section == "notes") return parent_id + "n" + std::to_string(ordinal);
+    if (section == "tool_hints") return parent_id + "t" + std::to_string(ordinal);
+    return parent_id + "_" + std::to_string(ordinal);
+}
+
+inline std::string PlannerTopLevelIdPrefix(
+    const std::string& section,
+    const nlohmann::json& item,
+    size_t index) {
+    const size_t ordinal = index + 1;
+    if (section == "phases") {
+        return "p" + std::to_string(ExtractPlannerPhaseNumber(item, index));
+    }
+    if (section == "steps") return "s" + std::to_string(ordinal);
+    if (section == "goals") return "g" + std::to_string(ordinal);
+    if (section == "features") return "f" + std::to_string(ordinal);
+    if (section == "blockers") return "b" + std::to_string(ordinal);
+    if (section == "notes") return "n" + std::to_string(ordinal);
+    if (section == "tool_hints") return "t" + std::to_string(ordinal);
+    return "item" + std::to_string(ordinal);
+}
+
+inline bool PlannerObjectLooksTrackable(const nlohmann::json& item) {
+    if (!item.is_object()) return false;
+    for (const char* key : {
+             "id", "status", "task", "title", "name", "done_when",
+             "tool_hint", "goals", "subgoals", "features", "steps",
+             "blockers", "notes", "tool_hints"}) {
+        if (item.contains(key)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline void NormalizePlannerArray(
+    nlohmann::json& items,
+    const std::string& section,
+    const std::string& parent_id,
+    std::unordered_set<std::string>* ids,
+    bool* changed);
+
+inline void NormalizePlannerObject(
+    nlohmann::json& item,
+    const std::string& section,
+    const std::string& suggested_id,
+    std::unordered_set<std::string>* ids,
+    bool* changed) {
+    if (!item.is_object()) return;
+
+    if (!item.contains("id") && PlannerObjectLooksTrackable(item)) {
+        item["id"] = UniquePlannerId(suggested_id, ids);
+        if (changed) *changed = true;
+    }
+    const std::string item_id =
+        item.contains("id") ? PlannerIdAsString(item["id"]) : suggested_id;
+
+    if (PlannerSectionShouldHaveStatus(section) && !item.contains("status")) {
+        item["status"] = "pending";
+        if (changed) *changed = true;
+    }
+
+    for (const char* child_section : {
+             "goals", "subgoals", "features", "steps", "blockers",
+             "notes", "tool_hints"}) {
+        if (item.contains(child_section) && item[child_section].is_array()) {
+            NormalizePlannerArray(
+                item[child_section],
+                child_section,
+                item_id,
+                ids,
+                changed);
+        }
+    }
+}
+
+inline void NormalizePlannerArray(
+    nlohmann::json& items,
+    const std::string& section,
+    const std::string& parent_id,
+    std::unordered_set<std::string>* ids,
+    bool* changed) {
+    if (!items.is_array()) return;
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (!items[i].is_object()) continue;
+        const std::string suggested_id = parent_id.empty()
+            ? PlannerTopLevelIdPrefix(section, items[i], i)
+            : PlannerChildIdPrefix(parent_id, section, i);
+        NormalizePlannerObject(items[i], section, suggested_id, ids, changed);
+    }
+}
+
+inline bool NormalizePlannerDocument(nlohmann::json& plan) {
+    if (!plan.is_object()) return false;
+    bool changed = false;
+    std::unordered_set<std::string> ids;
+    CollectPlannerIdsRecursive(plan, &ids);
+    for (const char* section : {
+             "goals", "features", "steps", "blockers", "notes",
+             "tool_hints", "phases"}) {
+        if (plan.contains(section) && plan[section].is_array()) {
+            NormalizePlannerArray(plan[section], section, "", &ids, &changed);
+        }
+    }
+    return changed;
+}
+
+inline std::string PlannerItemNotFoundMessage(const std::string& section) {
+    return "Planner item not found in section " + section + ". "
+        "Do not retry the same id blindly. Call project_planner with {\"action\":\"get\"} "
+        "and use an id from the returned planner, or update the full plan with action=update if the item does not exist yet.";
+}
+
 inline int NextPlannerItemId(const nlohmann::json& items) {
     int next_id = 1;
     if (!items.is_array()) return next_id;
@@ -2446,7 +2658,7 @@ inline void UpdateMaxPlannerItemId(const nlohmann::json& items, int* max_id) {
                 *max_id = std::max(*max_id, id.get<int>());
             }
         }
-        for (const char* key : {"goals", "subgoals", "features", "steps", "blockers", "notes"}) {
+        for (const char* key : {"goals", "subgoals", "features", "steps", "blockers", "notes", "tool_hints", "phases"}) {
             if (item.contains(key)) {
                 UpdateMaxPlannerItemId(item[key], max_id);
             }
@@ -2456,7 +2668,7 @@ inline void UpdateMaxPlannerItemId(const nlohmann::json& items, int* max_id) {
 
 inline int NextPlannerItemIdInPlan(const nlohmann::json& plan) {
     int max_id = 0;
-    for (const char* section : {"goals", "features", "steps", "blockers", "notes"}) {
+    for (const char* section : {"goals", "features", "steps", "blockers", "notes", "tool_hints", "phases"}) {
         if (plan.contains(section)) {
             UpdateMaxPlannerItemId(plan[section], &max_id);
         }
@@ -2471,7 +2683,7 @@ inline nlohmann::json* FindPlannerItemRecursive(nlohmann::json& items, const nlo
         if (item.contains("id") && PlannerIdEquals(item["id"], id)) {
             return &item;
         }
-        for (const char* key : {"goals", "subgoals", "features", "steps", "blockers", "notes"}) {
+        for (const char* key : {"goals", "subgoals", "features", "steps", "blockers", "notes", "tool_hints", "phases"}) {
             if (!item.contains(key)) continue;
             if (auto* found = FindPlannerItemRecursive(item[key], id)) {
                 return found;
@@ -2493,7 +2705,7 @@ inline nlohmann::json* FindPlannerItemInPlan(
             }
         }
     }
-    for (const char* section : {"goals", "features", "steps", "blockers", "notes"}) {
+    for (const char* section : {"goals", "features", "steps", "blockers", "notes", "tool_hints", "phases"}) {
         if (preferred_section == section) continue;
         if (!plan.contains(section)) continue;
         if (auto* found = FindPlannerItemRecursive(plan[section], id)) {
@@ -2511,7 +2723,7 @@ inline bool RemovePlannerItemRecursive(nlohmann::json& items, const nlohmann::js
             items.erase(it);
             return true;
         }
-        for (const char* key : {"goals", "subgoals", "features", "steps", "blockers", "notes"}) {
+        for (const char* key : {"goals", "subgoals", "features", "steps", "blockers", "notes", "tool_hints", "phases"}) {
             if (!it->contains(key)) continue;
             if (RemovePlannerItemRecursive((*it)[key], id)) {
                 return true;
@@ -2531,7 +2743,7 @@ inline bool RemovePlannerItemFromPlan(
             return true;
         }
     }
-    for (const char* section : {"goals", "features", "steps", "blockers", "notes"}) {
+    for (const char* section : {"goals", "features", "steps", "blockers", "notes", "tool_hints", "phases"}) {
         if (preferred_section == section) continue;
         if (!plan.contains(section)) continue;
         if (RemovePlannerItemRecursive(plan[section], id)) {
@@ -2596,10 +2808,17 @@ inline McpToolCallResult CallPlanner(
     if (!LoadPlannerDocument(file_path, &plan, &error)) {
         return ErrorResult(error);
     }
+    bool normalized = NormalizePlannerDocument(plan);
 
     bool changed = false;
     if (action == "get") {
-        return PlannerResult(action, file_path_utf8, plan, false);
+        if (normalized) {
+            plan["updated_at"] = CurrentTimestampUtc();
+            if (!SavePlannerDocument(file_path, plan, &error)) {
+                return ErrorResult(error);
+            }
+        }
+        return PlannerResult(action, file_path_utf8, plan, normalized);
     }
     if (action == "clear") {
         const std::string section = Trim(args.value("section", "all"));
@@ -2666,12 +2885,12 @@ inline McpToolCallResult CallPlanner(
         if (!args.contains("id")) return ErrorResult("Planner " + action + " requires an id.");
         if (action == "remove_item") {
             if (!RemovePlannerItemFromPlan(plan, args["id"], section)) {
-                return ErrorResult("Planner item not found in section " + section + ".");
+                return ErrorResult(PlannerItemNotFoundMessage(section));
             }
             changed = true;
         } else {
             nlohmann::json* item = FindPlannerItemInPlan(plan, args["id"], section);
-            if (!item) return ErrorResult("Planner item not found in section " + section + ".");
+            if (!item) return ErrorResult(PlannerItemNotFoundMessage(section));
             if (!args.contains("item") || !args["item"].is_object()) {
                 return ErrorResult("Planner update_item requires an item object with fields to update.");
             }
@@ -2684,6 +2903,9 @@ inline McpToolCallResult CallPlanner(
         return ErrorResult("Unknown planner action: " + action);
     }
 
+    if (NormalizePlannerDocument(plan)) {
+        changed = true;
+    }
     if (changed) {
         plan["updated_at"] = CurrentTimestampUtc();
         if (!SavePlannerDocument(file_path, plan, &error)) {
@@ -2723,6 +2945,83 @@ inline std::filesystem::path ResolveFilesystemPath(
     return target;
 }
 
+inline std::string FormatFilesystemByte(unsigned char value) {
+    std::ostringstream stream;
+    stream << "0x" << std::uppercase << std::hex
+           << std::setw(2) << std::setfill('0')
+           << static_cast<int>(value);
+    return stream.str();
+}
+
+inline bool ValidateUtf8Text(const std::string& value,
+                             size_t* invalid_index,
+                             unsigned char* invalid_byte) {
+    for (size_t i = 0; i < value.size();) {
+        const unsigned char byte = static_cast<unsigned char>(value[i]);
+        if (byte == 0) {
+            if (invalid_index) *invalid_index = i;
+            if (invalid_byte) *invalid_byte = byte;
+            return false;
+        }
+        if (byte <= 0x7F) {
+            ++i;
+            continue;
+        }
+
+        size_t continuation_count = 0;
+        uint32_t codepoint = 0;
+        if ((byte & 0xE0) == 0xC0) {
+            if (byte < 0xC2) {
+                if (invalid_index) *invalid_index = i;
+                if (invalid_byte) *invalid_byte = byte;
+                return false;
+            }
+            continuation_count = 1;
+            codepoint = byte & 0x1F;
+        } else if ((byte & 0xF0) == 0xE0) {
+            continuation_count = 2;
+            codepoint = byte & 0x0F;
+        } else if ((byte & 0xF8) == 0xF0) {
+            if (byte > 0xF4) {
+                if (invalid_index) *invalid_index = i;
+                if (invalid_byte) *invalid_byte = byte;
+                return false;
+            }
+            continuation_count = 3;
+            codepoint = byte & 0x07;
+        } else {
+            if (invalid_index) *invalid_index = i;
+            if (invalid_byte) *invalid_byte = byte;
+            return false;
+        }
+
+        if (i + continuation_count >= value.size()) {
+            if (invalid_index) *invalid_index = i;
+            if (invalid_byte) *invalid_byte = byte;
+            return false;
+        }
+        for (size_t j = 1; j <= continuation_count; ++j) {
+            const unsigned char next = static_cast<unsigned char>(value[i + j]);
+            if ((next & 0xC0) != 0x80) {
+                if (invalid_index) *invalid_index = i + j;
+                if (invalid_byte) *invalid_byte = next;
+                return false;
+            }
+            codepoint = (codepoint << 6) | (next & 0x3F);
+        }
+        if ((continuation_count == 2 && codepoint < 0x800) ||
+            (continuation_count == 3 && codepoint < 0x10000) ||
+            (continuation_count == 2 && codepoint >= 0xD800 && codepoint <= 0xDFFF) ||
+            codepoint > 0x10FFFF) {
+            if (invalid_index) *invalid_index = i;
+            if (invalid_byte) *invalid_byte = byte;
+            return false;
+        }
+        i += continuation_count + 1;
+    }
+    return true;
+}
+
 inline bool ReadWholeFileUtf8(const std::filesystem::path& path, std::string* out, std::string* error) {
     std::ifstream input(path, std::ios::binary);
     if (!input.is_open()) {
@@ -2731,7 +3030,19 @@ inline bool ReadWholeFileUtf8(const std::filesystem::path& path, std::string* ou
     }
     std::ostringstream stream;
     stream << input.rdbuf();
-    *out = stream.str();
+    std::string content = stream.str();
+    size_t invalid_index = 0;
+    unsigned char invalid_byte = 0;
+    if (!ValidateUtf8Text(content, &invalid_index, &invalid_byte)) {
+        if (error) {
+            *error = "File is not valid UTF-8 text or appears to be binary: " +
+                WideToUtf8(path.wstring()) + " (invalid byte " +
+                FormatFilesystemByte(invalid_byte) + " at offset " +
+                std::to_string(invalid_index) + "). Use list_directory for binary files; do not read them as text.";
+        }
+        return false;
+    }
+    *out = std::move(content);
     return true;
 }
 
